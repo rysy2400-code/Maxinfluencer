@@ -1,0 +1,26 @@
+# 推送 main 后，通过 SSH 在 Web VM 上执行 C:\maxinfluencer\deploy-web.ps1
+#
+# 在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中配置：
+#   DEPLOY_HOST   例如 152.32.185.48
+#   DEPLOY_USER   例如 administrator
+#   DEPLOY_SSH_KEY  用于连接该 VM 的私钥全文（ed25519 / RSA）
+name: Deploy Web (Windows VM)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\maxinfluencer\deploy-web.ps1

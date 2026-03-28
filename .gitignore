@@ -1,0 +1,25 @@
+# dependencies / build
+node_modules/
+.next/
+out/
+
+# env & secrets（不要提交）
+.env
+.env.local
+.env.*.local
+
+# logs / local data
+logs/
+*.log
+tmp/
+.tiktok-user-data*/
+tiktok-user-data-chrome/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# local venv (if any)
+.venv/

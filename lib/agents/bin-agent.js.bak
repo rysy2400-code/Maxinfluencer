@@ -1,0 +1,802 @@
+// 主 Agent: Bin（营销机构销售负责人）
+import { BaseAgent } from "./base-agent.js";
+import { callDeepSeekLLM } from "../utils/llm-client.js";
+import { WORKFLOW_STATES, getNextWorkflowState, isCreatingCampaign, getWorkflowStateDescription, isToolAllowedInState, detectStepKeywords, getCurrentStepTask, getAgentForCurrentStep } from "../utils/workflow-states.js";
+
+export class BinAgent extends BaseAgent {
+  constructor() {
+    const systemPrompt = `你是 Bin，一名红人营销机构的销售负责人，擅长用中文与广告主沟通，帮助他们设计和拆解 influencer marketing campaign。
+
+你的核心能力：
+1. 理解客户需求
+2. 引导客户完成 campaign 创建流程
+3. 收集和确认 campaign 信息
+
+工作方式：
+- 用专业、清晰、可执行的方式与客户沟通
+- 当客户提供产品链接时，会先提取产品信息再继续对话
+- 当产品信息确认后，主动询问客户 campaign 信息（平台、地区、发布时间段、预算、佣金）
+- 当需要生成内容脚本时，会基于产品信息生成脚本和视频
+
+工作流状态说明：
+- step_1_product_info：正在确认产品信息
+- step_2_campaign_info：正在收集 campaign 信息（平台、地区、发布时间段、预算、佣金）
+- step_3_influencer_profile：正在确认红人画像
+- step_4_content_requirement：正在确认内容要求
+- step_5_publish_confirm：正在确认发布
+
+当工作流状态为 step_2_campaign_info 时，如果客户还没有提供 campaign 信息，你应该主动询问：
+"好的，现在我需要了解你的 Campaign 信息：
+1. 投放平台：TikTok 或 Instagram（Ins），可以选择一个或多个
+2. 投放地区：美国或德国，可以选择一个或多个
+3. 发布时间段：例如 2024年3月1日-3月31日
+4. 预算：总预算金额（美元）
+5. 佣金：给红人的佣金比例（%）"
+
+回答要专业、清晰、可执行，用中文与客户沟通。`;
+
+    super("Bin", systemPrompt);
+  }
+
+  /**
+   * 使用 LLM 判断用户是否在「确认当前阶段」，若是则返回应调用的 agent 名称（供后处理强制调用）
+   * @param {Array} messages - 消息历史
+   * @param {Object} context - 上下文（含 workflowState、productInfo、campaignInfo 等）
+   * @returns {Promise<{ shouldCall: boolean, toolName: string|null }>}
+   */
+  async detectConfirmIntentForStage(messages, context = {}) {
+    const lastMessage = messages[messages.length - 1]?.content || "";
+    const step = context.workflowState || WORKFLOW_STATES.IDLE;
+    const conversationHistory = messages.slice(-3).map(m => `${m.role}: ${m.content}`).join("\n");
+
+    const stepDesc = {
+      [WORKFLOW_STATES.STEP_1_PRODUCT_INFO]: "确认产品信息",
+      [WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO]: "确认 Campaign 投放信息",
+      [WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE]: "确认红人画像",
+      [WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT]: "确认内容脚本要求",
+      [WORKFLOW_STATES.STEP_5_PUBLISH_CONFIRM]: "确认发布",
+    };
+    const toolMap = {
+      [WORKFLOW_STATES.STEP_1_PRODUCT_INFO]: "product_info_agent",
+      [WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO]: "campaign_info_agent",
+      [WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE]: "influencer_profile_agent",
+      [WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT]: "content_requirement_agent",
+      [WORKFLOW_STATES.STEP_5_PUBLISH_CONFIRM]: "campaign_publish_agent",
+    };
+
+    if (!toolMap[step]) {
+      return { shouldCall: false, toolName: null };
+    }
+
+    const hasData = {
+      [WORKFLOW_STATES.STEP_1_PRODUCT_INFO]: !!context.productInfo,
+      [WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO]: !!(context.campaignInfo && context.campaignInfo.platform && context.campaignInfo.region && context.campaignInfo.publishTimeRange != null && context.campaignInfo.budget != null && context.campaignInfo.commission != null),
+      [WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE]: !!context.influencerProfile,
+      [WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT]: !!context.contentScript,
+      [WORKFLOW_STATES.STEP_5_PUBLISH_CONFIRM]: true,
+    };
+    if (!hasData[step]) {
+      return { shouldCall: false, toolName: null };
+    }
+
+    const prompt = `判断用户是否在「确认当前阶段」信息。
+
+当前阶段：${step}（${stepDesc[step]}）
+对话历史（最近几条）：
+${conversationHistory}
+
+用户最后一条消息：${lastMessage}
+
+若用户是在确认当前阶段（如确认、可以、没问题、继续、下一步、好的、行、就这样等），返回应调用的 agent 以便系统执行确认逻辑。
+若用户是在提供新信息、要求修改、或只是闲聊，返回 null。
+
+只返回 JSON，不要其他文字：
+{ "toolName": "product_info_agent" | "campaign_info_agent" | "influencer_profile_agent" | "content_requirement_agent" | "campaign_publish_agent" | null }`;
+
+    try {
+      const llmResponse = await callDeepSeekLLM(
+        [{ role: "user", content: prompt }],
+        "你是指意图识别专家。只返回 JSON，不要其他文字。"
+      );
+      const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      const toolName = parsed.toolName && toolMap[step] === parsed.toolName ? parsed.toolName : null;
+      return { shouldCall: !!toolName, toolName };
+    } catch (e) {
+      console.warn("[BinAgent] detectConfirmIntentForStage 失败:", e);
+      return { shouldCall: false, toolName: null };
+    }
+  }
+
+  /**
+   * 跨步意图识别：用户是否在要求修改「产品 / campaign / 红人画像 / 内容」中某一类信息（从而应转调对应 agent）
+   * @param {Array} messages - 消息历史
+   * @param {Object} context - 上下文（含 workflowState、productInfo、campaignInfo 等）
+   * @returns {Promise<{ toolName: string|null, switchToStep: string|null }>}
+   */
+  async detectCrossStepIntent(messages, context = {}) {
+    const lastMessage = messages[messages.length - 1]?.content || "";
+    const currentStep = context.workflowState || WORKFLOW_STATES.IDLE;
+    const conversationHistory = messages.slice(-3).map(m => `${m.role}: ${m.content}`).join("\n");
+
+    const stepToAgent = {
+      [WORKFLOW_STATES.STEP_1_PRODUCT_INFO]: "product_info_agent",
+      [WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO]: "campaign_info_agent",
+      [WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE]: "influencer_profile_agent",
+      [WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT]: "content_requirement_agent",
+    };
+    const stepDesc = {
+      [WORKFLOW_STATES.STEP_1_PRODUCT_INFO]: "产品信息/产品链接",
+      [WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO]: "投放信息（平台、地区、预算、佣金、发布时间）",
+      [WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE]: "红人画像/红人名单",
+      [WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT]: "内容脚本/内容要求",
+    };
+
+    const prompt = `判断用户是否在明确要求「修改/更改/补充」某一类信息（而不是在确认当前步骤）。
+
+对话历史（最近几条）：
+${conversationHistory}
+
+用户最后一条消息：${lastMessage}
+
+当前流程步骤：${currentStep}
+
+若用户明确在说：
+- 改产品、换链接、换产品、改产品信息、重新填产品 → 返回 product_info_agent 与 step_1_product_info
+- 改预算、改平台、改地区、改佣金、改投放、改发布时间、改 campaign 信息 → 返回 campaign_info_agent 与 step_2_campaign_info
+- 改红人、改画像、换红人、调整红人要求、不要这批红人 → 返回 influencer_profile_agent 与 step_3_influencer_profile
+- 改脚本、改内容、改视频、调整内容要求 → 返回 content_requirement_agent 与 step_4_content_requirement
+
+若用户只是在确认当前步骤、或说的与上述四类无关，返回 null。
+只返回 JSON，不要其他文字：
+{ "toolName": "product_info_agent" | "campaign_info_agent" | "influencer_profile_agent" | "content_requirement_agent" | null, "switchToStep": "step_1_product_info" | "step_2_campaign_info" | "step_3_influencer_profile" | "step_4_content_requirement" | null }`;
+
+    try {
+      const llmResponse = await callDeepSeekLLM(
+        [{ role: "user", content: prompt }],
+        "你是指意图识别专家。只返回 JSON，不要其他文字。"
+      );
+      const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      const toolName = parsed.toolName && stepToAgent[parsed.switchToStep] === parsed.toolName ? parsed.toolName : null;
+      const switchToStep = toolName && parsed.switchToStep && stepToAgent[parsed.switchToStep] ? parsed.switchToStep : null;
+      return { toolName, switchToStep };
+    } catch (e) {
+      console.warn("[BinAgent] detectCrossStepIntent 失败:", e);
+      return { toolName: null, switchToStep: null };
+    }
+  }
+
+  /**
+   * 处理消息：按「信息是否齐全」调对应子 agent；支持跨步（用户改预算/改产品等）转调对应 agent
+   * @param {Array} messages - 消息历史
+   * @param {Object} context - 上下文（产品信息等）
+   * @returns {Promise<Object>} - { reply: string, toolCall: Object|null }
+   */
+  async processWithTools(messages, context = {}) {
+    try {
+      const lastMessage = (messages[messages.length - 1]?.content || "").trim();
+      const currentWorkflowState = context.workflowState || WORKFLOW_STATES.IDLE;
+      const workflowDescription = getWorkflowStateDescription(currentWorkflowState);
+
+      // 按「信息是否齐全」决定调谁；支持跨步（用户改预算/改产品等）转调对应 agent
+      const inCollectingFlow = isCreatingCampaign(currentWorkflowState);
+      const effectiveStep = currentWorkflowState === WORKFLOW_STATES.CREATING_CAMPAIGN
+        ? WORKFLOW_STATES.STEP_1_PRODUCT_INFO
+        : currentWorkflowState;
+
+      let toolDecision = { needTool: false, toolName: null, params: null, switchToStep: null };
+
+      if (inCollectingFlow && [WORKFLOW_STATES.STEP_1_PRODUCT_INFO, WORKFLOW_STATES.STEP_2_CAMPAIGN_INFO, WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE, WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT, WORKFLOW_STATES.STEP_5_PUBLISH_CONFIRM].includes(effectiveStep)) {
+        // 1) 跨步：用户是否在要求修改产品/campaign/红人/内容
+        const cross = await this.detectCrossStepIntent(messages, context);
+        if (cross.toolName && cross.switchToStep) {
+          console.log(`[BinAgent] 跨步意图：用户要求修改其他信息，转调 ${cross.toolName}，switchToStep=${cross.switchToStep}`);
+          toolDecision = { needTool: true, toolName: cross.toolName, params: {}, switchToStep: cross.switchToStep };
+          const urlRegex = /https?:\/\/[^\s]+/g;
+          if (cross.toolName === "product_info_agent" && lastMessage.match(urlRegex)?.[0]) {
+            toolDecision.params = { productLink: lastMessage.match(urlRegex)[0] };
+          }
+        } else {
+          // 2) 默认：当前阶段缺啥调谁（按阶段强制调用对应 agent）
+          const agent = getAgentForCurrentStep(effectiveStep);
+          if (agent) {
+            toolDecision = { needTool: true, toolName: agent, params: {} };
+            if (agent === "product_info_agent") {
+              const urlRegex = /https?:\/\/[^\s]+/g;
+              const productLink = lastMessage.match(urlRegex)?.[0];
+              if (productLink) toolDecision.params = { productLink };
+            }
+          }
+        }
+      } else if (currentWorkflowState === WORKFLOW_STATES.IDLE) {
+        // 未进入流程：仅当用户「开始」时调 product_info_agent（发链接或说发布 campaign）
+        const urlRegex = /https?:\/\/[^\s]+/g;
+        const productLink = lastMessage.match(urlRegex)?.[0];
+        const startKeywords = ["发布", "campaign", "发个", "创建", "发 campaign", "要发"];
+        const lower = lastMessage.toLowerCase();
+        const wantsStart = productLink || startKeywords.some(kw => lower.includes(kw));
+        if (wantsStart) {
+          toolDecision = { needTool: true, toolName: "product_info_agent", params: productLink ? { productLink } : {} };
+        }
+      }
+
+      // 以下沿用原有参数补全与返回结构（并支持 switchToStep）
+      if (toolDecision.needTool && toolDecision.toolName) {
+        if (toolDecision.toolName === "product_info_agent" && !toolDecision.params?.productLink) {
+          const urlRegex = /https?:\/\/[^\s]+/g;
+          const productLink = lastMessage.match(urlRegex)?.[0];
+          if (productLink) toolDecision.params = { productLink };
+        }
+        if (toolDecision.toolName === "content_requirement_agent") {
+          if (!context.productInfo || !context.campaignInfo) {
+            toolDecision.needTool = false;
+          } else {
+            toolDecision.params = toolDecision.params || {};
+          }
+        }
+        if (toolDecision.toolName === "campaign_publish_agent") {
+          toolDecision.params = {};
+        }
+        if (toolDecision.toolName === "campaign_info_agent") {
+          toolDecision.params = toolDecision.params || {};
+        }
+        // 跨步时不校验「当前状态是否允许该工具」
+        if (!toolDecision.switchToStep) {
+          const validation = isToolAllowedInState(currentWorkflowState, toolDecision.toolName);
+          if (!validation.allowed) {
+            const currentTask = getCurrentStepTask(currentWorkflowState);
+            const currentStepDesc = getWorkflowStateDescription(currentWorkflowState);
+            let guideMessage = validation.guideMessage;
+            const detectedStep = detectStepKeywords(lastMessage);
+            if (detectedStep && detectedStep.step !== currentWorkflowState) {
+              const detectedStepDesc = getWorkflowStateDescription(detectedStep.step);
+              guideMessage = `我理解你想提供 ${detectedStepDesc} 相关的信息，但我们需要一步一步来。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+            } else {
+              guideMessage = `我们需要一步一步来完成 campaign 创建流程。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+            }
+            return { reply: guideMessage, toolCall: null };
+          }
+        }
+        const replyByAgent = {
+          product_info_agent: "我注意到你提供了产品链接，让我先提取产品信息...",
+          campaign_info_agent: "好的，我来收集你的 Campaign 信息...",
+          influencer_profile_agent: "好的，我来为你推荐合适的红人画像和账户...",
+          content_requirement_agent: "好的，我来为你生成内容脚本和参考视频...",
+          campaign_publish_agent: "好的，我来为你汇总 Campaign 信息并确认发布...",
+        };
+        const reply = toolDecision.switchToStep
+          ? "好的，先帮你改这一块。"
+          : (replyByAgent[toolDecision.toolName] || "正在处理你的请求...");
+        return {
+          reply,
+          toolCall: {
+            toolName: toolDecision.toolName,
+            params: toolDecision.params,
+            ...(toolDecision.switchToStep ? { switchToStep: toolDecision.switchToStep } : {}),
+          },
+        };
+      }
+
+      // 未命中任何调用：IDLE 且未「开始」时给一句引导
+      if (currentWorkflowState === WORKFLOW_STATES.IDLE) {
+        return {
+          reply: "你好，要发布 campaign 的话请先发我产品链接～",
+          toolCall: null,
+        };
+      }
+
+      // 兜底：不应到达（inCollectingFlow 时应有 agent）
+      return {
+        reply: "请继续完成当前步骤的确认或补充。",
+        toolCall: null,
+      };
+    } catch (error) {
+      console.error("[BinAgent] processWithTools 异常:", error);
+      return {
+        reply: "抱歉，处理时出了点问题，请重试或换种说法。",
+        toolCall: null,
+      };
+    }
+  }
+
+  _LEGACY_DEL
+3. influencer_profile_agent
+   - 触发条件1：workflowState 为 "step_3_influencer_profile" 且还没有 influencerProfile → 自动调用（推荐红人）
+   - 触发条件2：workflowState 为 "step_3_influencer_profile"，且用户消息包含以下任何情况，应该调用：
+     * 要求新的红人：包含"想要"、"找"、"搜索"、"合作过"、"合作"、"推荐"、"需要"、"找一些"、"帮我找"等关键词
+     * 提到产品名称：用户提到具体产品名称（如"halara pants"、"g4free"等），表示要基于该产品搜索红人
+     * 调整画像要求：包含"粉丝"、"画像"、"要求"、"调整"、"修改"等关键词
+   - 参数：无需参数（从 context 中获取 productInfo 和 campaignInfo）
+   - 工作流状态：如果 workflowState 为 "step_3_influencer_profile"，自动调用或用户提供红人画像相关信息时调用
+   - 注意：只有在用户明确说"确认"、"可以"、"没问题"、"就这样"、"继续"、"下一步"等确认词时，才不调用工具
+
+4. content_requirement_agent
+   - 触发：用户需要生成内容脚本/视频，且 context.productInfo 和 context.campaignInfo 存在
+   - 参数：无需参数（从 context 中获取 productInfo、campaignInfo、influencerProfile）
+   - 工作流状态：如果 workflowState 为 "step_4_content_requirement"，且用户确认红人画像后，自动调用此工具生成内容脚本
+
+5. campaign_publish_agent
+   - 触发：用户确认内容要求后，自动调用此工具进行发布确认；或用户明确要求发布/确认发布
+   - 参数：无需参数（从 context 中获取所有信息）
+   - 工作流状态：如果 workflowState 为 "step_5_publish_confirm"，自动调用此工具进行发布确认
+
+判断规则（优先级从高到低）：
+1. 工作流状态判断：
+   - 如果 workflowState 为 "step_1_product_info" 且已有 productInfo，且用户说确认相关的话 → 调用 product_info_agent（检测确认）
+   - 如果 workflowState 为 "step_2_campaign_info" 且用户提供 campaign 信息 → 调用 campaign_info_agent（收集信息）
+   - 如果 workflowState 为 "step_3_influencer_profile" 且用户明确说"确认"、"可以"、"没问题"、"就这样"、"继续"、"下一步"等确认词 → 不调用工具（等待用户继续）
+   - 如果 workflowState 为 "step_3_influencer_profile" 且用户要求新的红人（包含"想要"、"找"、"搜索"、"合作过"等关键词） → 调用 influencer_profile_agent
+   - 如果 workflowState 为 "step_4_content_requirement" 且用户确认内容要求 → 不调用工具（等待用户继续，状态会自动推进到 step_5_publish_confirm）
+   - 如果 workflowState 为 "step_5_publish_confirm" → 自动调用 campaign_publish_agent 进行发布确认
+
+2. 产品链接检测：
+   - 如果消息包含 http:// 或 https://，且无 productInfo，且 workflowState 为 "idle" 或 "step_1_product_info"
+   - → 调用 product_info_agent
+
+4. Campaign 信息检测：
+   - 如果用户消息包含以下任何关键词，且状态允许，调用 campaign_info_agent：
+     * 平台相关：TikTok、Instagram、Ins、平台、投放平台
+     * 地区相关：美国、德国、地区、投放地区
+     * 时间相关：发布时间、时间段、时间范围、日期、发布、时间
+     * 预算相关：预算、金额、美元、USD、$、费用、成本
+     * 佣金相关：佣金、比例、百分比、%、提成
+   - 注意：必须先通过状态验证，只有在 "step_2_campaign_info" 状态才能调用
+
+5. 红人画像检测：
+   - 如果 workflowState 为 "step_3_influencer_profile" 且还没有 influencerProfile → 自动调用 influencer_profile_agent（推荐红人）
+   - 如果 workflowState 为 "step_3_influencer_profile"，且用户消息包含以下任何情况，应该调用 influencer_profile_agent：
+     * 要求新的红人：包含"想要"、"找"、"搜索"、"合作过"、"合作"、"推荐"、"需要"、"找一些"、"帮我找"等关键词
+     * 提到产品名称：用户提到具体产品名称（如"halara pants"、"g4free"等），表示要基于该产品搜索红人
+     * 调整画像要求：包含"粉丝"、"画像"、"要求"、"调整"、"修改"等关键词
+   - 注意：只有在用户明确说"确认"、"可以"、"没问题"、"就这样"、"继续"、"下一步"等确认词时，才不调用工具
+
+6. 内容需求检测：
+   - 如果 workflowState 为 "step_4_content_requirement"，且用户确认红人画像后，自动调用 content_requirement_agent
+   - 或者如果消息包含"内容"、"脚本"、"视频"等关键词，且有 productInfo 和 campaignInfo
+   - → 调用 content_requirement_agent
+
+7. 发布确认检测：
+   - 如果 workflowState 为 "step_5_publish_confirm"，自动调用 campaign_publish_agent
+   - 或者如果消息包含"发布"、"确认发布"、"提交"等关键词，且 workflowState 为 "step_4_content_requirement" 或 "step_5_publish_confirm"
+   - → 调用 campaign_publish_agent
+
+8. 其他情况 → 不调用工具
+
+只返回 JSON，格式：
+{
+  "needTool": true/false,
+  "toolName": "product_info_agent" | "campaign_info_agent" | "influencer_profile_agent" | "content_requirement_agent" | "campaign_publish_agent" | null,
+  "params": {...} | null
+}
+
+示例：
+输入："我有一个产品：https://example.com/product"（workflowState: "idle"）
+→ {"needTool": true, "toolName": "product_info_agent", "params": {"productLink": "https://example.com/product"}}
+
+输入："平台是 TikTok，地区是美国，预算 10000 美元"（workflowState: "step_2_campaign_info"）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："我想在 TikTok 上投放"（workflowState: "idle" 或任何状态）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："预算大概是 5000 美元"（workflowState: "step_2_campaign_info"）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："佣金 20%"（workflowState: "step_2_campaign_info"）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："发布时间是 3 月到 4 月"（workflowState: "step_2_campaign_info"）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："帮我生成内容脚本"（且有 productInfo 和 campaignInfo，workflowState: "step_4_content_requirement"）
+→ {"needTool": true, "toolName": "content_requirement_agent", "params": {}}
+
+输入："确认发布"（workflowState: "step_5_publish_confirm"）
+→ {"needTool": true, "toolName": "campaign_publish_agent", "params": {}}
+
+输入："发布"（workflowState: "step_5_publish_confirm"）
+→ {"needTool": true, "toolName": "campaign_publish_agent", "params": {}}
+
+输入："确认无误"（workflowState: "step_1_product_info"，且已有 productInfo）
+→ {"needTool": true, "toolName": "product_info_agent", "params": {}}
+
+输入："确认无误"（workflowState: "step_2_campaign_info"，且已有 campaignInfo 且信息完整）
+→ {"needTool": true, "toolName": "campaign_info_agent", "params": {}}
+
+输入："想要halara pants合作过的红人"（workflowState: "step_3_influencer_profile"）
+→ {"needTool": true, "toolName": "influencer_profile_agent", "params": {}}
+
+输入："找一些推荐g4free的红人"（workflowState: "step_3_influencer_profile"）
+→ {"needTool": true, "toolName": "influencer_profile_agent", "params": {}}
+
+输入："帮我搜索合作过这个产品的红人"（workflowState: "step_3_influencer_profile"）
+→ {"needTool": true, "toolName": "influencer_profile_agent", "params": {}}
+
+输入："确认"（workflowState: "step_3_influencer_profile"，且已有 influencerProfile）
+→ {"needTool": false, "toolName": null, "params": null}
+
+输入："可以，就这样"（workflowState: "step_3_influencer_profile"，且已有 influencerProfile）
+→ {"needTool": false, "toolName": null, "params": null}
+
+输入："你好"（workflowState: "idle"）
+→ {"needTool": false, "toolName": null, "params": null}`;
+
+      // 调用 LLM 进行意图识别
+      let toolDecision;
+      try {
+        const llmResponse = await callDeepSeekLLM(
+          [{ role: "user", content: intentAnalysisPrompt }],
+          "你是一个专业的意图分析助手，擅长分析用户意图并决定是否需要调用工具。只返回 JSON 格式，不要其他文字。"
+        );
+
+        console.log(`[BinAgent] LLM 意图识别返回: ${llmResponse.substring(0, 200)}`);
+
+        // 解析 JSON（处理可能的 markdown 代码块）
+        try {
+          toolDecision = JSON.parse(llmResponse);
+        } catch (e) {
+          // 尝试提取 JSON 部分
+          const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            toolDecision = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error("无法解析 LLM 返回的 JSON");
+          }
+        }
+
+        console.log(`[BinAgent] 意图识别结果:`, toolDecision);
+        console.log(`[BinAgent] 当前工作流状态: ${currentWorkflowState} (${workflowDescription})`);
+      } catch (llmError) {
+        console.warn(`[BinAgent] LLM 意图识别失败，使用降级规则:`, llmError);
+        console.warn(`[BinAgent] 错误详情:`, {
+          message: llmError.message,
+          stack: llmError.stack?.substring(0, 200)
+        });
+        // LLM 失败时，使用简单规则作为降级方案
+        toolDecision = this.fallbackRuleBasedDecision(messages, context);
+        console.log(`[BinAgent] 降级规则判断结果:`, toolDecision);
+      }
+
+      // 后处理：用 LLM 意图识别判断用户是否在确认当前阶段，若是则强制调用对应子 agent（由子 agent 内再次用 LLM 做确认）
+      if (!toolDecision.needTool) {
+        const { shouldCall, toolName } = await this.detectConfirmIntentForStage(messages, context);
+        if (shouldCall && toolName) {
+          console.log(`[BinAgent] 后处理：LLM 意图识别为确认当前阶段，强制调用 ${toolName}`);
+          toolDecision = {
+            needTool: true,
+            toolName,
+            params: {},
+          };
+        }
+      }
+
+      // 根据 LLM 的判断决定是否调用工具
+      if (toolDecision.needTool && toolDecision.toolName) {
+        // 参数补全：如果 LLM 未提供 productLink，使用兜底提取
+        if (toolDecision.toolName === "product_info_agent" && !toolDecision.params?.productLink) {
+          const urlRegex = /https?:\/\/[^\s]+/g;
+          const productLink = lastMessage.match(urlRegex)?.[0];
+          if (productLink) {
+            console.log(`[BinAgent] 参数补全：LLM 未提供 productLink，使用兜底提取: ${productLink}`);
+            toolDecision.params = { productLink };
+          } else {
+            // 如果没有 productLink，可能是确认场景，允许继续（params 为空对象）
+            console.log(`[BinAgent] 无 productLink，可能是确认场景，允许继续`);
+          }
+        }
+
+        // 参数补全：content_requirement_agent 不需要参数（从 context 获取）
+        if (toolDecision.toolName === "content_requirement_agent") {
+          // 验证必要信息是否存在
+          if (!context.productInfo || !context.campaignInfo) {
+            console.warn(`[BinAgent] 缺少必要信息（productInfo 或 campaignInfo），无法调用 content_requirement_agent`);
+            toolDecision.needTool = false;
+          } else {
+            // 确保参数为空对象（agent-router 会传递完整 context）
+            toolDecision.params = {};
+          }
+        }
+
+        // 参数补全：campaign_publish_agent 不需要参数（从 context 获取）
+        if (toolDecision.toolName === "campaign_publish_agent") {
+          // 确保参数为空对象（agent-router 会传递完整 context）
+          toolDecision.params = {};
+        }
+
+        // 参数补全：确保 campaign_info_agent 有正确的参数（即使为空对象）
+        if (toolDecision.toolName === "campaign_info_agent") {
+          if (!toolDecision.params) {
+            toolDecision.params = {};
+          }
+          console.log(`[BinAgent] 确认调用 campaign_info_agent，参数:`, toolDecision.params);
+        }
+
+        // 状态验证：检查当前状态是否允许调用该工具
+        if (toolDecision.needTool && toolDecision.toolName) {
+          const validation = isToolAllowedInState(currentWorkflowState, toolDecision.toolName);
+          
+          if (!validation.allowed) {
+            // 状态不允许，生成引导消息
+            console.log(`[BinAgent] 状态验证失败: 当前状态 ${currentWorkflowState} 不允许调用 ${toolDecision.toolName}`);
+            
+            const detectedStep = detectStepKeywords(lastMessage);
+            const currentTask = getCurrentStepTask(currentWorkflowState);
+            const currentStepDesc = getWorkflowStateDescription(currentWorkflowState);
+            
+            // 构建引导消息
+            let guideMessage = validation.guideMessage;
+            
+            // 如果检测到用户提到了后续步骤的关键词，给出更具体的引导
+            if (detectedStep && detectedStep.step !== currentWorkflowState) {
+              const detectedStepDesc = getWorkflowStateDescription(detectedStep.step);
+              guideMessage = `我理解你想提供 ${detectedStepDesc} 相关的信息，但我们需要一步一步来。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+            } else {
+              // 通用引导消息
+              guideMessage = `我们需要一步一步来完成 campaign 创建流程。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+            }
+            
+            // 不调用工具，返回引导消息
+            return {
+              reply: guideMessage,
+              toolCall: null,
+              workflowStateUpdate: null,
+            };
+          }
+          
+          console.log(`[BinAgent] 状态验证通过: 当前状态 ${currentWorkflowState} 允许调用 ${toolDecision.toolName}`);
+        }
+
+        if (toolDecision.needTool) {
+          // 根据工具调用决定回复内容
+          let reply = "";
+          if (toolDecision.toolName === "product_info_agent") {
+            reply = "我注意到你提供了产品链接，让我先提取产品信息...";
+          } else if (toolDecision.toolName === "campaign_info_agent") {
+            reply = "好的，我来收集你的 Campaign 信息...";
+          } else if (toolDecision.toolName === "influencer_profile_agent") {
+            reply = "好的，我来为你推荐合适的红人画像和账户...";
+          } else if (toolDecision.toolName === "content_requirement_agent") {
+            reply = "好的，我来为你生成内容脚本和参考视频...";
+          } else if (toolDecision.toolName === "campaign_publish_agent") {
+            reply = "好的，我来为你汇总 Campaign 信息并确认发布...";
+          } else {
+            reply = "正在处理你的请求...";
+          }
+          
+          return {
+            reply,
+            toolCall: {
+              toolName: toolDecision.toolName,
+              params: toolDecision.params,
+            },
+          };
+        }
+      }
+
+      // 检查降级规则是否返回了引导消息
+      if (toolDecision.guideMessage) {
+        return {
+          reply: toolDecision.guideMessage,
+          toolCall: null,
+          workflowStateUpdate: null,
+        };
+      }
+
+      // 不需要工具，检查是否需要推进工作流状态
+      // 如果用户在某个步骤确认了信息，可能需要推进到下一步
+      const workflowStateUpdate = this.checkWorkflowStateTransition(messages, context);
+      
+      // 如果状态需要更新，在 context 中临时更新状态，让 LLM 知道当前状态
+      const contextForLLM = workflowStateUpdate 
+        ? { ...context, workflowState: workflowStateUpdate.to }
+        : context;
+      
+      // 不需要工具，直接回复
+      const reply = await this.process(messages, contextForLLM);
+      
+      // 如果工作流状态需要更新，在返回时包含状态更新提示
+      if (workflowStateUpdate) {
+        console.log(`[BinAgent] 检测到工作流状态需要更新: ${workflowStateUpdate.from} → ${workflowStateUpdate.to} (${workflowStateUpdate.reason})`);
+      }
+      
+      return {
+        reply,
+        toolCall: null,
+        workflowStateUpdate, // 可选：返回状态更新信息，供 AgentRouter 使用
+      };
+    } catch (error) {
+      console.error("[BinAgent] 处理失败:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 检查工作流状态是否需要推进
+   * 注意：确认判断已由子 agent 处理，此方法不再使用关键词匹配
+   * 状态推进由 agent-router 根据子 agent 返回的 isConfirmed 处理
+   * @param {Array} messages - 消息历史
+   * @param {Object} context - 上下文
+   * @returns {Object|null} - 状态更新信息，如果不需要更新则返回 null
+   */
+  checkWorkflowStateTransition(messages, context) {
+    // 确认判断已由子 agent 在 agent-router 中处理
+    // 这里不再使用关键词匹配，返回 null
+    // 状态推进由 agent-router 根据子 agent 返回的 isConfirmed 处理
+    return null;
+  }
+
+  /**
+   * 降级方案：基于简单规则的意图判断（当 LLM 失败时使用）
+   * 检测最可靠的关键词：URL 和 Campaign 相关信息
+   */
+  fallbackRuleBasedDecision(messages, context) {
+    const lastMessage = messages[messages.length - 1]?.content || "";
+    const lowerMessage = lastMessage.toLowerCase();
+    
+    console.log(`[BinAgent] 执行降级规则判断，最后一条消息: ${lastMessage.substring(0, 100)}`);
+    console.log(`[BinAgent] 当前上下文:`, {
+      hasProductInfo: !!context.productInfo,
+      hasCampaignInfo: !!context.campaignInfo,
+      hasInfluencerProfile: !!context.influencerProfile,
+      hasContentScript: !!context.contentScript
+    });
+
+    const currentWorkflowState = context.workflowState || WORKFLOW_STATES.IDLE;
+
+    // 0. 特殊处理：如果状态是 step_3_influencer_profile 且还没有 influencerProfile，自动调用
+    if (currentWorkflowState === WORKFLOW_STATES.STEP_3_INFLUENCER_PROFILE && !context.influencerProfile) {
+      console.log(`[BinAgent] 降级规则：状态为 step_3_influencer_profile 且无 influencerProfile，自动调用 influencer_profile_agent`);
+      return {
+        needTool: true,
+        toolName: "influencer_profile_agent",
+        params: {},
+      };
+    }
+
+    // 1. 确认类意图由主流程后处理的 LLM 意图识别（detectConfirmIntentForStage）统一处理，此处不再用关键词
+
+    // 2. 检测产品链接（最可靠）
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const productLink = lastMessage.match(urlRegex)?.[0];
+
+    if (productLink && !context.productInfo) {
+      console.log(`[BinAgent] 降级规则：检测到产品链接，调用 product_info_agent`);
+      return {
+        needTool: true,
+        toolName: "product_info_agent",
+        params: { productLink },
+      };
+    }
+
+    // 3. 检测 Campaign 相关信息关键词（高优先级）
+    const campaignKeywords = {
+      platform: ["tiktok", "instagram", "ins", "平台", "投放平台"],
+      region: ["美国", "德国", "地区", "投放地区"],
+      time: ["发布时间", "时间段", "时间范围", "日期", "发布", "时间"],
+      budget: ["预算", "金额", "美元", "usd", "$", "费用", "成本"],
+      commission: ["佣金", "比例", "百分比", "%", "提成"]
+    };
+    
+    // 检查是否包含任何 Campaign 相关关键词
+    const hasCampaignKeywords = 
+      campaignKeywords.platform.some(kw => lowerMessage.includes(kw.toLowerCase())) ||
+      campaignKeywords.region.some(kw => lowerMessage.includes(kw)) ||
+      campaignKeywords.time.some(kw => lowerMessage.includes(kw)) ||
+      campaignKeywords.budget.some(kw => lowerMessage.includes(kw.toLowerCase())) ||
+      campaignKeywords.commission.some(kw => lowerMessage.includes(kw.toLowerCase())) ||
+      /预算|佣金|平台|地区|时间|预算|金额|美元|比例|百分比/i.test(lastMessage);
+    
+    if (hasCampaignKeywords) {
+      // 先验证状态是否允许
+      const currentWorkflowState = context.workflowState || WORKFLOW_STATES.IDLE;
+      const validation = isToolAllowedInState(currentWorkflowState, "campaign_info_agent");
+      
+      if (!validation.allowed) {
+        // 状态不允许，返回引导消息（不调用工具）
+        console.log(`[BinAgent] 降级规则：检测到 Campaign 关键词，但状态不允许调用`);
+        const currentTask = getCurrentStepTask(currentWorkflowState);
+        const currentStepDesc = getWorkflowStateDescription(currentWorkflowState);
+        const detectedStep = detectStepKeywords(lastMessage);
+        
+        let guideMessage = validation.guideMessage;
+        if (detectedStep && detectedStep.step !== currentWorkflowState) {
+          const detectedStepDesc = getWorkflowStateDescription(detectedStep.step);
+          guideMessage = `我理解你想提供 ${detectedStepDesc} 相关的信息，但我们需要一步一步来。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+        } else {
+          guideMessage = `我们需要一步一步来完成 campaign 创建流程。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+        }
+        
+        // 返回一个特殊标记，表示需要引导
+        return {
+          needTool: false,
+          toolName: null,
+          params: null,
+          guideMessage: guideMessage
+        };
+      }
+      
+      // 状态允许，调用工具
+      console.log(`[BinAgent] 降级规则：检测到 Campaign 相关信息关键词，调用 campaign_info_agent`);
+      return {
+        needTool: true,
+        toolName: "campaign_info_agent",
+        params: {},
+      };
+    }
+    
+    // 3. 检测发布确认关键词（在步骤5或步骤4时）
+    const publishKeywords = ["发布", "确认发布", "提交", "确认提交", "发布campaign", "确认发布campaign"];
+    const hasPublishKeywords = publishKeywords.some(kw => lowerMessage.includes(kw.toLowerCase()));
+    
+    if (hasPublishKeywords) {
+      const currentWorkflowState = context.workflowState || WORKFLOW_STATES.IDLE;
+      
+      // 如果状态是 step_4_content_requirement 或 step_5_publish_confirm，调用发布 agent
+      if (currentWorkflowState === WORKFLOW_STATES.STEP_4_CONTENT_REQUIREMENT || 
+          currentWorkflowState === WORKFLOW_STATES.STEP_5_PUBLISH_CONFIRM) {
+        console.log(`[BinAgent] 降级规则：检测到发布确认关键词，调用 campaign_publish_agent`);
+        return {
+          needTool: true,
+          toolName: "campaign_publish_agent",
+          params: {},
+        };
+      }
+    }
+
+    // 4. 检测红人画像相关信息关键词
+    const influencerKeywords = {
+      influencer: ["红人", "influencer", "kol", "达人", "博主", "创作者"],
+      profile: ["画像", "要求", "推荐", "账户", "账号"],
+      followers: ["粉丝", "粉丝量", "follower"],
+      content: ["内容类型", "内容"],
+      audience: ["受众", "目标受众"]
+    };
+    
+    const hasInfluencerKeywords = 
+      influencerKeywords.influencer.some(kw => lowerMessage.includes(kw.toLowerCase())) ||
+      influencerKeywords.profile.some(kw => lowerMessage.includes(kw)) ||
+      influencerKeywords.followers.some(kw => lowerMessage.includes(kw.toLowerCase())) ||
+      influencerKeywords.content.some(kw => lowerMessage.includes(kw)) ||
+      influencerKeywords.audience.some(kw => lowerMessage.includes(kw));
+    
+    if (hasInfluencerKeywords) {
+      // 先验证状态是否允许
+      const currentWorkflowState = context.workflowState || WORKFLOW_STATES.IDLE;
+      const validation = isToolAllowedInState(currentWorkflowState, "influencer_profile_agent");
+      
+      if (!validation.allowed) {
+        // 状态不允许，返回引导消息
+        console.log(`[BinAgent] 降级规则：检测到红人画像关键词，但状态不允许调用`);
+        const currentTask = getCurrentStepTask(currentWorkflowState);
+        const currentStepDesc = getWorkflowStateDescription(currentWorkflowState);
+        
+        let guideMessage = `我们需要一步一步来完成 campaign 创建流程。\n\n**当前步骤**：${currentStepDesc}\n**当前任务**：${currentTask}\n\n${validation.guideMessage}`;
+        
+        return {
+          needTool: false,
+          toolName: null,
+          params: null,
+          guideMessage: guideMessage
+        };
+      }
+      
+      // 状态允许，调用工具
+      console.log(`[BinAgent] 降级规则：检测到红人画像相关信息关键词，调用 influencer_profile_agent`);
+      return {
+        needTool: true,
+        toolName: "influencer_profile_agent",
+        params: {},
+      };
+    }
+
+    // 4. 其他情况不调用工具（交给 LLM 处理或用户重试）
+
+    console.log(`[BinAgent] 降级规则：未检测到需要调用工具的情况`);
+    return {
+      needTool: false,
+      toolName: null,
+      params: null,
+    };
+  }
+}
