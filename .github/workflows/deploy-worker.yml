@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - "scripts/worker-*.js"
       - "scripts/process-*.js"
       - "scripts/run-*.js"
       - "lib/heartbeat/**"
@@ -12,6 +11,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "deploy-worker.ps1"
+      - "register-windows-scheduled-tasks.ps1"
       - ".github/workflows/deploy-worker.yml"
   workflow_dispatch:
 
@@ -27,5 +27,6 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: 22
           script_stop: true
+          # 机器 A：git pull + npm ci；任务 7 在爬虫机 deploy-crawler。首次注册 1-6 计划任务时设 REGISTER_MAXIN_SCHEDULED_TASKS=1。
           script: |
             powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\maxinfluencer\deploy-worker.ps1
