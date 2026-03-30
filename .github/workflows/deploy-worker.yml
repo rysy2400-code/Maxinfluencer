@@ -1,0 +1,31 @@
+name: Deploy Worker (Windows VM)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/worker-*.js"
+      - "scripts/process-*.js"
+      - "scripts/run-*.js"
+      - "lib/heartbeat/**"
+      - "lib/db/**"
+      - "package.json"
+      - "package-lock.json"
+      - "deploy-worker.ps1"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy worker over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 152.32.216.107
+          username: administrator
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\maxinfluencer\deploy-worker.ps1

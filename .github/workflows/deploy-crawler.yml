@@ -1,0 +1,39 @@
+name: Deploy Crawler (Windows VM Cluster)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/worker-*.js"
+      - "scripts/*search*.js"
+      - "scripts/tiktok-*.js"
+      - "scripts/enrich-*.js"
+      - "lib/tools/influencer-functions/**"
+      - "lib/agents/**"
+      - "lib/db/**"
+      - "package.json"
+      - "package-lock.json"
+      - "deploy-crawler.ps1"
+      - ".github/workflows/deploy-crawler.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - 152.32.252.45
+          - 36.255.223.141
+    steps:
+      - name: Deploy crawler over SSH (${{ matrix.host }})
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ matrix.host }}
+          username: administrator
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\maxinfluencer\deploy-crawler.ps1

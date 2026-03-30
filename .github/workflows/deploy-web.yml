@@ -1,14 +1,20 @@
-# 推送 main 后，通过 SSH 在 Web VM 上执行 C:\maxinfluencer\deploy-web.ps1
+# Web 部署：推送 main 且命中 web 相关路径时，通过 SSH 在 Web VM 上执行 deploy-web.ps1。
 #
-# 在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中配置：
-#   DEPLOY_HOST   例如 152.32.185.48
-#   DEPLOY_USER   例如 administrator
-#   DEPLOY_SSH_KEY  用于连接该 VM 的私钥全文（ed25519 / RSA）
+# 需要在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中配置：
+#   DEPLOY_SSH_KEY  用于连接 VM 的私钥全文（可复用同一把 key）
 name: Deploy Web (Windows VM)
 
 on:
   push:
     branches: [main]
+    paths:
+      - "app/**"
+      - "next.config.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "deploy-web.ps1"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -17,8 +23,8 @@ jobs:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
+          host: 152.32.185.48
+          username: administrator
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: 22
           script_stop: true
