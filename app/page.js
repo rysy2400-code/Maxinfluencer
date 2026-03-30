@@ -2777,9 +2777,17 @@ export default function HomePage() {
                                 </div>
                                 <div>
                                   <span style={{ fontWeight: 600 }}>重点指标：</span>
-                                  {Array.isArray(includeMetrics) && includeMetrics.length > 0
-                                    ? includeMetrics.join("，")
-                                    : "当前日报中未配置额外指标"}
+                                  {(() => {
+                                    const metricLabelMap = {
+                                      pending_price_count: "待审核价格数量",
+                                      pending_sample_count: "待寄样品数量",
+                                      pending_draft_count: "待审核草稿数量",
+                                      published_count: "已发布视频数量",
+                                    };
+                                    return Array.isArray(includeMetrics) && includeMetrics.length > 0
+                                      ? includeMetrics.map((k) => metricLabelMap[k] ?? k).join("，")
+                                      : "当前日报中未配置额外指标";
+                                  })()}
                                 </div>
                               </div>
                             </div>
