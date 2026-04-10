@@ -528,9 +528,12 @@ export default function HomePage() {
     };
     setMessages([...nextMessages, initialAssistantMessage]);
 
+    // 与本轮请求绑定的会话 ID（新建会话时 setState 尚未生效，不能依赖闭包里的 currentSessionId）
+    let sessionIdForChat = currentSessionId;
+
     try {
       // 如果还没有会话 ID，创建新会话
-      if (!currentSessionId) {
+      if (!sessionIdForChat) {
         try {
           const title = input.trim().slice(0, 50) || '新 Campaign';
           const createRes = await fetch('/api/sessions', {
@@ -545,6 +548,7 @@ export default function HomePage() {
           });
           const createData = await createRes.json();
           if (createData.success) {
+            sessionIdForChat = createData.session.id;
             setCurrentSessionId(createData.session.id);
             await loadCampaignSessions();
           }
@@ -560,7 +564,8 @@ export default function HomePage() {
         },
         body: JSON.stringify({
           messages: nextMessages,
-          context: context, // 传递当前上下文
+          context,
+          ...(sessionIdForChat ? { sessionId: sessionIdForChat } : {}),
           stream: true // 启用流式传输
         })
       });
@@ -674,6 +679,11 @@ export default function HomePage() {
                   // 更新上下文
                   if (data.data.context) {
                     setContext(data.data.context);
+                  }
+
+                  // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
+                  if (data.data.context?.published) {
+                    loadCampaignSessions().catch(() => {});
                   }
 
                   // 消息发送完成后，更新会话（延迟保存，避免频繁请求）

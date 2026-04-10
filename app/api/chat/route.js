@@ -5,7 +5,10 @@ export async function POST(req) {
   try {
     const body = await req.json();
     const messages = Array.isArray(body.messages) ? body.messages : [];
-    const context = body.context || {}; // 前端传递的上下文（产品信息等）
+    const rawContext = body.context || {};
+    // 会话 ID 单独传参，避免写进 DB 的 context JSON；发布成功后会话需据此标记 published
+    const sessionId = body.sessionId || rawContext.sessionId || null;
+    const context = sessionId ? { ...rawContext, sessionId } : { ...rawContext };
     const stream = body.stream !== false; // 默认启用流式传输
 
     if (!messages.length) {
