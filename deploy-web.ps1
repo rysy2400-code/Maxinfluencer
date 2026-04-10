@@ -23,7 +23,7 @@ function Invoke-Npm {
 }
 
 function Stop-MaxinWebForDeploy {
-  # Windows：PM2 子进程会占用 node_modules 下文件，npm ci 删除/覆盖时常见 EPERM
+  # Windows：PM2 子进程会占用 node_modules 下文件，npm ci 删除/覆盖时常见 EPERM / ENOTEMPTY
   Write-Host "[deploy-web] Stopping/removing PM2 app 'maxin-web' to release file locks..."
   try {
     pm2 stop maxin-web 2>$null | Out-Null
@@ -32,6 +32,26 @@ function Stop-MaxinWebForDeploy {
     pm2 delete maxin-web 2>$null | Out-Null
   } catch {}
   Start-Sleep -Seconds 4
+}
+
+function Remove-NodeModulesWithRetry {
+  param([string]$ProjectRoot)
+  $nm = Join-Path $ProjectRoot "node_modules"
+  if (-not (Test-Path $nm)) { return }
+  Write-Host "[deploy-web] Removing node_modules (clean slate avoids npm ci ENOTEMPTY/EPERM on Windows)..."
+  for ($attempt = 1; $attempt -le 4; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $nm -Recurse -Force -ErrorAction Stop
+      Write-Host "[deploy-web] node_modules removed."
+      return
+    } catch {
+      Write-Host "[deploy-web] Remove node_modules attempt $attempt failed: $($_.Exception.Message)"
+      if ($attempt -lt 4) {
+        Start-Sleep -Seconds 6
+      }
+    }
+  }
+  throw "Could not remove $nm after 4 attempts. Reboot the VM or close apps locking files under node_modules, then re-run deploy-web.ps1."
 }
 
 function Get-GitExe {
@@ -114,6 +134,7 @@ module.exports = {
 Set-Content -Path $ecosystemPath -Value $ecosystemContent -Encoding ASCII
 
 Stop-MaxinWebForDeploy
+Remove-NodeModulesWithRetry -ProjectRoot $Root
 
 Write-Host "[deploy-web] npm ci..."
 try {
