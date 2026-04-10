@@ -11,6 +11,29 @@ if (Test-Path $nodeDir) {
   $env:Path = "$nodeDir;$env:Path"
 }
 
+function Invoke-Npm {
+  param([Parameter(Mandatory = $true)][string[]]$NpmArguments)
+  $npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+  if (-not $npmCmd) { $npmCmd = Get-Command npm -ErrorAction SilentlyContinue }
+  if (-not $npmCmd) { throw "npm not found in PATH. Install Node.js LTS." }
+  & $npmCmd.Source @NpmArguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm failed (exit $LASTEXITCODE): npm $($NpmArguments -join ' ')"
+  }
+}
+
+function Stop-MaxinWebForDeploy {
+  # Windows：PM2 子进程会占用 node_modules 下文件，npm ci 删除/覆盖时常见 EPERM
+  Write-Host "[deploy-web] Stopping/removing PM2 app 'maxin-web' to release file locks..."
+  try {
+    pm2 stop maxin-web 2>$null | Out-Null
+  } catch {}
+  try {
+    pm2 delete maxin-web 2>$null | Out-Null
+  } catch {}
+  Start-Sleep -Seconds 4
+}
+
 function Get-GitExe {
   $cmd = Get-Command git -ErrorAction SilentlyContinue
   if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
@@ -67,15 +90,9 @@ if ($gitExe) {
   Write-Host "[deploy-web] After install, re-run deploy or restart the machine so PATH is picked up."
 }
 
-Write-Host "[deploy-web] npm ci..."
-npm ci
-
-Write-Host "[deploy-web] npm run build..."
-npm run build
-
 if (-not (Get-Command pm2 -ErrorAction SilentlyContinue)) {
   Write-Host "[deploy-web] pm2 missing, installing globally..."
-  npm install -g pm2
+  Invoke-Npm @("install", "-g", "pm2")
 }
 
 Write-Host "[deploy-web] writing ecosystem file..."
@@ -96,8 +113,25 @@ module.exports = {
 "@
 Set-Content -Path $ecosystemPath -Value $ecosystemContent -Encoding ASCII
 
-Write-Host "[deploy-web] pm2 start/reload maxin-web via ecosystem..."
+Stop-MaxinWebForDeploy
+
+Write-Host "[deploy-web] npm ci..."
+try {
+  Invoke-Npm @("ci")
+} catch {
+  Write-Host "[deploy-web] npm ci failed: $($_.Exception.Message)"
+  Write-Host "[deploy-web] If EPERM persists: close RDP editors touching the repo, pause antivirus scan on $Root, or reboot then re-run."
+  throw
+}
+
+Write-Host "[deploy-web] npm run build..."
+Invoke-Npm @("run", "build")
+
+Write-Host "[deploy-web] pm2 start maxin-web via ecosystem..."
 pm2 start $ecosystemPath --only maxin-web --update-env
+if ($LASTEXITCODE -ne 0) {
+  throw "pm2 start failed (exit $LASTEXITCODE). Try: pm2 kill  (stops PM2 daemon) then re-run deploy-web.ps1"
+}
 
 pm2 save
 Write-Host "[deploy-web] Done."
