@@ -1454,6 +1454,29 @@ export default function HomePage() {
     }
   };
 
+  const handleDeletePublishedSession = async (sessionId, e) => {
+    e.stopPropagation();
+
+    if (!confirm('确定要删除这个已发布的 Campaign 吗？删除后不可恢复。')) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+      if (data.success) {
+        if (sessionId === currentSessionId) {
+          setCurrentSessionId(null);
+          setMessages(defaultMessage);
+          setContext({ workflowState: 'idle' });
+        }
+        await loadCampaignSessions();
+      }
+    } catch (error) {
+      console.error('[HomePage] 删除已发布 campaign 失败:', error);
+    }
+  };
+
   // 快捷功能按钮点击处理
   function handleQuickAction(action) {
     let prompt = "";
@@ -2174,15 +2197,46 @@ export default function HomePage() {
                           }
                         }}
                       >
-                        <div
-                          style={{
-                            fontWeight: isActive ? 600 : 500,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                          }}
-                        >
-                          {session.title || "已发布 Campaign"}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <div
+                            style={{
+                              fontWeight: isActive ? 600 : 500,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              flex: 1,
+                              minWidth: 0,
+                            }}
+                          >
+                            {session.title || "已发布 Campaign"}
+                          </div>
+                          <button
+                            onClick={(e) => handleDeletePublishedSession(session.id, e)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              padding: "4px",
+                              color: "#9CA3AF",
+                              fontSize: 14,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: 4,
+                              transition: "all 0.2s",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.color = "#EF4444";
+                              e.currentTarget.style.backgroundColor = "#FEE2E2";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.color = "#9CA3AF";
+                              e.currentTarget.style.backgroundColor = "transparent";
+                            }}
+                            title="删除"
+                          >
+                            ×
+                          </button>
                         </div>
                         {session.updatedAt && (
                           <div
@@ -2191,14 +2245,14 @@ export default function HomePage() {
                               color: "#9CA3AF",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
+                              whiteSpace: "nowrap",
                             }}
                           >
                             {new Date(session.updatedAt).toLocaleString("zh-CN", {
                               month: "short",
                               day: "numeric",
                               hour: "2-digit",
-                                    minute: "2-digit",
+                              minute: "2-digit",
                             })}
                           </div>
                         )}

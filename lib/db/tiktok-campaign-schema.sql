@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign (
   content_script JSON COMMENT '内容脚本快照',
 
   influencers_per_day INT NOT NULL DEFAULT 5 COMMENT '每天联系红人数量',
-  status ENUM('draft','running','paused','completed') NOT NULL DEFAULT 'running' COMMENT 'Campaign 状态',
+  status ENUM('draft','running','paused','completed','deleted') NOT NULL DEFAULT 'running' COMMENT 'Campaign 状态',
+  deleted_at DATETIME NULL COMMENT '软删除时间',
+  deleted_by VARCHAR(64) NULL COMMENT '删除操作者（user/agent/system）',
+  delete_reason VARCHAR(255) NULL COMMENT '删除原因',
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

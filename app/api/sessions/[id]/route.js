@@ -4,6 +4,7 @@ import {
   updateCampaignSession,
   deleteCampaignSession,
 } from "../../../../lib/db/campaign-session-dao.js";
+import { softDeleteCampaignBySessionId } from "../../../../lib/db/campaign-dao.js";
 
 /**
  * GET /api/sessions/[id]
@@ -150,7 +151,27 @@ export async function DELETE(req, { params }) {
       );
     }
 
-    const result = await deleteCampaignSession(id);
+    const session = await getCampaignSessionById(id);
+    if (!session) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "会话不存在",
+        },
+        { status: 404 }
+      );
+    }
+
+    let result;
+    // 草稿：物理删除；已发布：软删除关联 campaign（不可恢复）
+    if (session.status === "published") {
+      result = await softDeleteCampaignBySessionId(id, {
+        deletedBy: "user",
+        deleteReason: "用户在前端删除已发布 campaign",
+      });
+    } else {
+      result = await deleteCampaignSession(id);
+    }
 
     if (!result.success) {
       return NextResponse.json(
