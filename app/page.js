@@ -103,10 +103,12 @@ export default function HomePage() {
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
 
   // 加载 Campaign 会话列表（草稿 + 已发布）
-  const loadCampaignSessions = async () => {
+  const loadCampaignSessions = async ({ silent = false } = {}) => {
     try {
-      setLoadingSessions(true);
-      setSessionsError(null);
+      if (!silent) {
+        setLoadingSessions(true);
+        setSessionsError(null);
+      }
 
       // 1）加载草稿
       const draftResponse = await fetch('/api/sessions?status=draft&limit=50');
@@ -143,12 +145,16 @@ export default function HomePage() {
       }
     } catch (error) {
       console.error('[HomePage] 加载会话列表失败:', error);
-      setSessionsError(error.message || '加载失败，请检查数据库连接');
-      // 即使失败也设置空数组，避免显示错误时还显示"暂无草稿"
-      setCampaignSessions([]);
-      setPublishedSessions([]);
+      if (!silent) {
+        setSessionsError(error.message || '加载失败，请检查数据库连接');
+        // 即使失败也设置空数组，避免显示错误时还显示"暂无草稿"
+        setCampaignSessions([]);
+        setPublishedSessions([]);
+      }
     } finally {
-      setLoadingSessions(false);
+      if (!silent) {
+        setLoadingSessions(false);
+      }
     }
   };
 
@@ -230,8 +236,8 @@ export default function HomePage() {
   }, []);
 
   // 保存当前会话到后端（如果存在 currentSessionId）
-  // options.reloadSessions: 是否在保存成功后刷新左侧会话列表（默认 true）
-  const saveCurrentSession = React.useCallback(async (options = { reloadSessions: true }) => {
+  // options.reloadSessions: 是否在保存成功后刷新左侧会话列表（默认 false，避免每次回复造成左侧闪烁）
+  const saveCurrentSession = React.useCallback(async (options = { reloadSessions: false }) => {
     if (!currentSessionId) return;
     
     try {
@@ -683,13 +689,13 @@ export default function HomePage() {
 
                   // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
                   if (data.data.context?.published) {
-                    loadCampaignSessions().catch(() => {});
+                    loadCampaignSessions({ silent: true }).catch(() => {});
                   }
 
                   // 消息发送完成后，更新会话（延迟保存，避免频繁请求）
                   if (currentSessionId) {
                     setTimeout(() => {
-                      saveCurrentSession();
+                      saveCurrentSession({ reloadSessions: false });
                     }, 1000);
                   }
                 } else if (data.type === "error") {
