@@ -124,8 +124,8 @@ async function upsertCandidate(m) {
     `
     INSERT INTO tiktok_campaign_influencer_candidates (
       campaign_id, influencer_id, source, influencer_snapshot,
-      match_score, should_contact, analysis_summary, analyzed_at
-    ) VALUES (?, ?, 'mock', ?, ?, ?, ?, NOW())
+      match_score, should_contact, email, has_email, analysis_summary, analyzed_at
+    ) VALUES (?, ?, 'mock', ?, ?, ?, ?, ?, ?, NOW())
     ON DUPLICATE KEY UPDATE
       influencer_snapshot=VALUES(influencer_snapshot),
       match_score=VALUES(match_score),
@@ -140,6 +140,8 @@ async function upsertCandidate(m) {
       JSON.stringify(m.snapshot || {}),
       m.matchScore ?? null,
       m.shouldContact ? 1 : 0,
+      m.contacts?.email || null,
+      m.contacts?.email ? 1 : 0,
       m.analysisSummary || null,
     ]
   );

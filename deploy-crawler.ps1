@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+# 机器 B：仅任务 7 —— PM2 常驻消费 tiktok_influencer_search_task（worker-influencer-search.js）。
+# 机器 A 只跑 1-6（计划任务），与本脚本职责分离；发版时此处仅重启本机 PM2 中的搜索 Worker。
+
 $Root = "C:\maxinfluencer"
 if (-not (Test-Path $Root)) {
   throw "Deploy root not found: $Root"

@@ -60,6 +60,8 @@ async function createTables() {
       influencer_snapshot JSON COMMENT '候选时的红人快照（用于回溯，可为空）',
       match_score INT NULL COMMENT '匹配度评分（0-100 或自定义）',
       should_contact TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否建议联系（1=建议联系）',
+      email VARCHAR(255) NULL COMMENT '候选红人的主联系邮箱（标准化）',
+      has_email TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否有邮箱（1=有）',
       analysis_summary TEXT NULL COMMENT '匹配结论摘要（给前端展示）',
       analyzed_at TIMESTAMP NULL DEFAULT NULL COMMENT '分析完成时间',
       picked_at TIMESTAMP NULL DEFAULT NULL COMMENT '已被执行心跳消费并入执行表的时间',
@@ -67,6 +69,7 @@ async function createTables() {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uk_campaign_influencer (campaign_id, influencer_id),
       INDEX idx_campaign_contact (campaign_id, should_contact, picked_at),
+      INDEX idx_campaign_email_contact (campaign_id, has_email, should_contact, picked_at),
       INDEX idx_campaign_score (campaign_id, match_score DESC),
       INDEX idx_campaign_analyzed (campaign_id, analyzed_at DESC)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Campaign 候选红人池 + 分析结果'
@@ -75,6 +78,21 @@ async function createTables() {
   console.log("执行: CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates ...");
   await queryTikTok(createCandidates);
   console.log("  OK");
+  await ensureColumn(
+    "tiktok_campaign_influencer_candidates",
+    "email",
+    "email VARCHAR(255) NULL COMMENT '候选红人的主联系邮箱（标准化）' AFTER should_contact"
+  );
+  await ensureColumn(
+    "tiktok_campaign_influencer_candidates",
+    "has_email",
+    "has_email TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否有邮箱（1=有）' AFTER email"
+  );
+  await ensureIndex(
+    "tiktok_campaign_influencer_candidates",
+    "idx_campaign_email_contact",
+    "INDEX idx_campaign_email_contact (campaign_id, has_email, should_contact, picked_at)"
+  );
 
   // 2) 全局红人表：如果已存在旧版 tiktok_influencer，则通过 ALTER 补齐 EchoTik 接入需要的列
   const hasInfluencerTable = await queryTikTok("SHOW TABLES LIKE 'tiktok_influencer'");
