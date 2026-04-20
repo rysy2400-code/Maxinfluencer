@@ -92,6 +92,11 @@ export default function HomePage() {
   const [executionConfig, setExecutionConfig] = useState(null); // 执行阶段右侧「工作笔记」用到的执行节奏 & 汇报配置
   const [executionConfigError, setExecutionConfigError] = useState(null);
   const [activeExecutionStage, setActiveExecutionStage] = useState("pendingPrice"); // 执行进度当前选中的阶段
+  const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
+  const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
+  const binComputerViewRef = useRef("overview");
+  const workLiveAutoSwitchedRef = useRef(false); // 本轮是否已自动切到工作实况
+  const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
@@ -101,6 +106,36 @@ export default function HomePage() {
   // 输入框自适应高度（欢迎页大输入框 + 底部输入框共用同一输入值）
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
+  const isExecutionPhaseGlobal =
+    context?.workflowState === "published" || context?.published === true;
+
+  useEffect(() => {
+    binComputerViewRef.current = binComputerView;
+  }, [binComputerView]);
+
+  useEffect(() => {
+    if (!isExecutionPhaseGlobal) {
+      setBinComputerView("overview");
+      setWorkLiveUnreadCount(0);
+      workLiveAutoSwitchedRef.current = false;
+      workLiveUserPinnedOverviewRef.current = false;
+    }
+  }, [isExecutionPhaseGlobal]);
+
+  const handleBinComputerViewChange = (nextView, manual = true) => {
+    setBinComputerView(nextView);
+    if (nextView === "live") {
+      setWorkLiveUnreadCount(0);
+      // 用户主动打开工作实况后，允许后续新一轮继续自动切换
+      if (manual) {
+        workLiveUserPinnedOverviewRef.current = false;
+      }
+    }
+    if (manual && nextView === "overview") {
+      // 用户本轮明确想看执行总览，不再强制自动切换
+      workLiveUserPinnedOverviewRef.current = true;
+    }
+  };
 
   // 加载 Campaign 会话列表（草稿 + 已发布）
   const loadCampaignSessions = async ({ silent = false } = {}) => {
@@ -514,6 +549,9 @@ export default function HomePage() {
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
+    // 新一轮请求开始：允许本轮自动切一次「工作实况」
+    workLiveAutoSwitchedRef.current = false;
+    workLiveUserPinnedOverviewRef.current = false;
 
     // 创建助手消息占位符，用于实时更新
     const assistantMessageIndex = nextMessages.length;
@@ -660,6 +698,21 @@ export default function HomePage() {
                     }
                     return updated;
                   });
+
+                  // 执行阶段下：收到实时步骤时，更新「工作实况」提醒，并自动切换一次到工作实况
+                  if (isExecutionPhaseGlobal) {
+                    if (binComputerViewRef.current !== "live") {
+                      setWorkLiveUnreadCount(prev => Math.min(prev + 1, 99));
+                    }
+                    if (
+                      !workLiveAutoSwitchedRef.current &&
+                      !workLiveUserPinnedOverviewRef.current
+                    ) {
+                      setBinComputerView("live");
+                      setWorkLiveUnreadCount(0);
+                      workLiveAutoSwitchedRef.current = true;
+                    }
+                  }
                 } else if (data.type === "complete") {
                   // 最终结果（合并 thinking，保留 browserSteps、screenshots、influencerAnalyses）
                   setMessages(prev => {
@@ -2722,6 +2775,66 @@ export default function HomePage() {
               }}>
                 💻 Bin的电脑
               </div>
+              {isExecutionPhaseGlobal && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    backgroundColor: "#F3F4F6",
+                    borderRadius: 8,
+                    padding: 2
+                  }}
+                >
+                  {[
+                    { key: "overview", label: "执行总览" },
+                    { key: "live", label: "工作实况" },
+                  ].map((tab) => {
+                    const active = binComputerView === tab.key;
+                    const isLive = tab.key === "live";
+                    return (
+                      <button
+                        key={tab.key}
+                        onClick={() => handleBinComputerViewChange(tab.key, true)}
+                        style={{
+                          border: "none",
+                          backgroundColor: active ? "#FFFFFF" : "transparent",
+                          color: active ? "#111827" : "#6B7280",
+                          fontSize: 12,
+                          fontWeight: active ? 600 : 500,
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          boxShadow: active ? "0 1px 2px rgba(0,0,0,0.08)" : "none"
+                        }}
+                      >
+                        {tab.label}
+                        {isLive && workLiveUnreadCount > 0 && !active && (
+                          <span
+                            style={{
+                              minWidth: 16,
+                              height: 16,
+                              padding: "0 4px",
+                              borderRadius: 999,
+                              backgroundColor: "#EF4444",
+                              color: "#FFFFFF",
+                              fontSize: 10,
+                              lineHeight: "16px",
+                              textAlign: "center",
+                              fontWeight: 600
+                            }}
+                          >
+                            {workLiveUnreadCount > 99 ? "99+" : workLiveUnreadCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div style={{
               flex: 1,
@@ -2753,7 +2866,7 @@ export default function HomePage() {
                   lastMessage.thinking || {};
 
                 // 执行阶段：上「工作笔记」（执行节奏 + 汇报方式）、下「执行进度」（单阶段 Tab）
-                if (isExecutionPhase) {
+                if (isExecutionPhase && binComputerView === "overview") {
                   const cols = executionStatus?.columns || {};
                   const stageDefs = [
                     { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
@@ -3047,7 +3160,7 @@ export default function HomePage() {
                   );
                 }
 
-                // ---------- 默认发布阶段：红人画像确认 + 浏览器 ----------
+                // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
                 
                 // 红人匹配分析数据：优先使用 SSE 实时累积的 influencerAnalyses，否则从消息内容解析
                 let influencerMatches = [];
@@ -3128,6 +3241,7 @@ export default function HomePage() {
                   }
                 }
 
+                const liveTopTitle = isExecutionPhase ? "红人画像分析" : "红人画像确认";
                 return (
                   <div
                     id="right-panel-split-container"
@@ -3157,7 +3271,7 @@ export default function HomePage() {
                         backgroundColor: "#F9FAFB",
                         borderBottom: "1px solid #E5E7EB"
                       }}>
-                        红人画像确认
+                        {liveTopTitle}
                       </div>
                       <div style={{
                         flex: 1,
