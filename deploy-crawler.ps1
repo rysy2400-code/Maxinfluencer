@@ -42,6 +42,17 @@ function Test-Cdp {
   } catch { return $false }
 }
 
+function Stop-StaleCdpBrowsers {
+  # 清理历史残留的 9222/9223 进程（常见于旧版 SYSTEM 任务），避免占端口导致登录会话看不到窗口。
+  $stale = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -match "chrome|msedge") -and
+    ($_.CommandLine -match "remote-debugging-port=9222" -or $_.CommandLine -match "remote-debugging-port=9223")
+  }
+  foreach ($p in $stale) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+
 function Ensure-Schtask {
   param(
     [string]$TaskName,
@@ -105,9 +116,14 @@ $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$chrome = "$($chromeExe.Replace("\", "\\"))"
 `$args = "$chromeModeArgs --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222 $launchUrl9222Secondary"
+`$mySession = (Get-Process -Id `$PID).SessionId
 while (`$true) {
-  try { `$ok = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9222/json/version" -TimeoutSec 3 } catch { `$ok = `$null }
-  if (-not `$ok) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
+  `$mine = Get-CimInstance Win32_Process | Where-Object {
+    (`$_.Name -match "chrome|msedge") -and
+    (`$_.SessionId -eq `$mySession) -and
+    (`$_.CommandLine -match "remote-debugging-port=9222")
+  }
+  if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
   Start-Sleep -Seconds 8
 }
 "@
@@ -116,9 +132,14 @@ $guard9223Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$chrome = "$($chromeExe.Replace("\", "\\"))"
 `$args = "$chromeModeArgs --remote-debugging-port=9223 --user-data-dir=$($chromeDir9223.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9223"
+`$mySession = (Get-Process -Id `$PID).SessionId
 while (`$true) {
-  try { `$ok = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9223/json/version" -TimeoutSec 3 } catch { `$ok = `$null }
-  if (-not `$ok) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
+  `$mine = Get-CimInstance Win32_Process | Where-Object {
+    (`$_.Name -match "chrome|msedge") -and
+    (`$_.SessionId -eq `$mySession) -and
+    (`$_.CommandLine -match "remote-debugging-port=9223")
+  }
+  if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
   Start-Sleep -Seconds 8
 }
 "@
@@ -140,6 +161,7 @@ Set-Content -Path $guard9222 -Value $guard9222Content -Encoding ASCII
 Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 
+Stop-StaleCdpBrowsers
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
 Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
