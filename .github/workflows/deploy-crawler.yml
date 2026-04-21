@@ -60,7 +60,7 @@ jobs:
               & `$git -C `$root fetch origin --prune
               & `$git -C `$root checkout main
               & `$git -C `$root reset --hard `$targetSha
-              & `$git -C `$root clean -fd
+              & `$git -C `$root clean -fd -e .chrome-cdp-9222 -e .chrome-cdp-9223
 
               powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$root 'deploy-crawler.ps1')
 
