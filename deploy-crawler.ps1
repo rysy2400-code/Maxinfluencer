@@ -50,6 +50,7 @@ function Ensure-Schtask {
   # 目标：守护脚本运行在“登录用户会话”里，这样 Chrome 窗口可在 RDP 桌面可见。
   # 默认使用当前登录用户；可通过 CRAWLER_RUN_AS_USER 覆盖（例如 "Administrator" 或 "HOST\\Administrator"）。
   $runAsUser = if ($env:CRAWLER_RUN_AS_USER) { "$($env:CRAWLER_RUN_AS_USER)" } else { "$env:USERNAME" }
+  if ([string]::IsNullOrWhiteSpace($runAsUser)) { $runAsUser = "Administrator" }
   $usedFallback = $false
   try {
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
@@ -65,8 +66,7 @@ function Ensure-Schtask {
   if ($usedFallback) {
     # 兼容回退：使用 schtasks 在登录时触发，并绑定到交互会话（/IT）。
     $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
-    $createArgs = "/Create /F /RU `"$runAsUser`" /RL HIGHEST /SC ONLOGON /TN `"$TaskName`" /TR `"$taskRun`" /IT"
-    Start-Process -FilePath "schtasks.exe" -ArgumentList $createArgs -NoNewWindow -Wait | Out-Null
+    & schtasks.exe /Create /F /RU $runAsUser /RL HIGHEST /SC ONLOGON /TN $TaskName /TR $taskRun /IT | Out-Null
   }
 
   # 确保只运行 1 个实例：先尝试结束旧实例，再启动一次（不使用 2>&1，避免某些 PowerShell 解析异常）
