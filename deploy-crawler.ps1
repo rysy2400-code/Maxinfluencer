@@ -47,13 +47,14 @@ function Ensure-Schtask {
     [string]$TaskName,
     [string]$ScriptPath
   )
-  # 旧实现用 schtasks /Run 会在每次部署时重复启动无限循环脚本，导致弹出多个 PowerShell 窗口。
-  # 改为 ScheduledTasks API：后台隐藏运行 + IgnoreNew（已有实例运行时不再启动新实例）。
+  # 目标：守护脚本运行在“登录用户会话”里，这样 Chrome 窗口可在 RDP 桌面可见。
+  # 默认使用当前登录用户；可通过 CRAWLER_RUN_AS_USER 覆盖（例如 "Administrator" 或 "HOST\\Administrator"）。
+  $runAsUser = if ($env:CRAWLER_RUN_AS_USER) { "$($env:CRAWLER_RUN_AS_USER)" } else { "$env:USERNAME" }
   $usedFallback = $false
   try {
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $runAsUser
+    $principal = New-ScheduledTaskPrincipal -UserId $runAsUser -LogonType InteractiveToken -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
@@ -62,9 +63,9 @@ function Ensure-Schtask {
   }
 
   if ($usedFallback) {
-    # 兼容某些系统 ScheduledTasks cmdlet 不可用/异常：回退 schtasks（避免复杂重定向导致解析差异）
-    $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
-    $createArgs = "/Create /F /RU SYSTEM /RL HIGHEST /SC ONSTART /TN `"$TaskName`" /TR `"$taskRun`""
+    # 兼容回退：使用 schtasks 在登录时触发，并绑定到交互会话（/IT）。
+    $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    $createArgs = "/Create /F /RU `"$runAsUser`" /RL HIGHEST /SC ONLOGON /TN `"$TaskName`" /TR `"$taskRun`" /IT"
     Start-Process -FilePath "schtasks.exe" -ArgumentList $createArgs -NoNewWindow -Wait | Out-Null
   }
 
