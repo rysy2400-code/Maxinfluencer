@@ -16,6 +16,11 @@ on:
       - "deploy-crawler.ps1"
       - ".github/workflows/deploy-crawler.yml"
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Optional commit SHA to deploy (rollback/support)"
+        required: false
+        type: string
 
 jobs:
   deploy:
@@ -37,4 +42,42 @@ jobs:
           port: 22
           script_stop: true
           script: |
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\maxinfluencer\deploy-crawler.ps1
+            $ErrorActionPreference = "Stop"
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+              `$ErrorActionPreference = 'Stop'
+              `$root = 'C:\maxinfluencer'
+              if (-not (Test-Path `$root)) { throw 'Deploy root not found: C:\maxinfluencer' }
+              if (-not (Test-Path (Join-Path `$root '.git'))) { throw 'C:\maxinfluencer is not a git repository (.git missing)' }
+
+              `$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+              `$git = if (`$gitCmd -and `$gitCmd.Source) { `$gitCmd.Source } else { 'C:\Program Files\Git\cmd\git.exe' }
+              if (-not (Test-Path `$git)) { throw 'git.exe not found on remote host' }
+
+              `$targetSha = '${{ github.event.inputs.target_sha }}'
+              if ([string]::IsNullOrWhiteSpace(`$targetSha)) { `$targetSha = '${{ github.sha }}' }
+              Write-Host ('[deploy-crawler] target sha: ' + `$targetSha)
+
+              & `$git -C `$root fetch origin --prune
+              & `$git -C `$root checkout main
+              & `$git -C `$root reset --hard `$targetSha
+              & `$git -C `$root clean -fd
+
+              powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$root 'deploy-crawler.ps1')
+
+              `$ok9222 = `$false
+              `$ok9223 = `$false
+              try {
+                `$r9222 = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 8
+                `$ok9222 = (`$r9222.StatusCode -ge 200 -and `$r9222.StatusCode -lt 400)
+              } catch {}
+              try {
+                `$r9223 = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9223/json/version' -TimeoutSec 8
+                `$ok9223 = (`$r9223.StatusCode -ge 200 -and `$r9223.StatusCode -lt 400)
+              } catch {}
+
+              `$workerCount = (Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq 'node.exe' -and `$_.CommandLine -match 'worker-influencer-search\.js' } | Measure-Object).Count
+              Write-Host ('[deploy-crawler] health => cdp9222=' + `$ok9222 + ', cdp9223=' + `$ok9223 + ', workerCount=' + `$workerCount)
+
+              if (-not `$ok9222 -or -not `$ok9223) { throw 'CDP health check failed' }
+              if (`$workerCount -lt 1) { throw 'Worker process not detected' }
+            "
