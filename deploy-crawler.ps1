@@ -62,14 +62,15 @@ function Ensure-Schtask {
   }
 
   if ($usedFallback) {
-    # 兼容某些系统 ScheduledTasks cmdlet 不可用/异常的情况：回退 schtasks
-    # 关键：使用 SYSTEM 身份运行 + Hidden，避免弹窗
-    cmd /c "schtasks /Create /F /RU SYSTEM /RL HIGHEST /SC ONSTART /TN `"$TaskName`" /TR `"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"`"$ScriptPath`"`"`"" >nul"
+    # 兼容某些系统 ScheduledTasks cmdlet 不可用/异常：回退 schtasks（避免复杂重定向导致解析差异）
+    $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
+    $createArgs = "/Create /F /RU SYSTEM /RL HIGHEST /SC ONSTART /TN `"$TaskName`" /TR `"$taskRun`""
+    Start-Process -FilePath "schtasks.exe" -ArgumentList $createArgs -NoNewWindow -Wait | Out-Null
   }
 
-  # 确保只运行 1 个实例：先结束旧实例，再启动一次（之后 IgnoreNew 会阻止重复）
-  cmd /c "schtasks /End /TN `"$TaskName`" >nul 2>&1"
-  cmd /c "schtasks /Run /TN `"$TaskName`" >nul 2>&1"
+  # 确保只运行 1 个实例：先尝试结束旧实例，再启动一次（不使用 2>&1，避免某些 PowerShell 解析异常）
+  try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null } catch {}
+  Start-Process -FilePath "schtasks.exe" -ArgumentList "/Run /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null
 }
 
 $chromeExe = Get-ChromeExe
