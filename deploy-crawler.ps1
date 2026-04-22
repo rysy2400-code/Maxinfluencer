@@ -64,7 +64,7 @@ function Ensure-Schtask {
   if ([string]::IsNullOrWhiteSpace($runAsUser)) { $runAsUser = "Administrator" }
   $usedFallback = $false
   try {
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $runAsUser
     $principal = New-ScheduledTaskPrincipal -UserId $runAsUser -LogonType InteractiveToken -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
@@ -76,7 +76,7 @@ function Ensure-Schtask {
 
   if ($usedFallback) {
     # 兼容回退：使用 schtasks 在登录时触发，并绑定到交互会话（/IT）。
-    $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
     & schtasks.exe /Create /F /RU $runAsUser /RL HIGHEST /SC ONLOGON /TN $TaskName /TR $taskRun /IT | Out-Null
   }
 
