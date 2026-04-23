@@ -93,6 +93,18 @@ if (-not $nodeExe) { throw "Node.js executable not found." }
 $workerScript = Join-Path $Root "scripts\worker-influencer-search.js"
 if (-not (Test-Path $workerScript)) { throw "Worker script not found: $workerScript" }
 
+# 统一工作实况通道到 Redis（worker -> redis pub/sub -> web SSE）
+$redisUrl = if ($env:CRAWLER_REDIS_URL) { "$($env:CRAWLER_REDIS_URL)" } elseif ($env:REDIS_URL) { "$($env:REDIS_URL)" } else { "" }
+if ([string]::IsNullOrWhiteSpace($redisUrl)) {
+  throw "REDIS_URL is required for crawler work-live events. Set CRAWLER_REDIS_URL (preferred) or REDIS_URL before deploy."
+}
+$workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_CHANNEL_PREFIX)" } else { "work-live" }
+$executionOnePerTask = if ($env:CRAWLER_EXECUTION_ONE_PER_TASK) { "$($env:CRAWLER_EXECUTION_ONE_PER_TASK)" } else { "" }
+$workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
+$workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
+$searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
+$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
+
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
 $chromeDir9223 = "C:\maxinfluencer\.chrome-cdp-9223"
 if (-not (Test-Path $chromeDir9222)) { New-Item -ItemType Directory -Path $chromeDir9222 | Out-Null }
@@ -115,12 +127,10 @@ $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$chrome = "$($chromeExe.Replace("\", "\\"))"
-`$args = "$chromeModeArgs --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222 $launchUrl9222Secondary"
-`$mySession = (Get-Process -Id `$PID).SessionId
+`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222 $launchUrl9222Secondary"
 while (`$true) {
   `$mine = Get-CimInstance Win32_Process | Where-Object {
     (`$_.Name -match "chrome|msedge") -and
-    (`$_.SessionId -eq `$mySession) -and
     (`$_.CommandLine -match "remote-debugging-port=9222")
   }
   if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
@@ -131,12 +141,10 @@ while (`$true) {
 $guard9223Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$chrome = "$($chromeExe.Replace("\", "\\"))"
-`$args = "$chromeModeArgs --remote-debugging-port=9223 --user-data-dir=$($chromeDir9223.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9223"
-`$mySession = (Get-Process -Id `$PID).SessionId
+`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --user-data-dir=$($chromeDir9223.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9223"
 while (`$true) {
   `$mine = Get-CimInstance Win32_Process | Where-Object {
     (`$_.Name -match "chrome|msedge") -and
-    (`$_.SessionId -eq `$mySession) -and
     (`$_.CommandLine -match "remote-debugging-port=9223")
   }
   if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
@@ -148,6 +156,15 @@ $guardCrawlerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$node = "$($nodeExe.Replace("\", "\\"))"
 `$script = "$($workerScript.Replace("\", "\\"))"
+`$env:REDIS_URL = "$($redisUrl.Replace("\", "\\").Replace('"','\"'))"
+`$env:WORK_LIVE_CHANNEL_PREFIX = "$($workLiveChannelPrefix.Replace("\", "\\").Replace('"','\"'))"
+`$env:WORK_LIVE_PUSH_URL = ""
+`$env:WORK_LIVE_PUSH_SECRET = ""
+`$env:EXECUTION_ONE_PER_TASK = "$($executionOnePerTask.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
+`$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
+`$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 while (`$true) {
   `$p = Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-influencer-search\.js" }
   if (-not `$p) {
