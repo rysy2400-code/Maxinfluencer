@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-# 搜索爬虫部署脚本（机器：152.32.252.45）
-# 目标：
-# 1) 更新代码 + 安装依赖
-# 2) 启动并守护 2 个 CDP Chrome 实例（9222 / 9223）
-# 3) 启动并守护搜索 Worker（worker-influencer-search.js）
+# Search crawler deploy script (Windows VM).
+# Goals:
+# 1) Pull/update code and dependencies.
+# 2) Start and guard two CDP browser instances (9222 / 9223).
+# 3) Start and guard search worker (worker-influencer-search.js).
 
 $Root = "C:\maxinfluencer"
 if (-not (Test-Path $Root)) { throw "Deploy root not found: $Root" }
@@ -43,7 +43,7 @@ function Test-Cdp {
 }
 
 function Stop-StaleCdpBrowsers {
-  # 清理历史残留的 9222/9223 进程（常见于旧版 SYSTEM 任务），避免占端口导致登录会话看不到窗口。
+  # Clear stale 9222/9223 browser processes to avoid port conflicts.
   $stale = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -match "chrome|msedge") -and
     ($_.CommandLine -match "remote-debugging-port=9222" -or $_.CommandLine -match "remote-debugging-port=9223")
@@ -58,8 +58,8 @@ function Ensure-Schtask {
     [string]$TaskName,
     [string]$ScriptPath
   )
-  # 目标：守护脚本运行在“登录用户会话”里，这样 Chrome 窗口可在 RDP 桌面可见。
-  # 默认使用当前登录用户；可通过 CRAWLER_RUN_AS_USER 覆盖（例如 "Administrator" 或 "HOST\\Administrator"）。
+  # Run guard tasks in logged-in user session so Chrome is visible in RDP.
+  # Default user is current login user; can override via CRAWLER_RUN_AS_USER.
   $runAsUser = if ($env:CRAWLER_RUN_AS_USER) { "$($env:CRAWLER_RUN_AS_USER)" } else { "$env:USERNAME" }
   if ([string]::IsNullOrWhiteSpace($runAsUser)) { $runAsUser = "Administrator" }
   $usedFallback = $false
@@ -75,12 +75,12 @@ function Ensure-Schtask {
   }
 
   if ($usedFallback) {
-    # 兼容回退：使用 schtasks 在登录时触发，并绑定到交互会话（/IT）。
+    # Fallback: create task with schtasks and bind to interactive session.
     $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
     & schtasks.exe /Create /F /RU $runAsUser /RL HIGHEST /SC ONLOGON /TN $TaskName /TR $taskRun /IT | Out-Null
   }
 
-  # 确保只运行 1 个实例：先尝试结束旧实例，再启动一次（不使用 2>&1，避免某些 PowerShell 解析异常）
+  # Ensure only one instance: stop old task instance then run once.
   try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null } catch {}
   Start-Process -FilePath "schtasks.exe" -ArgumentList "/Run /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null
 }
@@ -93,7 +93,7 @@ if (-not $nodeExe) { throw "Node.js executable not found." }
 $workerScript = Join-Path $Root "scripts\worker-influencer-search.js"
 if (-not (Test-Path $workerScript)) { throw "Worker script not found: $workerScript" }
 
-# 统一工作实况通道到 Redis（worker -> redis pub/sub -> web SSE）
+# Work-live events channel via Redis (worker -> pub/sub -> web SSE).
 $redisUrl = if ($env:CRAWLER_REDIS_URL) { "$($env:CRAWLER_REDIS_URL)" } elseif ($env:REDIS_URL) { "$($env:REDIS_URL)" } else { "" }
 if ([string]::IsNullOrWhiteSpace($redisUrl)) {
   throw "REDIS_URL is required for crawler work-live events. Set CRAWLER_REDIS_URL (preferred) or REDIS_URL before deploy."
