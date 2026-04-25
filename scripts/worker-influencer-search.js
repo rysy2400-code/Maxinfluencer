@@ -6,6 +6,9 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import { createWorkLiveStepBridge } from "../lib/utils/work-live-step-bridge.js";
+import { publishWorkLiveFromWorker } from "../lib/realtime/work-live-worker-publisher.js";
+import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -19,6 +22,7 @@ async function getCampaignById(campaignId) {
     `
     SELECT
       id,
+      session_id AS sessionId,
       product_info AS productInfo,
       campaign_info AS campaignInfo,
       influencer_profile AS influencerProfile,
@@ -32,7 +36,88 @@ async function getCampaignById(campaignId) {
   if (!rows || !rows[0]) return null;
 
   const row = rows[0];
-  function parseJsonOrObject(v) {
+  
+
+async function upsertKeywordRunResult({
+  campaignId,
+  sessionId,
+  runId,
+  taskId,
+  keyword,
+  keywordType = "new",
+  workerId,
+  workerHost,
+  metrics = {},
+}) {
+  if (!campaignId || !runId || !keyword) return;
+  const score =
+    Number(metrics.insertExecutionCount || 0) * 0.5 +
+    Number(metrics.analyzeRecommendedCount || 0) * 0.2 +
+    Number(metrics.enrichSuccessCount || 0) * 0.2 -
+    Number(metrics.duplicateCount || 0) * 0.1 -
+    Number(metrics.failCount || 0) * 0.1;
+
+  await queryTikTok(
+    `
+    INSERT INTO tiktok_keyword_run_result (
+      campaign_id,
+      session_id,
+      run_id,
+      task_id,
+      keyword,
+      keyword_type,
+      assigned_worker,
+      assigned_worker_host,
+      search_count,
+      enrich_success_count,
+      analyze_recommended_count,
+      insert_candidate_count,
+      insert_execution_count,
+      duplicate_count,
+      fail_count,
+      fail_reason,
+      elapsed_ms,
+      score
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      assigned_worker = VALUES(assigned_worker),
+      assigned_worker_host = VALUES(assigned_worker_host),
+      search_count = VALUES(search_count),
+      enrich_success_count = VALUES(enrich_success_count),
+      analyze_recommended_count = VALUES(analyze_recommended_count),
+      insert_candidate_count = VALUES(insert_candidate_count),
+      insert_execution_count = VALUES(insert_execution_count),
+      duplicate_count = VALUES(duplicate_count),
+      fail_count = VALUES(fail_count),
+      fail_reason = VALUES(fail_reason),
+      elapsed_ms = VALUES(elapsed_ms),
+      score = VALUES(score),
+      updated_at = NOW()
+  `,
+    [
+      campaignId,
+      sessionId || null,
+      runId,
+      taskId || null,
+      keyword,
+      keywordType || "new",
+      workerId || null,
+      workerHost || null,
+      Number(metrics.searchCount || 0),
+      Number(metrics.enrichSuccessCount || 0),
+      Number(metrics.analyzeRecommendedCount || 0),
+      Number(metrics.insertCandidateCount || 0),
+      Number(metrics.insertExecutionCount || 0),
+      Number(metrics.duplicateCount || 0),
+      Number(metrics.failCount || 0),
+      metrics.failReason || null,
+      metrics.elapsedMs == null ? null : Number(metrics.elapsedMs),
+      Number(score || 0),
+    ]
+  );
+}
+
+function parseJsonOrObject(v) {
     if (v == null) return null;
     if (typeof v === "object") return v;
     if (typeof v !== "string") return null;
@@ -45,6 +130,7 @@ async function getCampaignById(campaignId) {
 
   return {
     id: row.id,
+    sessionId: row.sessionId || row.session_id || null,
     influencersPerDay: Number(row.influencersPerDay || 0) || 0,
     productInfo: parseJsonOrObject(row.productInfo) || {},
     campaignInfo: parseJsonOrObject(row.campaignInfo) || {},
@@ -55,7 +141,7 @@ async function getCampaignById(campaignId) {
 async function claimOnePendingTask(workerId) {
   const rows = await queryTikTok(
     `
-    SELECT id, campaign_id, payload
+    SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
     FROM tiktok_influencer_search_task
     WHERE status = 'pending'
     ORDER BY priority DESC, id ASC
@@ -71,13 +157,14 @@ async function claimOnePendingTask(workerId) {
     UPDATE tiktok_influencer_search_task
     SET status = 'processing',
         worker_id = ?,
+        worker_host = ?,
         started_at = NOW(),
         attempt_count = attempt_count + 1,
         updated_at = NOW()
     WHERE id = ?
       AND status = 'pending'
   `,
-    [workerId, task.id]
+    [workerId, process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null, task.id]
   );
 
   if (!updateResult || Number(updateResult.affectedRows || 0) === 0) return null;
@@ -98,6 +185,87 @@ async function markTaskStatus(id, status, errorMessage = null) {
   );
 }
 
+
+
+async function upsertKeywordRunResult({
+  campaignId,
+  sessionId,
+  runId,
+  taskId,
+  keyword,
+  keywordType = "new",
+  workerId,
+  workerHost,
+  metrics = {},
+}) {
+  if (!campaignId || !runId || !keyword) return;
+  const score =
+    Number(metrics.insertExecutionCount || 0) * 0.5 +
+    Number(metrics.analyzeRecommendedCount || 0) * 0.2 +
+    Number(metrics.enrichSuccessCount || 0) * 0.2 -
+    Number(metrics.duplicateCount || 0) * 0.1 -
+    Number(metrics.failCount || 0) * 0.1;
+
+  await queryTikTok(
+    `
+    INSERT INTO tiktok_keyword_run_result (
+      campaign_id,
+      session_id,
+      run_id,
+      task_id,
+      keyword,
+      keyword_type,
+      assigned_worker,
+      assigned_worker_host,
+      search_count,
+      enrich_success_count,
+      analyze_recommended_count,
+      insert_candidate_count,
+      insert_execution_count,
+      duplicate_count,
+      fail_count,
+      fail_reason,
+      elapsed_ms,
+      score
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      assigned_worker = VALUES(assigned_worker),
+      assigned_worker_host = VALUES(assigned_worker_host),
+      search_count = VALUES(search_count),
+      enrich_success_count = VALUES(enrich_success_count),
+      analyze_recommended_count = VALUES(analyze_recommended_count),
+      insert_candidate_count = VALUES(insert_candidate_count),
+      insert_execution_count = VALUES(insert_execution_count),
+      duplicate_count = VALUES(duplicate_count),
+      fail_count = VALUES(fail_count),
+      fail_reason = VALUES(fail_reason),
+      elapsed_ms = VALUES(elapsed_ms),
+      score = VALUES(score),
+      updated_at = NOW()
+  `,
+    [
+      campaignId,
+      sessionId || null,
+      runId,
+      taskId || null,
+      keyword,
+      keywordType || "new",
+      workerId || null,
+      workerHost || null,
+      Number(metrics.searchCount || 0),
+      Number(metrics.enrichSuccessCount || 0),
+      Number(metrics.analyzeRecommendedCount || 0),
+      Number(metrics.insertCandidateCount || 0),
+      Number(metrics.insertExecutionCount || 0),
+      Number(metrics.duplicateCount || 0),
+      Number(metrics.failCount || 0),
+      metrics.failReason || null,
+      metrics.elapsedMs == null ? null : Number(metrics.elapsedMs),
+      Number(score || 0),
+    ]
+  );
+}
+
 function parseJsonOrObject(v) {
   if (v == null) return null;
   if (typeof v === "object") return v;
@@ -113,6 +281,10 @@ async function processTask(task) {
   const campaignId = task.campaign_id;
   const payload = parseJsonOrObject(task.payload) || {};
   const requestedBatch = Number(payload.targetBatchSize || 0) || 0;
+  const taskKeyword = task.keyword || payload.keyword || null;
+  const taskKeywordType = task.keyword_type || payload.keywordType || "new";
+  const runId = task.run_id || payload.runId || null;
+  const taskStartMs = Date.now();
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
@@ -120,19 +292,45 @@ async function processTask(task) {
     return;
   }
 
-  const { productInfo, campaignInfo, influencerProfile, influencersPerDay } = campaign;
+  const { productInfo, campaignInfo, influencerProfile, influencersPerDay, sessionId } =
+    campaign;
+
+  let onStepUpdate = null;
+  if (sessionId) {
+    const source = {
+      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+    };
+    const bridge = createWorkLiveStepBridge((ev) => {
+      const wrapped = {
+        ...ev,
+        data: ev?.data && typeof ev.data === "object" ? { ...ev.data, source } : ev?.data,
+      };
+      publishWorkLiveFromWorker(sessionId, wrapped).catch(() => {});
+    });
+    onStepUpdate = (raw) => {
+      try {
+        bridge(raw);
+      } catch {
+        // ignore bridge errors
+      }
+    };
+  }
+
   const [{ generateSearchKeywords }, { searchAndExtractInfluencers }] =
     await Promise.all([
       import("../lib/tools/influencer-functions/generate-search-keywords.js"),
       import("../lib/tools/influencer-functions/search-and-extract-influencers.js"),
     ]);
 
-  const kwResult = await generateSearchKeywords({
-    productInfo,
-    campaignInfo,
-    influencerProfile,
-    userMessage: payload.userMessage || "",
-  });
+  const kwResult = taskKeyword
+    ? { success: true, search_queries: [taskKeyword] }
+    : await generateSearchKeywords({
+        productInfo,
+        campaignInfo,
+        influencerProfile,
+        userMessage: payload.userMessage || "",
+      });
 
   if (
     !kwResult?.success ||
@@ -140,43 +338,151 @@ async function processTask(task) {
     kwResult.search_queries.length === 0
   ) {
     await markTaskStatus(task.id, "failed", "生成搜索关键词失败或为空");
+    await upsertKeywordRunResult({
+      campaignId,
+      sessionId,
+      runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+      taskId: task.id,
+      keyword: taskKeyword || "(llm_empty)",
+      keywordType: taskKeywordType,
+      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
+    });
     return;
   }
 
-  const target = Math.max(requestedBatch, influencersPerDay * 2, 10);
-  const result = await searchAndExtractInfluencers(
-    {
-      keywords: { search_queries: kwResult.search_queries },
-      platforms: campaignInfo.platforms || ["TikTok"],
-      countries:
-        campaignInfo.countries ||
-        (campaignInfo.region ? [campaignInfo.region] : []),
-      productInfo,
-      campaignInfo,
-      influencerProfile,
+  const defaultTarget = Math.max(influencersPerDay * 2, 10);
+  const target = requestedBatch > 0 ? requestedBatch : defaultTarget;
+  let result = null;
+  try {
+    result = await searchAndExtractInfluencers(
+      {
+        keywords: { search_queries: kwResult.search_queries },
+        platforms: campaignInfo.platforms || ["TikTok"],
+        countries:
+          campaignInfo.countries ||
+          (campaignInfo.region ? [campaignInfo.region] : []),
+        productInfo,
+        campaignInfo,
+        influencerProfile,
+        campaignId,
+      },
+      {
+        maxResults: target,
+        maxEnrichCount: target,
+        enrichProfileData: true,
+        onStepUpdate,
+      }
+    );
+  } catch (err) {
+    const failMsg = `searchAndExtractInfluencers throw: ${String(err?.message || err).slice(0, 300)}`;
+    console.error(
+      "[worker-influencer-search] searchAndExtract throw trace:",
+      {
+        taskId: task.id,
+        campaignId,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+        errorMessage: err?.message || String(err),
+        errorStack: err?.stack || null,
+      }
+    );
+    await markTaskStatus(task.id, "failed", failMsg);
+    await upsertKeywordRunResult({
       campaignId,
-    },
-    {
-      maxResults: target,
-      maxEnrichCount: target,
-      enrichProfileData: true,
-      onStepUpdate: null,
-    }
-  );
+      sessionId,
+      runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+      taskId: task.id,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
+      keywordType: taskKeywordType,
+      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      metrics: {
+        failCount: 1,
+        failReason: String(err?.message || "search_throw").slice(0, 255),
+        elapsedMs: Date.now() - taskStartMs,
+      },
+    });
+    return;
+  }
 
   if (result?.success && Array.isArray(result.influencers)) {
     console.log(
       `[worker-influencer-search] 任务完成 id=${task.id}, campaign=${campaignId}, analyzed=${result.influencers.length}`
     );
     await markTaskStatus(task.id, "succeeded", null);
+
+    const influencers = Array.isArray(result.influencers) ? result.influencers : [];
+    const recommendedCount = influencers.filter((x) => x && x.isRecommended).length;
+    const enrichedCount = influencers.filter(
+      (x) => x && (x.profileDataReady || x.analysisReady || (typeof x.analysis === "string" && x.analysis.trim()))
+    ).length;
+    const searchCount = Number(result?.stats?.videoCount || result?.videos?.length || 0);
+    await upsertKeywordRunResult({
+      campaignId,
+      sessionId,
+      runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+      taskId: task.id,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
+      keywordType: taskKeywordType,
+      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      metrics: {
+        searchCount,
+        enrichSuccessCount: enrichedCount,
+        analyzeRecommendedCount: recommendedCount,
+        insertCandidateCount: enrichedCount,
+        insertExecutionCount: 0,
+        duplicateCount: 0,
+        failCount: 0,
+        elapsedMs: Date.now() - taskStartMs,
+      },
+    });
     return;
   }
 
-  await markTaskStatus(
-    task.id,
-    "failed",
-    `搜索/分析未得到有效红人: ${JSON.stringify(result || {}).slice(0, 400)}`
+  const resultErrorRaw =
+    result?.error && typeof result.error === "object"
+      ? JSON.stringify(result.error)
+      : String(result?.error || "");
+  const failMsg = `搜索/分析未得到有效红人: err=${resultErrorRaw.slice(0, 180)} raw=${JSON.stringify(
+    result || {}
+  ).slice(0, 220)}`;
+  console.error(
+    "[worker-influencer-search] searchAndExtract result not successful:",
+    JSON.stringify(
+      {
+        taskId: task.id,
+        campaignId,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+        result,
+      },
+      null,
+      2
+    )
   );
+  await markTaskStatus(task.id, "failed", failMsg);
+  await upsertKeywordRunResult({
+    campaignId,
+    sessionId,
+    runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+    taskId: task.id,
+    keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
+    keywordType: taskKeywordType,
+    workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+    workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+    metrics: {
+      searchCount: Number(result?.videos?.length || 0),
+      enrichSuccessCount: Number(result?.influencers?.length || 0),
+      analyzeRecommendedCount: Number((result?.influencers || []).filter((x) => x && x.isRecommended).length || 0),
+      insertCandidateCount: Number(result?.influencers?.length || 0),
+      insertExecutionCount: 0,
+      duplicateCount: 0,
+      failCount: 1,
+      failReason: String(result?.error || "search_failed").slice(0, 255),
+      elapsedMs: Date.now() - taskStartMs,
+    },
+  });
 }
 
 async function sleep(ms) {
@@ -202,6 +508,18 @@ async function main() {
       if (task) {
         processed = true;
         await processTask(task);
+
+        // 滚动补位：任一任务完成后，立即触发一次调度心跳（不等 15 分钟）
+        if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
+          try {
+            await runExecutionHeartbeatTick(new Date());
+          } catch (hbErr) {
+            console.warn(
+              "[worker-influencer-search] 任务后触发 execution heartbeat 失败：",
+              hbErr?.message || hbErr
+            );
+          }
+        }
       }
     } catch (err) {
       console.error("[worker-influencer-search] 处理任务时出错：", err?.message || err);

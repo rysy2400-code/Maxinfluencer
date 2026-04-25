@@ -97,6 +97,7 @@ export default function HomePage() {
   const binComputerViewRef = useRef("overview");
   const workLiveAutoSwitchedRef = useRef(false); // 本轮是否已自动切到工作实况
   const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
+  const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
@@ -121,6 +122,149 @@ export default function HomePage() {
       workLiveUserPinnedOverviewRef.current = false;
     }
   }, [isExecutionPhaseGlobal]);
+
+  // 已发布 campaign：订阅工作实况 SSE（与红人画像阶段 /api/chat 相同：thinking + screenshot）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (!isExecutionPhaseGlobal || !currentSessionId) {
+      if (workLiveEventSourceRef.current) {
+        workLiveEventSourceRef.current.close();
+        workLiveEventSourceRef.current = null;
+      }
+      return;
+    }
+
+    const url = `/api/sessions/${currentSessionId}/work-live`;
+    const es = new EventSource(url);
+    workLiveEventSourceRef.current = es;
+
+    let pendingThinking = null;
+    let flushTimer = null;
+
+    const applyThinking = (d) => {
+      setMessages((prev) => {
+        const updated = [...prev];
+        let idx = updated.length - 1;
+        if (idx < 0 || updated[idx].role !== "assistant") {
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].role === "assistant") {
+              idx = i;
+              break;
+            }
+          }
+        }
+        if (idx < 0 || updated[idx].role !== "assistant") return prev;
+        const currentThinking = updated[idx].thinking || {};
+        const newThinking = {
+          ...currentThinking,
+          ...d,
+          browserSteps:
+            d.browserSteps !== undefined
+              ? d.browserSteps
+              : currentThinking.browserSteps || [],
+          screenshots:
+            d.screenshots !== undefined
+              ? d.screenshots
+              : currentThinking.screenshots || [],
+          influencerAnalyses:
+            d.influencerAnalyses !== undefined
+              ? d.influencerAnalyses
+              : currentThinking.influencerAnalyses || [],
+        };
+        updated[idx] = { ...updated[idx], thinking: newThinking };
+        return updated;
+      });
+
+      if (binComputerViewRef.current !== "live") {
+        setWorkLiveUnreadCount((c) => Math.min(c + 1, 99));
+      }
+      if (
+        !workLiveAutoSwitchedRef.current &&
+        !workLiveUserPinnedOverviewRef.current
+      ) {
+        setBinComputerView("live");
+        setWorkLiveUnreadCount(0);
+        workLiveAutoSwitchedRef.current = true;
+      }
+    };
+
+    const scheduleThinkingFlush = () => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        if (pendingThinking) {
+          const current = pendingThinking;
+          pendingThinking = null;
+          applyThinking(current);
+        }
+      }, 1200);
+    };
+
+    es.addEventListener("message", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "ready" || data.type === "heartbeat") return;
+
+        if (data.type === "thinking") {
+          pendingThinking = data.data || {};
+          scheduleThinkingFlush();
+        } else if (data.type === "screenshot" && data.data) {
+          const newShot = data.data;
+          setMessages((prev) => {
+            const updated = [...prev];
+            let idx = updated.length - 1;
+            if (idx < 0 || updated[idx].role !== "assistant") {
+              for (let i = updated.length - 1; i >= 0; i--) {
+                if (updated[i].role === "assistant") {
+                  idx = i;
+                  break;
+                }
+              }
+            }
+            if (idx < 0 || updated[idx].role !== "assistant") return prev;
+            const currentThinking = updated[idx].thinking || {};
+            updated[idx] = {
+              ...updated[idx],
+              thinking: {
+                ...currentThinking,
+                screenshots: [newShot],
+              },
+            };
+            return updated;
+          });
+        }
+      } catch {
+        // ignore malformed SSE payloads
+      }
+    });
+
+    es.onerror = () => {
+      try {
+        es.close();
+      } catch {
+        // ignore
+      }
+      if (workLiveEventSourceRef.current === es) {
+        workLiveEventSourceRef.current = null;
+      }
+    };
+
+    return () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      try {
+        es.close();
+      } catch {
+        // ignore
+      }
+      if (workLiveEventSourceRef.current === es) {
+        workLiveEventSourceRef.current = null;
+      }
+    };
+  }, [isExecutionPhaseGlobal, currentSessionId]);
 
   const handleBinComputerViewChange = (nextView, manual = true) => {
     setBinComputerView(nextView);
@@ -2862,7 +3006,7 @@ export default function HomePage() {
                 const isExecutionPhase =
                   context?.workflowState === "published" || context?.published === true;
 
-                const { browserSteps, screenshots, influencerAnalyses } =
+                const { browserSteps, screenshots, influencerAnalyses, source } =
                   lastMessage.thinking || {};
 
                 // 执行阶段：上「工作笔记」（执行节奏 + 汇报方式）、下「执行进度」（单阶段 Tab）
@@ -3165,19 +3309,28 @@ export default function HomePage() {
                 // 红人匹配分析数据：优先使用 SSE 实时累积的 influencerAnalyses，否则从消息内容解析
                 let influencerMatches = [];
                 if (influencerAnalyses && influencerAnalyses.length > 0) {
-                  influencerMatches = influencerAnalyses.map((inf) => ({
-                    avatar: inf.avatar || '',
-                    profileUrl: inf.profileUrl || '',
-                    platform: inf.platform || 'TikTok',
-                    id: inf.id || '',
-                    name: inf.name || '',
-                    followers: inf.followers || '0',
-                    views: inf.views || '0',
-                    reason: inf.reason || '',
-                    isRecommended: inf.isRecommended,
-                    analysis: inf.analysis || '',
-                    score: inf.score
-                  }));
+                  influencerMatches = [...influencerAnalyses]
+                    .sort((a, b) => {
+                      const ao = Number(a?.order || 0);
+                      const bo = Number(b?.order || 0);
+                      if (ao && bo && ao !== bo) return ao - bo;
+                      const at = new Date(a?.timestamp || 0).getTime();
+                      const bt = new Date(b?.timestamp || 0).getTime();
+                      return at - bt;
+                    })
+                    .map((inf) => ({
+                      avatar: inf.avatar || '',
+                      profileUrl: inf.profileUrl || '',
+                      platform: inf.platform || 'TikTok',
+                      id: inf.id || '',
+                      name: inf.name || '',
+                      followers: inf.followers || '0',
+                      views: inf.views || '0',
+                      reason: inf.reason || '',
+                      isRecommended: inf.isRecommended,
+                      analysis: inf.analysis || '',
+                      score: inf.score
+                    }));
                 } else if (lastMessage.content) {
                   const influencerRegex = /\[INFLUENCER:([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^\]]*?)\]/g;
                   let match;
@@ -3204,13 +3357,7 @@ export default function HomePage() {
                 const currentStep = browserSteps?.find(s => s.status === 'running' && s.id === 'analyze_match') 
                   || browserSteps?.find(s => s.id === 'analyze_match');
                 const currentScreenshot = (screenshots && screenshots.length > 0)
-                  ? (currentStep 
-                      ? screenshots
-                          .filter(s => s.stepId === currentStep.id)
-                          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
-                      : screenshots
-                          .filter(s => s.stepId === 'analyze_match')
-                          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] || screenshots[screenshots.length - 1])
+                  ? screenshots.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
                   : null;
 
                 // 浏览器标题：显示“正在浏览 xx网址”，忽略“滚动/滑动”等技术细节
@@ -3239,6 +3386,11 @@ export default function HomePage() {
                       browserStatusLabel = buildBrowseText(stableShot.label) || "浏览器";
                     }
                   }
+                }
+
+                if (source?.workerHost || source?.workerId) {
+                  const workerLabel = source.workerHost || source.workerId;
+                  browserStatusLabel = `${browserStatusLabel}（${workerLabel}）`;
                 }
 
                 const liveTopTitle = isExecutionPhase ? "红人画像分析" : "红人画像确认";
