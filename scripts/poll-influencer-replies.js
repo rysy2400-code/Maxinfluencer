@@ -74,11 +74,10 @@ async function resolveInfluencerIdByEmail(email) {
       `
       SELECT influencer_id
       FROM tiktok_influencer
-      WHERE LOWER(JSON_UNQUOTE(JSON_EXTRACT(contacts, '$.email'))) = ?
-         OR JSON_SEARCH(LOWER(contacts), 'one', ?, NULL, '$.emails[*]') IS NOT NULL
+      WHERE LOWER(TRIM(influencer_email)) = ?
       LIMIT 1
     `,
-      [e, e]
+      [e]
     );
     return rows && rows[0] ? rows[0].influencer_id : null;
   } catch (err) {

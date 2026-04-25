@@ -31,6 +31,24 @@ async function ensureColumn(table, column, definitionSql) {
   console.log("  OK");
 }
 
+async function dropColumnIfExists(table, column) {
+  const rows = await queryTikTok(
+    `
+    SELECT COUNT(*) AS n
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND COLUMN_NAME = ?
+  `,
+    [table, column]
+  );
+  const exists = rows && rows[0] && Number(rows[0].n || 0) > 0;
+  if (!exists) return;
+  console.log(`执行: ALTER TABLE ${table} DROP COLUMN ${column} ...`);
+  await queryTikTok(`ALTER TABLE \`${table}\` DROP COLUMN \`${column}\``);
+  console.log("  OK");
+}
+
 async function ensureIndex(table, indexName, indexSql) {
   const rows = await queryTikTok(
     `
@@ -109,7 +127,7 @@ async function createTables() {
         avatar_url VARCHAR(500) NULL,
         followers_count BIGINT NULL,
         avg_views BIGINT NULL,
-        contacts JSON NULL,
+        influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）',
         source VARCHAR(32) NULL,
         source_ref VARCHAR(128) NULL,
         source_payload JSON NULL,
@@ -144,13 +162,13 @@ async function createTables() {
     );
     await ensureColumn(
       "tiktok_influencer",
-      "contacts",
-      "contacts JSON NULL COMMENT '联系方式（email/ins/ytb 等），建议后续加密/脱敏' AFTER region"
+      "influencer_email",
+      "influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）' AFTER avg_views"
     );
     await ensureColumn(
       "tiktok_influencer",
       "source",
-      "source VARCHAR(32) NULL COMMENT '数据来源，如 echotik' AFTER contacts"
+      "source VARCHAR(32) NULL COMMENT '数据来源，如 echotik' AFTER influencer_email"
     );
     await ensureColumn(
       "tiktok_influencer",
@@ -168,6 +186,28 @@ async function createTables() {
       "last_fetched_at TIMESTAMP NULL DEFAULT NULL COMMENT '上次从第三方刷新时间' AFTER source_payload"
     );
     await ensureIndex("tiktok_influencer", "uk_influencer_id", "UNIQUE KEY uk_influencer_id (influencer_id)");
+  }
+
+  try {
+    await queryTikTok(`
+      UPDATE tiktok_influencer
+      SET influencer_email = LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(contacts, '$.email'))))
+      WHERE (influencer_email IS NULL OR influencer_email = '')
+        AND contacts IS NOT NULL
+        AND JSON_EXTRACT(contacts, '$.email') IS NOT NULL
+    `);
+    console.log(
+      "[migrate] 已尝试从旧版 contacts JSON 的 $.email 回填 influencer_email（仅填补空值）。"
+    );
+  } catch (e) {
+    console.warn("[migrate] influencer_email 回填跳过:", e.message);
+  }
+
+  try {
+    await dropColumnIfExists("tiktok_influencer", "contacts");
+    console.log("[migrate] 已移除 tiktok_influencer.contacts 列（若曾存在）。");
+  } catch (e) {
+    console.warn("[migrate] DROP COLUMN contacts 跳过:", e.message);
   }
 
   console.log("\n✅ TikTok Influencer 相关表/字段已就绪。");

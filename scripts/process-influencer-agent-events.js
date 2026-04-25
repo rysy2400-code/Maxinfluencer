@@ -17,10 +17,8 @@ import {
   sendOutreach,
   loadConversationHistoryForInfluencer,
 } from "../lib/agents/influencer-agent.js";
-import {
-  getOutboundAccountForInfluencer,
-  sendMail,
-} from "../lib/email/enterprise-mail-client.js";
+import { sendMail } from "../lib/email/enterprise-mail-client.js";
+import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
@@ -91,11 +89,6 @@ async function handleOutboundEmail(eventRow, payload) {
     payload.toEmail ||
     (payload.emailEvent && payload.emailEvent.fromEmail) ||
     null;
-  const subject =
-    payload.subject ||
-    (payload.emailEvent && payload.emailEvent.subject
-      ? `Re: ${payload.emailEvent.subject}`
-      : "(no subject)");
   const body = payload.body || payload.bodyText || "";
 
   if (!to) {
@@ -111,15 +104,27 @@ async function handleOutboundEmail(eventRow, payload) {
     }
   }
 
-  const fromAccount = await getOutboundAccountForInfluencer(influencer);
+  const ctx = await resolveInfluencerThreadMailContext({
+    influencerId,
+    influencer,
+    preferredInReplyToMessageId:
+      payload.inReplyTo || payload.emailEvent?.messageId || null,
+  });
+  const fromAccount = ctx.fromAccount;
+  const subject =
+    (payload.subject && String(payload.subject).trim()) ||
+    ctx.subjectForSend;
 
   const headers = {
     "X-Maxin-Influencer-Id": influencerId || "",
     "X-Maxin-Campaign-Id": campaignId || "",
     "X-Maxin-Source": "InfluencerAgent",
   };
-  if (payload.inReplyTo || payload.emailEvent?.messageId) {
-    headers["In-Reply-To"] = payload.inReplyTo || payload.emailEvent.messageId;
+  if (ctx.inReplyTo) {
+    headers["In-Reply-To"] = ctx.inReplyTo;
+  }
+  if (ctx.references) {
+    headers["References"] = ctx.references;
   }
 
   const result = await sendMail({
@@ -179,16 +184,11 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
     );
   }
 
-  const contacts = influencer.contacts || {};
   const toEmail =
-    (typeof contacts.email === "string" && contacts.email.includes("@")
-      ? contacts.email
-      : null) ||
-    (Array.isArray(contacts.emails)
-      ? contacts.emails.find(
-          (e) => typeof e === "string" && e.includes("@")
-        ) || null
-      : null);
+    typeof influencer.influencerEmail === "string" &&
+    influencer.influencerEmail.includes("@")
+      ? influencer.influencerEmail.trim()
+      : null;
 
   if (!toEmail) {
     throw new Error(
@@ -196,13 +196,18 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
     );
   }
 
-  const fromAccount = await getOutboundAccountForInfluencer(influencer);
-
-  // 对话历史（按 Bin 现有规则）
+  // 对话历史（红人全局，跨 campaign）
   const conversationHistory = await loadConversationHistoryForInfluencer(
     influencerId,
     20
   );
+
+  const ctx = await resolveInfluencerThreadMailContext({
+    influencerId,
+    influencer,
+    campaignId,
+  });
+  const fromAccount = ctx.fromAccount;
 
   const systemPrompt = `
 ${influencerAgentBasePrompt}
@@ -210,6 +215,7 @@ ${influencerAgentBasePrompt}
 【当前任务：向红人转达品牌的「特殊请求」，并询问红人是否接受】
 - 你现在要给指定红人写一封英文邮件，内容是转达品牌方/执行侧的一个「特殊请求」。
 - specialRequestId 表示这一轮特殊请求会话的唯一 ID，你可以在心里当作标签，用于保持这轮沟通的一致性，但不需要在邮件里直接写出 ID。
+- 本轮对应的 campaignId 为 ${campaignId || "null"}；若 conversationHistory 涉及多个 campaign，你必须在正文中自然区分，避免混淆。
 - brandMessage 是品牌/执行侧给你的自然语言说明，你需要用自己的话把它转述给红人。
 - 语气：专业、友好、简洁，像一对一沟通，而不是群发模板。
 - 要清楚地告诉红人：品牌方希望他/她确认是否愿意按这个请求执行（例如改时间、改脚本、多加一条内容并增加预算等），并邀请红人表达自己的想法或修改意见。
@@ -245,41 +251,19 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
   );
   const bodyText = String(raw || "").trim();
 
-  // 标题策略：与其它发给红人的邮件保持一致，强制使用首封邮件的标题，保证在同一线程
-  let threadSubject = null;
-  if (conversationHistory && conversationHistory.length) {
-    const asc = [...conversationHistory].sort((a, b) => {
-      const ta = new Date(a.sentAt || a.createdAt || 0).getTime();
-      const tb = new Date(b.sentAt || b.createdAt || 0).getTime();
-      return ta - tb;
-    });
-    const preferredBin = asc.find(
-      (m) =>
-        m.direction === "bin" &&
-        m.subject &&
-        /^Binfluencer x /i.test(m.subject.trim())
-    );
-    const firstBin = preferredBin
-      ? preferredBin
-      : asc.find(
-          (m) => m.direction === "bin" && m.subject && m.subject.trim()
-        );
-    threadSubject = firstBin?.subject || null;
-  }
-
-  const baseSubject = threadSubject || "(no subject)";
-  const subject =
-    baseSubject && /^Re:/i.test(baseSubject.trim())
-      ? baseSubject
-      : baseSubject
-      ? `Re: ${baseSubject}`
-      : "(no subject)";
+  const subject = ctx.subjectForSend;
 
   const headers = {
     "X-Maxin-Influencer-Id": influencerId || "",
     "X-Maxin-Campaign-Id": campaignId || "",
     "X-Maxin-Source": "InfluencerAgent",
   };
+  if (ctx.inReplyTo) {
+    headers["In-Reply-To"] = ctx.inReplyTo;
+  }
+  if (ctx.references) {
+    headers["References"] = ctx.references;
+  }
 
   const result = await sendMail({
     fromAccount,

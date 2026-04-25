@@ -10,12 +10,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
-import {
-  getOutboundAccountForInfluencer,
-  sendMail,
-} from "../lib/email/enterprise-mail-client.js";
+import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
+import { loadConversationHistoryForInfluencer } from "../lib/agents/influencer-agent.js";
+import { getInfluencerById } from "../lib/db/influencer-dao.js";
+import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -91,72 +91,6 @@ async function fetchAttachmentsForEvent(eventId) {
   return rows || [];
 }
 
-async function loadConversationHistoryForEvent(event, executions, limit = 20) {
-  const influencerId = event.influencer_id;
-  if (!influencerId) return [];
-
-  const campaignIds = Array.from(
-    new Set(
-      (executions || [])
-        .map((e) => e.campaignId)
-        .filter((id) => typeof id === "string" && id)
-    )
-  );
-
-  const n = Math.min(50, Math.max(1, Number(limit) || 20));
-  const params = [influencerId];
-  let campaignFilter = "";
-  if (campaignIds.length) {
-    const placeholders = campaignIds.map(() => "?").join(",");
-    campaignFilter = `AND (campaign_id IS NULL OR campaign_id IN (${placeholders}))`;
-    params.push(...campaignIds);
-  }
-  // LIMIT 使用内联数字，避免部分驱动对 LIMIT ? 的参数校验问题
-
-  const rows = await queryTikTok(
-    `
-    SELECT
-      influencer_id,
-      campaign_id,
-      direction,
-      channel,
-      from_email,
-      to_email,
-      subject,
-      body_text,
-      message_id,
-      source_type,
-      source_event_table,
-      source_event_id,
-      sent_at,
-      created_at
-    FROM tiktok_influencer_conversation_messages
-    WHERE influencer_id = ?
-      ${campaignFilter}
-    ORDER BY COALESCE(sent_at, created_at) DESC
-    LIMIT ${n}
-  `,
-    params
-  );
-
-  return (rows || []).map((r) => ({
-    influencerId: r.influencer_id,
-    campaignId: r.campaign_id,
-    direction: r.direction,
-    channel: r.channel,
-    fromEmail: r.from_email,
-    toEmail: r.to_email,
-    subject: r.subject,
-    bodyText: r.body_text,
-    messageId: r.message_id,
-    sourceType: r.source_type,
-    sourceEventTable: r.source_event_table,
-    sourceEventId: r.source_event_id,
-    sentAt: r.sent_at,
-    createdAt: r.created_at,
-  }));
-}
-
 async function extractAttachmentText(att) {
   const contentType = String(att.content_type || "").toLowerCase();
   const filename = att.filename || "";
@@ -224,12 +158,10 @@ async function createCampaignAgentEvent({
   );
 }
 
-async function handleOutboundEmails(decision, event, executions, threadInfo) {
+async function handleOutboundEmails(decision, event, executions) {
   if (!decision || !Array.isArray(decision.outboundEmails)) return;
 
-  // 当前版本：收到红人回邮后，直接在本 Worker 里发邮件给红人，
-  // 不再为 outboundEmails 写入 tiktok_influencer_agent_event。
-  const fromAccount = await getOutboundAccountForInfluencer(null);
+  // 收到红人回邮后在本 Worker 发信；线程与发件人与其它 Bin→红人路径一致（见 influencer-thread-mail）。
 
   for (const email of decision.outboundEmails) {
     if (!email || typeof email !== "object") continue;
@@ -246,17 +178,18 @@ async function handleOutboundEmails(decision, event, executions, threadInfo) {
 
     const to = email.to || event.from_email;
 
-    const threadSubject =
-      email.threadSubject ||
-      threadInfo?.threadSubject ||
-      event.subject ||
-      "Binfluencer Collaboration";
+    const influencerRow =
+      influencerId && (await getInfluencerById(influencerId).catch(() => null));
 
-    // 标题策略：统一使用 Re: <baseSubject>（如果 baseSubject 已经以 "Re:" 开头就直接用）
-    const baseSubject = threadSubject;
+    const ctx = await resolveInfluencerThreadMailContext({
+      influencerId,
+      influencer: influencerRow,
+      preferredInReplyToMessageId: email.inReplyTo || event.message_id || null,
+    });
+    const fromAccount = ctx.fromAccount;
+
     const subject =
-      email.subject ||
-      (baseSubject.startsWith("Re:") ? baseSubject : `Re: ${baseSubject}`);
+      (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
     const body = email.body || email.bodyText || "";
 
     const headers = {
@@ -264,19 +197,11 @@ async function handleOutboundEmails(decision, event, executions, threadInfo) {
       "X-Maxin-Campaign-Id": campaignId || "",
       "X-Maxin-Source": "InfluencerAgent",
     };
-    const rootMessageId = threadInfo?.rootMessageId || null;
-    const inReplyTo = email.inReplyTo || event.message_id || rootMessageId;
-    if (inReplyTo) {
-      headers["In-Reply-To"] = inReplyTo;
+    if (ctx.inReplyTo) {
+      headers["In-Reply-To"] = ctx.inReplyTo;
     }
-    // References：保留首封 + 当前要回复的 messageId
-    const refs = [];
-    if (rootMessageId) refs.push(`<${rootMessageId}>`);
-    if (event.message_id && event.message_id !== rootMessageId) {
-      refs.push(`<${event.message_id}>`);
-    }
-    if (refs.length) {
-      headers["References"] = refs.join(" ");
+    if (ctx.references) {
+      headers["References"] = ctx.references;
     }
 
     // 直接发信
@@ -445,37 +370,19 @@ async function processEvent(event) {
     event.influencer_id
   );
 
-  const conversationHistory = await loadConversationHistoryForEvent(
-    event,
-    executions,
+  const conversationHistory = await loadConversationHistoryForInfluencer(
+    event.influencer_id,
     20
   );
 
-  // 计算线程首封 subject 和根 messageId（按时间正序）
-  let threadSubject = null;
-  let rootMessageId = null;
-  if (conversationHistory && conversationHistory.length) {
-    const asc = [...conversationHistory].sort((a, b) => {
-      const ta = new Date(a.sentAt || a.createdAt || 0).getTime();
-      const tb = new Date(b.sentAt || b.createdAt || 0).getTime();
-      return ta - tb;
-    });
-    const firstWithId = asc.find((m) => m.messageId);
-    rootMessageId = firstWithId?.messageId || null;
-    // 优先选择以 "Binfluencer x" 开头的线程标题，其次任意一封 Bin 发出的邮件标题
-    const preferredBin = asc.find(
-      (m) =>
-        m.direction === "bin" &&
-        m.subject &&
-        /^Binfluencer x /i.test(m.subject.trim())
-    );
-    const firstBin = preferredBin
-      ? preferredBin
-      : asc.find(
-      (m) => m.direction === "bin" && m.subject && m.subject.trim()
-      );
-    threadSubject = firstBin?.subject || null;
-  }
+  const influencerRow =
+    event.influencer_id &&
+    (await getInfluencerById(event.influencer_id).catch(() => null));
+  const threadMailCtx = await resolveInfluencerThreadMailContext({
+    influencerId: event.influencer_id,
+    influencer: influencerRow,
+    preferredInReplyToMessageId: event.message_id || null,
+  });
 
   const payload = {
     influencerId: event.influencer_id || null,
@@ -492,8 +399,10 @@ async function processEvent(event) {
     activeExecutions: executions,
     conversationHistory,
     threadInfo: {
-      threadSubject,
-      rootMessageId,
+      canonicalThreadSubject: threadMailCtx.canonicalBase,
+      rootMessageId: threadMailCtx.rootMessageId,
+      parentMessageId: threadMailCtx.parentMessageId,
+      suggestedSubjectForReply: threadMailCtx.subjectForSend,
     },
   };
 
@@ -535,7 +444,7 @@ ${influencerAgentBasePrompt}
 - 你正收到一封红人发来的最新邮件（email），你还可以看到：
   - conversationHistory：你与该红人的历史对话记录；
   - activeExecutions：该红人在各个 campaign 下当前的执行状态；
-  - threadInfo：当前线程的基础标题（threadSubject）和根 Message-ID（rootMessageId）。
+  - threadInfo：规范化线程标题（canonicalThreadSubject）、根/父 Message-ID、以及建议的续信标题（suggestedSubjectForReply，通常为 Re: + 规范化标题）。
 - 你的目标是：在尊重红人体验的前提下，做出合理的业务决策，并通过结构化 JSON 告诉系统要做什么。
 
 输入 JSON 中包含：
@@ -543,7 +452,8 @@ ${influencerAgentBasePrompt}
 - activeExecutions：该红人当前所有相关执行记录；
 - conversationHistory：按时间倒序的最近若干条对话消息（Bin 与红人的往来，direction=bin/ influencer）。
   - 你需要基于 conversationHistory「续写对话」，而不是重新自我介绍或重复问过的问题。
-  - payload.threadInfo 中可能包含线程的基础标题（threadSubject），如果你不填 subject，我们会自动使用统一标题并加上 "Re:"。
+  - 若 conversationHistory 含多条不同 campaignId，你必须在 outboundEmails 的 body / updates 的 note 中区分对应 campaignId，避免混淆。
+  - 如果你不填 outboundEmails[].subject，系统会使用 threadInfo.suggestedSubjectForReply（规范化 Re: 标题），不要照抄 email.subject 作为线程标题。
 
 你在决策前，应优先阅读 conversationHistory，了解历史上下文（之前问过什么、红人答复过什么），再结合当前 email 与 activeExecutions 做出决定。
 
@@ -600,7 +510,6 @@ ${influencerAgentBasePrompt}
   }
 
 - updates 只是「建议」，会被写入 tiktok_advertiser_agent_event，由 CampaignExecutionAgent 决定是否真正更新数据库。
- - updates 只是「建议」，会被写入 tiktok_advertiser_agent_event，由 CampaignExecutionAgent 决定是否真正更新数据库。
 - newStage 必须是下列之一：
   - "pending_quote"
   - "quote_submitted"
@@ -654,10 +563,7 @@ ${influencerAgentBasePrompt}
 
   try {
     await applyDecision(decision, event, executions);
-    await handleOutboundEmails(decision, event, executions, {
-      threadSubject,
-      rootMessageId,
-    });
+    await handleOutboundEmails(decision, event, executions);
     await handleAgentEvents(decision, event, executions);
     await markEventStatus(event.id, "succeeded", null);
   } catch (err) {

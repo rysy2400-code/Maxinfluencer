@@ -23,7 +23,7 @@ async function main() {
     await queryTikTok(
       `
       ALTER TABLE tiktok_influencer
-      ADD COLUMN shipping_info JSON NULL COMMENT '红人常用寄样信息（地址/收件人/电话/备注等）' AFTER contacts
+      ADD COLUMN shipping_info JSON NULL COMMENT '红人常用寄样信息（地址/收件人/电话/备注等）' AFTER influencer_email
     `
     );
     console.log("[add-shipping-info] 已为 tiktok_influencer 增加 shipping_info 字段。");

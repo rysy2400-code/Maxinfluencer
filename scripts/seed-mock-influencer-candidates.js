@@ -29,7 +29,7 @@ const MOCKS = [
     region: "US",
     followerCount: 180000,
     avgViews: 120000,
-    contacts: { email: "alice@example.com" },
+    influencerEmail: "alice@example.com",
     snapshot: {
       platform: "tiktok",
       username: "alice_fashion",
@@ -48,7 +48,7 @@ const MOCKS = [
     region: "US",
     followerCount: 95000,
     avgViews: 60000,
-    contacts: { email: "bob@example.com" },
+    influencerEmail: "bob@example.com",
     snapshot: {
       platform: "tiktok",
       username: "bob_lifestyle",
@@ -67,7 +67,7 @@ const MOCKS = [
     region: "US",
     followerCount: 240000,
     avgViews: 90000,
-    contacts: { email: "carol@example.com" },
+    influencerEmail: "carol@example.com",
     snapshot: {
       platform: "tiktok",
       username: "carol_beauty",
@@ -88,7 +88,7 @@ async function upsertInfluencer(m) {
     INSERT INTO tiktok_influencer (
       influencer_id, platform, region, username, display_name, avatar_url,
       profile_url,
-      followers_count, avg_views, contacts, source, source_ref, source_payload, last_fetched_at
+      followers_count, avg_views, influencer_email, source, source_ref, source_payload, last_fetched_at
     ) VALUES (?, 'tiktok', ?, ?, ?, NULL, ?, ?, ?, ?, 'mock', ?, ?, NOW())
     ON DUPLICATE KEY UPDATE
       region=VALUES(region),
@@ -97,7 +97,7 @@ async function upsertInfluencer(m) {
       profile_url=VALUES(profile_url),
       followers_count=VALUES(followers_count),
       avg_views=VALUES(avg_views),
-      contacts=VALUES(contacts),
+      influencer_email=VALUES(influencer_email),
       source=VALUES(source),
       source_ref=VALUES(source_ref),
       source_payload=VALUES(source_payload),
@@ -112,7 +112,7 @@ async function upsertInfluencer(m) {
       profileUrl,
       m.followerCount || null,
       m.avgViews || null,
-      JSON.stringify(m.contacts || {}),
+      m.influencerEmail || null,
       m.influencerId,
       JSON.stringify(m.snapshot || {}),
     ]
@@ -140,8 +140,8 @@ async function upsertCandidate(m) {
       JSON.stringify(m.snapshot || {}),
       m.matchScore ?? null,
       m.shouldContact ? 1 : 0,
-      m.contacts?.email || null,
-      m.contacts?.email ? 1 : 0,
+      m.influencerEmail || null,
+      m.influencerEmail ? 1 : 0,
       m.analysisSummary || null,
     ]
   );

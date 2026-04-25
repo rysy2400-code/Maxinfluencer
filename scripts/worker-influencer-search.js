@@ -17,6 +17,17 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+function parseJsonOrObject(v) {
+  if (v == null) return null;
+  if (typeof v === "object") return v;
+  if (typeof v !== "string") return null;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return null;
+  }
+}
+
 async function getCampaignById(campaignId) {
   const rows = await queryTikTok(
     `
@@ -36,7 +47,23 @@ async function getCampaignById(campaignId) {
   if (!rows || !rows[0]) return null;
 
   const row = rows[0];
-  
+  return {
+    id: row.id,
+    sessionId: row.sessionId || row.session_id || null,
+    influencersPerDay: Number(row.influencersPerDay || 0) || 0,
+    productInfo: parseJsonOrObject(row.productInfo) || {},
+    campaignInfo: parseJsonOrObject(row.campaignInfo) || {},
+    influencerProfile: parseJsonOrObject(row.influencerProfile) || null,
+  };
+}
+
+function calcKeywordScore(metrics = {}) {
+  const enrichSuccessCount = Number(metrics.enrichSuccessCount || 0);
+  const analyzeRecommendedCount = Number(metrics.analyzeRecommendedCount || 0);
+  const failCount = Number(metrics.failCount || 0);
+  const matchRate = enrichSuccessCount > 0 ? analyzeRecommendedCount / enrichSuccessCount : 0;
+  return matchRate * 10 + enrichSuccessCount * 0.05 - failCount * 0.2;
+}
 
 async function upsertKeywordRunResult({
   campaignId,
@@ -50,12 +77,7 @@ async function upsertKeywordRunResult({
   metrics = {},
 }) {
   if (!campaignId || !runId || !keyword) return;
-  const score =
-    Number(metrics.insertExecutionCount || 0) * 0.5 +
-    Number(metrics.analyzeRecommendedCount || 0) * 0.2 +
-    Number(metrics.enrichSuccessCount || 0) * 0.2 -
-    Number(metrics.duplicateCount || 0) * 0.1 -
-    Number(metrics.failCount || 0) * 0.1;
+  const score = calcKeywordScore(metrics);
 
   await queryTikTok(
     `
@@ -72,13 +94,11 @@ async function upsertKeywordRunResult({
       enrich_success_count,
       analyze_recommended_count,
       insert_candidate_count,
-      insert_execution_count,
-      duplicate_count,
       fail_count,
       fail_reason,
       elapsed_ms,
       score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       assigned_worker = VALUES(assigned_worker),
       assigned_worker_host = VALUES(assigned_worker_host),
@@ -86,8 +106,6 @@ async function upsertKeywordRunResult({
       enrich_success_count = VALUES(enrich_success_count),
       analyze_recommended_count = VALUES(analyze_recommended_count),
       insert_candidate_count = VALUES(insert_candidate_count),
-      insert_execution_count = VALUES(insert_execution_count),
-      duplicate_count = VALUES(duplicate_count),
       fail_count = VALUES(fail_count),
       fail_reason = VALUES(fail_reason),
       elapsed_ms = VALUES(elapsed_ms),
@@ -107,35 +125,12 @@ async function upsertKeywordRunResult({
       Number(metrics.enrichSuccessCount || 0),
       Number(metrics.analyzeRecommendedCount || 0),
       Number(metrics.insertCandidateCount || 0),
-      Number(metrics.insertExecutionCount || 0),
-      Number(metrics.duplicateCount || 0),
       Number(metrics.failCount || 0),
       metrics.failReason || null,
       metrics.elapsedMs == null ? null : Number(metrics.elapsedMs),
       Number(score || 0),
     ]
   );
-}
-
-function parseJsonOrObject(v) {
-    if (v == null) return null;
-    if (typeof v === "object") return v;
-    if (typeof v !== "string") return null;
-    try {
-      return JSON.parse(v);
-    } catch {
-      return null;
-    }
-  }
-
-  return {
-    id: row.id,
-    sessionId: row.sessionId || row.session_id || null,
-    influencersPerDay: Number(row.influencersPerDay || 0) || 0,
-    productInfo: parseJsonOrObject(row.productInfo) || {},
-    campaignInfo: parseJsonOrObject(row.campaignInfo) || {},
-    influencerProfile: parseJsonOrObject(row.influencerProfile) || null,
-  };
 }
 
 async function claimOnePendingTask(workerId) {
@@ -184,99 +179,6 @@ async function markTaskStatus(id, status, errorMessage = null) {
     [status, errorMessage, id]
   );
 }
-
-
-
-async function upsertKeywordRunResult({
-  campaignId,
-  sessionId,
-  runId,
-  taskId,
-  keyword,
-  keywordType = "new",
-  workerId,
-  workerHost,
-  metrics = {},
-}) {
-  if (!campaignId || !runId || !keyword) return;
-  const score =
-    Number(metrics.insertExecutionCount || 0) * 0.5 +
-    Number(metrics.analyzeRecommendedCount || 0) * 0.2 +
-    Number(metrics.enrichSuccessCount || 0) * 0.2 -
-    Number(metrics.duplicateCount || 0) * 0.1 -
-    Number(metrics.failCount || 0) * 0.1;
-
-  await queryTikTok(
-    `
-    INSERT INTO tiktok_keyword_run_result (
-      campaign_id,
-      session_id,
-      run_id,
-      task_id,
-      keyword,
-      keyword_type,
-      assigned_worker,
-      assigned_worker_host,
-      search_count,
-      enrich_success_count,
-      analyze_recommended_count,
-      insert_candidate_count,
-      insert_execution_count,
-      duplicate_count,
-      fail_count,
-      fail_reason,
-      elapsed_ms,
-      score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      assigned_worker = VALUES(assigned_worker),
-      assigned_worker_host = VALUES(assigned_worker_host),
-      search_count = VALUES(search_count),
-      enrich_success_count = VALUES(enrich_success_count),
-      analyze_recommended_count = VALUES(analyze_recommended_count),
-      insert_candidate_count = VALUES(insert_candidate_count),
-      insert_execution_count = VALUES(insert_execution_count),
-      duplicate_count = VALUES(duplicate_count),
-      fail_count = VALUES(fail_count),
-      fail_reason = VALUES(fail_reason),
-      elapsed_ms = VALUES(elapsed_ms),
-      score = VALUES(score),
-      updated_at = NOW()
-  `,
-    [
-      campaignId,
-      sessionId || null,
-      runId,
-      taskId || null,
-      keyword,
-      keywordType || "new",
-      workerId || null,
-      workerHost || null,
-      Number(metrics.searchCount || 0),
-      Number(metrics.enrichSuccessCount || 0),
-      Number(metrics.analyzeRecommendedCount || 0),
-      Number(metrics.insertCandidateCount || 0),
-      Number(metrics.insertExecutionCount || 0),
-      Number(metrics.duplicateCount || 0),
-      Number(metrics.failCount || 0),
-      metrics.failReason || null,
-      metrics.elapsedMs == null ? null : Number(metrics.elapsedMs),
-      Number(score || 0),
-    ]
-  );
-}
-
-function parseJsonOrObject(v) {
-  if (v == null) return null;
-  if (typeof v === "object") return v;
-  if (typeof v !== "string") return null;
-  try {
-    return JSON.parse(v);
-  } catch {
-    return null;
-  }
-}
-
 async function processTask(task) {
   const campaignId = task.campaign_id;
   const payload = parseJsonOrObject(task.payload) || {};
@@ -432,8 +334,6 @@ async function processTask(task) {
         enrichSuccessCount: enrichedCount,
         analyzeRecommendedCount: recommendedCount,
         insertCandidateCount: enrichedCount,
-        insertExecutionCount: 0,
-        duplicateCount: 0,
         failCount: 0,
         elapsedMs: Date.now() - taskStartMs,
       },
@@ -476,8 +376,6 @@ async function processTask(task) {
       enrichSuccessCount: Number(result?.influencers?.length || 0),
       analyzeRecommendedCount: Number((result?.influencers || []).filter((x) => x && x.isRecommended).length || 0),
       insertCandidateCount: Number(result?.influencers?.length || 0),
-      insertExecutionCount: 0,
-      duplicateCount: 0,
       failCount: 1,
       failReason: String(result?.error || "search_failed").slice(0, 255),
       elapsedMs: Date.now() - taskStartMs,

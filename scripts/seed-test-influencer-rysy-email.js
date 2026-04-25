@@ -33,9 +33,7 @@ async function ensureTestInfluencer() {
     profileUrl: `https://www.tiktok.com/@${TEST_INFLUENCER_USERNAME}`,
     followerCount: 0,
     avgViews: 0,
-    contacts: {
-      email: TEST_INFLUENCER_EMAIL,
-    },
+    influencerEmail: TEST_INFLUENCER_EMAIL,
     source: "manual_seed",
     sourceRef: null,
     sourcePayload: null,
@@ -45,7 +43,7 @@ async function ensureTestInfluencer() {
   const inf = await getInfluencerById(TEST_INFLUENCER_ID);
   console.log("[SeedTest] 已确保测试红人存在：", {
     influencerId: inf?.influencerId,
-    contacts: inf?.contacts,
+    influencerEmail: inf?.influencerEmail,
   });
 }
 
@@ -66,7 +64,7 @@ async function ensureExecutionRow(campaignId) {
         username: inf.username,
         displayName: inf.displayName,
         profileUrl: inf.profileUrl,
-        contacts: inf.contacts || {},
+        influencerEmail: inf.influencerEmail || null,
       }
     : null;
 

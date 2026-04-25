@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer (
   follower_count INT NULL,
   avg_views INT NULL COMMENT '近似平均播放量（如有）',
 
-  contacts JSON COMMENT '联系方式（如 email/ins/ytb 等），建议后续加密/脱敏',
+  influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）',
   source VARCHAR(32) NULL COMMENT '数据来源，如 echotik',
   source_ref VARCHAR(128) NULL COMMENT '来源侧 ID，如 creator_oecuid',
   source_payload JSON COMMENT '来源原始快照（可选，用于调试/补字段）',

@@ -3,6 +3,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { sendOutreach } from "../lib/agents/influencer-agent.js";
+import {
+  normalizeMessageIdForHeader,
+} from "../lib/email/influencer-thread-mail.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -19,7 +22,7 @@ async function resolveCandidatePair(targetEmail) {
       e.influencer_id
     FROM tiktok_campaign_execution e
     JOIN tiktok_influencer i ON i.influencer_id = e.influencer_id
-    WHERE i.contacts LIKE ?
+    WHERE i.influencer_email = ?
       AND NOT EXISTS (
         SELECT 1
         FROM tiktok_influencer_conversation_messages m
@@ -32,7 +35,7 @@ async function resolveCandidatePair(targetEmail) {
     ORDER BY e.created_at DESC
     LIMIT 1
   `,
-    [`%${targetEmail}%`]
+    [String(targetEmail).trim().toLowerCase()]
   );
   if (exact?.length) return exact[0];
 
@@ -43,11 +46,11 @@ async function resolveCandidatePair(targetEmail) {
       e.influencer_id
     FROM tiktok_campaign_execution e
     JOIN tiktok_influencer i ON i.influencer_id = e.influencer_id
-    WHERE i.contacts LIKE ?
+    WHERE i.influencer_email = ?
     ORDER BY e.created_at DESC
     LIMIT 1
   `,
-    [`%${targetEmail}%`]
+    [String(targetEmail).trim().toLowerCase()]
   );
   return fallback?.[0] || null;
 }
@@ -109,16 +112,25 @@ async function main() {
 
   const firstRow = inserted[0];
   const secondRow = inserted[1];
+  const n1 = normalizeMessageIdForHeader(firstRow.message_id);
+  const nReply = normalizeMessageIdForHeader(second?.headers?.["In-Reply-To"]);
+  const nRef = String(second?.headers?.References || "").trim();
   const checks = {
     fromEmailFixed: firstRow.from_email === secondRow.from_email,
-    subjectFixed: firstRow.subject === secondRow.subject,
+    firstSubjectCanonical:
+      /^Binfluencer x .+ \| Social Media Collaboration$/i.test(
+        String(firstRow.subject || "").replace(/^\s*Re:\s*/i, "")
+      ),
+    secondSubjectIsRe:
+      /^Re:\s*Binfluencer x /i.test(String(secondRow.subject || "")),
     secondInReplyTo: second?.headers?.["In-Reply-To"] || null,
     secondReferences: second?.headers?.References || null,
     expectedRootMessageId: firstRow.message_id || null,
-    inReplyToMatchesRoot:
-      (second?.headers?.["In-Reply-To"] || null) === (firstRow.message_id || null),
-    referencesMatchRoot:
-      (second?.headers?.References || null) === (firstRow.message_id || null),
+    inReplyToMatchesLatestParent: nReply && n1 && nReply === n1,
+    referencesIncludesParent:
+      Boolean(nRef) &&
+      Boolean(n1) &&
+      (nRef.includes(n1.replace(/^<|>$/g, "")) || nRef.includes(n1)),
   };
 
   console.log("[TEST] first result:", first);
