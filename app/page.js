@@ -91,6 +91,7 @@ export default function HomePage() {
   const [executionError, setExecutionError] = useState(null);
   const [executionConfig, setExecutionConfig] = useState(null); // 执行阶段右侧「工作笔记」用到的执行节奏 & 汇报配置
   const [executionConfigError, setExecutionConfigError] = useState(null);
+  const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("pendingPrice"); // 执行进度当前选中的阶段
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
@@ -118,6 +119,7 @@ export default function HomePage() {
     if (!isExecutionPhaseGlobal) {
       setBinComputerView("overview");
       setWorkLiveUnreadCount(0);
+      setKeywordWorkNotes([]);
       workLiveAutoSwitchedRef.current = false;
       workLiveUserPinnedOverviewRef.current = false;
     }
@@ -132,6 +134,7 @@ export default function HomePage() {
         workLiveEventSourceRef.current.close();
         workLiveEventSourceRef.current = null;
       }
+      setKeywordWorkNotes([]);
       return;
     }
 
@@ -171,6 +174,10 @@ export default function HomePage() {
             d.influencerAnalyses !== undefined
               ? d.influencerAnalyses
               : currentThinking.influencerAnalyses || [],
+          workNotes:
+            d.workNotes !== undefined
+              ? d.workNotes
+              : currentThinking.workNotes || [],
         };
         updated[idx] = { ...updated[idx], thinking: newThinking };
         return updated;
@@ -209,6 +216,59 @@ export default function HomePage() {
         if (data.type === "thinking") {
           pendingThinking = data.data || {};
           scheduleThinkingFlush();
+        } else if (data.type === "work_note_keyword_summary" && data.data) {
+          const note = data.data;
+          setKeywordWorkNotes((prev) => {
+            const merged = [...(Array.isArray(prev) ? prev : [])];
+            const key = String(note.taskId || note.keyword || "");
+            const idx = merged.findIndex(
+              (x) => String(x?.taskId || x?.keyword || "") === key
+            );
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...note };
+            } else {
+              merged.push(note);
+            }
+            merged.sort(
+              (a, b) =>
+                new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
+            );
+            return merged.slice(-60);
+          });
+          setMessages((prev) => {
+            const updated = [...prev];
+            let idx = updated.length - 1;
+            if (idx < 0 || updated[idx].role !== "assistant") {
+              for (let i = updated.length - 1; i >= 0; i--) {
+                if (updated[i].role === "assistant") {
+                  idx = i;
+                  break;
+                }
+              }
+            }
+            if (idx < 0 || updated[idx].role !== "assistant") return prev;
+            const currentThinking = updated[idx].thinking || {};
+            const existing = Array.isArray(currentThinking.workNotes) ? currentThinking.workNotes : [];
+            const merged = [...existing];
+            const key = String(note.taskId || note.keyword || "");
+            const foundIdx = merged.findIndex(
+              (x) => String(x?.taskId || x?.keyword || "") === key
+            );
+            if (foundIdx >= 0) {
+              merged[foundIdx] = { ...merged[foundIdx], ...note };
+            } else {
+              merged.push(note);
+            }
+            merged.sort((a, b) => new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime());
+            updated[idx] = {
+              ...updated[idx],
+              thinking: {
+                ...currentThinking,
+                workNotes: merged.slice(-60),
+              },
+            };
+            return updated;
+          });
         } else if (data.type === "screenshot" && data.data) {
           const newShot = data.data;
           setMessages((prev) => {
@@ -649,6 +709,62 @@ export default function HomePage() {
     };
 
     loadReportConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context?.campaignId, context?.workflowState, context?.published]);
+
+  // 在「执行阶段」预加载工作笔记历史（先历史后实时）
+  useEffect(() => {
+    const campaignId = context?.campaignId;
+    const isExecutionPhase =
+      context?.workflowState === "published" || context?.published === true;
+
+    if (!campaignId || !isExecutionPhase) {
+      setKeywordWorkNotes([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadWorkNotes = async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${campaignId}/work-notes?limit=50`);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (cancelled || !data?.success) return;
+        const incoming = Array.isArray(data.notes) ? data.notes : [];
+        setKeywordWorkNotes((prev) => {
+          const merged = [...(Array.isArray(prev) ? prev : [])];
+          for (const note of incoming) {
+            const key = String(note?.taskId || note?.keyword || "");
+            const idx = merged.findIndex(
+              (x) => String(x?.taskId || x?.keyword || "") === key
+            );
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...note };
+            } else {
+              merged.push(note);
+            }
+          }
+          merged.sort(
+            (a, b) =>
+              new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
+          );
+          return merged.slice(-60);
+        });
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[HomePage] 获取工作笔记历史失败:", e);
+        }
+      }
+    };
+
+    loadWorkNotes();
 
     return () => {
       cancelled = true;
@@ -3027,10 +3143,18 @@ export default function HomePage() {
                   const influencersPerDay =
                     config?.influencersPerDay ?? executionStatus?.influencersPerDay ?? null;
                   const report = config?.reportConfig || null;
+                  const keywordStrategy = config?.keywordStrategy || null;
                   const intervalHours = report?.intervalHours ?? null;
                   const reportTime = report?.reportTime || null;
                   const contentPreference = report?.contentPreference || null;
                   const includeMetrics = report?.includeMetrics || [];
+                  const fallbackNotes = Array.isArray(lastMessage?.thinking?.workNotes)
+                    ? lastMessage.thinking.workNotes
+                    : [];
+                  const workNoteItems =
+                    Array.isArray(keywordWorkNotes) && keywordWorkNotes.length > 0
+                      ? keywordWorkNotes
+                      : fallbackNotes;
 
                   return (
                     <div
@@ -3116,7 +3240,44 @@ export default function HomePage() {
                                       : "当前日报中未配置额外指标";
                                   })()}
                                 </div>
+                                {keywordStrategy ? (
+                                  <div style={{ marginTop: 4 }}>
+                                    <span style={{ fontWeight: 600 }}>关键词策略：</span>
+                                    {keywordStrategy}
+                                  </div>
+                                ) : null}
                               </div>
+                              {workNoteItems.length > 0 && (
+                                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
+                                  {workNoteItems
+                                    .slice()
+                                    .sort((a, b) => new Date(a?.time || 0) - new Date(b?.time || 0))
+                                    .map((item, idx) => {
+                                      const timeLabel = item?.time
+                                        ? new Date(item.time).toLocaleTimeString("zh-CN", {
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                            second: "2-digit",
+                                          })
+                                        : "--:--:--";
+                                      const keyword = item?.keyword || "（未命名关键词）";
+                                      const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
+                                      const extracted = item?.extractedCount;
+                                      const matched = item?.matchedCount;
+                                      const resultText =
+                                        extracted == null || matched == null
+                                          ? ""
+                                          : `已提取 ${extracted} 位红人主页，${matched} 位符合红人画像要求。`;
+                                      const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
+                                      return (
+                                        <div key={`work-note-${item?.taskId || idx}`} style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
+                                          {`${timeLabel}，开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
+                                          {failedText ? ` ${failedText}` : ""}
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

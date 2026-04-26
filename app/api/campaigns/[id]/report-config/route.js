@@ -30,6 +30,7 @@ export async function GET(req, { params }) {
       success: true,
       campaignId,
       influencersPerDay: campaign.influencersPerDay ?? null,
+      keywordStrategy: campaign.keywordStrategy || null,
       reportConfig: reportConfig || null,
     });
   } catch (error) {

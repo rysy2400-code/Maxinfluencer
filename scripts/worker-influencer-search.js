@@ -186,6 +186,7 @@ async function processTask(task) {
   const taskKeyword = task.keyword || payload.keyword || null;
   const taskKeywordType = task.keyword_type || payload.keywordType || "new";
   const runId = task.run_id || payload.runId || null;
+  const keywordReason = String(payload.keywordReason || "").trim();
   const taskStartMs = Date.now();
 
   const campaign = await getCampaignById(campaignId);
@@ -196,6 +197,35 @@ async function processTask(task) {
 
   const { productInfo, campaignInfo, influencerProfile, influencersPerDay, sessionId } =
     campaign;
+
+  const publishKeywordNote = async ({ status, extractedCount = null, matchedCount = null, error = null }) => {
+    if (!sessionId) return;
+    try {
+      await publishWorkLiveFromWorker(sessionId, {
+        type: "work_note_keyword_summary",
+        data: {
+          taskId: task.id,
+          time: new Date().toISOString(),
+          keyword: taskKeyword || payload.keyword || "",
+          reasonText: keywordReason || "该关键词更贴近当前 campaign 的目标受众方向。",
+          extractedCount:
+            extractedCount == null || Number.isNaN(Number(extractedCount))
+              ? null
+              : Number(extractedCount),
+          matchedCount:
+            matchedCount == null || Number.isNaN(Number(matchedCount))
+              ? null
+              : Number(matchedCount),
+          status,
+          error: error ? String(error).slice(0, 180) : null,
+        },
+      });
+    } catch {
+      // ignore work-note publish errors
+    }
+  };
+
+  await publishKeywordNote({ status: "started" });
 
   let onStepUpdate = null;
   if (sessionId) {
@@ -251,6 +281,10 @@ async function processTask(task) {
       workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
       metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
     });
+    await publishKeywordNote({
+      status: "failed",
+      error: "生成搜索关键词失败或为空",
+    });
     return;
   }
 
@@ -305,6 +339,10 @@ async function processTask(task) {
         elapsedMs: Date.now() - taskStartMs,
       },
     });
+    await publishKeywordNote({
+      status: "failed",
+      error: String(err?.message || "search_throw"),
+    });
     return;
   }
 
@@ -337,6 +375,11 @@ async function processTask(task) {
         failCount: 0,
         elapsedMs: Date.now() - taskStartMs,
       },
+    });
+    await publishKeywordNote({
+      status: "finished",
+      extractedCount: enrichedCount,
+      matchedCount: recommendedCount,
     });
     return;
   }
@@ -380,6 +423,12 @@ async function processTask(task) {
       failReason: String(result?.error || "search_failed").slice(0, 255),
       elapsedMs: Date.now() - taskStartMs,
     },
+  });
+  await publishKeywordNote({
+    status: "failed",
+    extractedCount: Number(result?.influencers?.length || 0),
+    matchedCount: Number((result?.influencers || []).filter((x) => x && x.isRecommended).length || 0),
+    error: String(result?.error || "search_failed"),
   });
 }
 

@@ -14,6 +14,27 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+async function columnExists(table, column) {
+  const rows = await queryTikTok(
+    `
+    SELECT COUNT(*) AS n
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND COLUMN_NAME = ?
+  `,
+    [table, column]
+  );
+  return (rows?.[0]?.n || 0) > 0;
+}
+
+async function ensureColumn(table, column, ddl) {
+  const exists = await columnExists(table, column);
+  if (exists) return false;
+  await queryTikTok(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  return true;
+}
+
 async function createTables() {
   const schemaPath = path.join(__dirname, "../lib/db/tiktok-campaign-schema.sql");
   const sql = fs.readFileSync(schemaPath, "utf8");
@@ -40,7 +61,21 @@ async function createTables() {
     console.log("  OK");
   }
 
+  const changed = [];
+  if (
+    await ensureColumn(
+      "tiktok_campaign",
+      "keyword_strategy",
+      "keyword_strategy TEXT NULL COMMENT '用户关键词策略（简短文本，供关键词生成参考）'"
+    )
+  ) {
+    changed.push("tiktok_campaign.keyword_strategy");
+  }
+
   console.log("\n✅ TikTok Campaign 相关表创建成功。");
+  if (changed.length) {
+    console.log("✅ 已补齐字段:", changed.join(", "));
+  }
   try {
     const c = await queryTikTok("SHOW TABLES LIKE 'tiktok_campaign'");
     if (c.length > 0) console.log("  - tiktok_campaign");

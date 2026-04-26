@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign (
   campaign_info JSON COMMENT 'Campaign 信息快照（平台、地区、预算、发布时间等）',
   influencer_profile JSON COMMENT '红人画像快照',
   content_script JSON COMMENT '内容脚本快照',
+  keyword_strategy TEXT NULL COMMENT '用户关键词策略（简短文本，供关键词生成参考）',
 
   influencers_per_day INT NOT NULL DEFAULT 5 COMMENT '每天联系红人数量',
   status ENUM('draft','running','paused','completed','deleted') NOT NULL DEFAULT 'running' COMMENT 'Campaign 状态',
