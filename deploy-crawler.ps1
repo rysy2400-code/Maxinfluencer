@@ -140,7 +140,15 @@ $workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } el
 $workerPublicIp = if ($env:CRAWLER_WORKER_PUBLIC_IP) { "$($env:CRAWLER_WORKER_PUBLIC_IP)" } else { "" }
 if ([string]::IsNullOrWhiteSpace($workerPublicIp)) {
   try {
-    $tmp = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.ipify.org" -TimeoutSec 6)
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+    $tmp = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.ipify.org" -TimeoutSec 8)
+    $tmp = "$tmp".Trim()
+    if ($tmp -match '^\d{1,3}(\.\d{1,3}){3}$') { $workerPublicIp = $tmp }
+  } catch { $workerPublicIp = "" }
+}
+if ([string]::IsNullOrWhiteSpace($workerPublicIp)) {
+  try {
+    $tmp = (& curl.exe -fsSL "https://api.ipify.org" 2>$null)
     $tmp = "$tmp".Trim()
     if ($tmp -match '^\d{1,3}(\.\d{1,3}){3}$') { $workerPublicIp = $tmp }
   } catch { $workerPublicIp = "" }
@@ -157,6 +165,7 @@ if ([string]::IsNullOrWhiteSpace($workerLanIp)) {
 
 # 写入 DB 的 worker_ip 优先公网 IP（便于控制面按公网 IP 做白名单/SSH/诊断）；拿不到再回退内网 IP
 $workerIp = if (-not [string]::IsNullOrWhiteSpace($workerPublicIp)) { $workerPublicIp } else { $workerLanIp }
+Write-Host "[deploy-crawler] worker_ip(public=$workerPublicIp, lan=$workerLanIp) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
