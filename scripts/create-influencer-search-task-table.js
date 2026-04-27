@@ -91,12 +91,18 @@ async function main() {
   if (await ensureColumn(taskTable, "keyword", "keyword VARCHAR(255) NULL COMMENT '本任务主关键词（单任务单关键词）'")) changed.push("task.keyword");
   if (await ensureColumn(taskTable, "keyword_type", "keyword_type ENUM('new','variant','high_performer','fallback') NOT NULL DEFAULT 'new'")) changed.push("task.keyword_type");
   if (await ensureColumn(taskTable, "worker_host", "worker_host VARCHAR(128) NULL COMMENT '执行机器标识（可选）'")) changed.push("task.worker_host");
+  if (await ensureColumn(taskTable, "worker_ip", "worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("task.worker_ip");
 
   // indexes / unique key
   if (await ensureIndex(taskTable, "idx_campaign_run", "INDEX idx_campaign_run (campaign_id, run_id)")) changed.push("task.idx_campaign_run");
   if (await ensureIndex(taskTable, "idx_session_status", "INDEX idx_session_status (session_id, status)")) changed.push("task.idx_session_status");
   if (await ensureIndex(taskTable, "idx_keyword", "INDEX idx_keyword (campaign_id, keyword, created_at)")) changed.push("task.idx_keyword");
+  if (await ensureIndex(taskTable, "idx_worker_host_ip_status", "INDEX idx_worker_host_ip_status (worker_host, worker_ip, status)")) changed.push("task.idx_worker_host_ip_status");
   if (await ensureIndex(taskTable, "uk_campaign_run_keyword", "UNIQUE KEY uk_campaign_run_keyword (campaign_id, run_id, keyword)")) changed.push("task.uk_campaign_run_keyword");
+
+  const resultTable = "tiktok_keyword_run_result";
+  if (await ensureColumn(resultTable, "assigned_worker_ip", "assigned_worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("result.assigned_worker_ip");
+  if (await ensureIndex(resultTable, "idx_worker_ip_time", "INDEX idx_worker_ip_time (assigned_worker_host, assigned_worker_ip, created_at)")) changed.push("result.idx_worker_ip_time");
 
   if (changed.length) {
     console.log("✅ tiktok_influencer_search_task 已补齐字段/索引:", changed.join(", "));

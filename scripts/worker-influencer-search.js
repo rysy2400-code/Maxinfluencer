@@ -4,6 +4,7 @@
 
 import dotenv from "dotenv";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { createWorkLiveStepBridge } from "../lib/utils/work-live-step-bridge.js";
@@ -16,6 +17,26 @@ const projectRoot = path.resolve(__dirname, "..");
 // 加载环境变量（.env 再 .env.local）
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
+
+function detectWorkerIp() {
+  const preferred = String(process.env.SEARCH_WORKER_IP || "").trim();
+  if (preferred) return preferred;
+  const nets = os.networkInterfaces();
+  const candidates = [];
+  for (const entries of Object.values(nets || {})) {
+    for (const info of entries || []) {
+      if (!info || info.family !== "IPv4" || info.internal) continue;
+      candidates.push(info.address);
+    }
+  }
+  return candidates[0] || null;
+}
+
+const CURRENT_WORKER_ID =
+  process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`;
+const CURRENT_WORKER_HOST =
+  process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null;
+const CURRENT_WORKER_IP = detectWorkerIp();
 
 function parseJsonOrObject(v) {
   if (v == null) return null;
@@ -74,6 +95,7 @@ async function upsertKeywordRunResult({
   keywordType = "new",
   workerId,
   workerHost,
+  workerIp,
   metrics = {},
 }) {
   if (!campaignId || !runId || !keyword) return;
@@ -90,6 +112,7 @@ async function upsertKeywordRunResult({
       keyword_type,
       assigned_worker,
       assigned_worker_host,
+      assigned_worker_ip,
       search_count,
       enrich_success_count,
       analyze_recommended_count,
@@ -98,7 +121,7 @@ async function upsertKeywordRunResult({
       fail_reason,
       elapsed_ms,
       score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       assigned_worker = VALUES(assigned_worker),
       assigned_worker_host = VALUES(assigned_worker_host),
@@ -121,6 +144,7 @@ async function upsertKeywordRunResult({
       keywordType || "new",
       workerId || null,
       workerHost || null,
+      workerIp || null,
       Number(metrics.searchCount || 0),
       Number(metrics.enrichSuccessCount || 0),
       Number(metrics.analyzeRecommendedCount || 0),
@@ -134,6 +158,24 @@ async function upsertKeywordRunResult({
 }
 
 async function claimOnePendingTask(workerId) {
+  const workerHost = CURRENT_WORKER_HOST;
+  const workerIp = CURRENT_WORKER_IP;
+  const inflightRows = await queryTikTok(
+    `
+    SELECT id
+    FROM tiktok_influencer_search_task
+    WHERE status = 'processing'
+      AND (
+        (worker_id IS NOT NULL AND worker_id = ?)
+        OR (worker_host IS NOT NULL AND worker_host = ?)
+        OR (worker_ip IS NOT NULL AND worker_ip = ?)
+      )
+    LIMIT 1
+  `,
+    [workerId, workerHost, workerIp]
+  );
+  if (inflightRows && inflightRows[0]) return null;
+
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
@@ -153,13 +195,14 @@ async function claimOnePendingTask(workerId) {
     SET status = 'processing',
         worker_id = ?,
         worker_host = ?,
+        worker_ip = ?,
         started_at = NOW(),
         attempt_count = attempt_count + 1,
         updated_at = NOW()
     WHERE id = ?
       AND status = 'pending'
   `,
-    [workerId, process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null, task.id]
+    [workerId, workerHost, workerIp, task.id]
   );
 
   if (!updateResult || Number(updateResult.affectedRows || 0) === 0) return null;
@@ -277,8 +320,9 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || "(llm_empty)",
       keywordType: taskKeywordType,
-      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
-      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      workerId: CURRENT_WORKER_ID,
+      workerHost: CURRENT_WORKER_HOST,
+      workerIp: CURRENT_WORKER_IP,
       metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
     });
     await publishKeywordNote({
@@ -331,8 +375,9 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
-      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
-      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      workerId: CURRENT_WORKER_ID,
+      workerHost: CURRENT_WORKER_HOST,
+      workerIp: CURRENT_WORKER_IP,
       metrics: {
         failCount: 1,
         failReason: String(err?.message || "search_throw").slice(0, 255),
@@ -365,8 +410,9 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
-      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
-      workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+      workerId: CURRENT_WORKER_ID,
+      workerHost: CURRENT_WORKER_HOST,
+      workerIp: CURRENT_WORKER_IP,
       metrics: {
         searchCount,
         enrichSuccessCount: enrichedCount,
@@ -412,8 +458,9 @@ async function processTask(task) {
     taskId: task.id,
     keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
     keywordType: taskKeywordType,
-    workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
-    workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
+    workerId: CURRENT_WORKER_ID,
+    workerHost: CURRENT_WORKER_HOST,
+    workerIp: CURRENT_WORKER_IP,
     metrics: {
       searchCount: Number(result?.videos?.length || 0),
       enrichSuccessCount: Number(result?.influencers?.length || 0),
@@ -437,7 +484,7 @@ async function sleep(ms) {
 }
 
 async function main() {
-  const workerId = process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`;
+  const workerId = CURRENT_WORKER_ID;
   const idleSleepMs = Math.max(
     Number(process.env.SEARCH_WORKER_IDLE_SLEEP_MS || 3000) || 3000,
     500
@@ -445,7 +492,7 @@ async function main() {
   const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
 
   console.log(
-    `[worker-influencer-search] 启动 workerId=${workerId}, loop=${loopMode}, idleSleepMs=${idleSleepMs}`
+    `[worker-influencer-search] 启动 workerId=${workerId}, host=${CURRENT_WORKER_HOST || "unknown"}, ip=${CURRENT_WORKER_IP || "unknown"}, loop=${loopMode}, idleSleepMs=${idleSleepMs}`
   );
 
   do {

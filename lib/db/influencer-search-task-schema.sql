@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_search_task (
   attempt_count INT NOT NULL DEFAULT 0 COMMENT '已尝试次数',
   worker_id VARCHAR(128) NULL COMMENT '当前处理该任务的 worker 标识',
   worker_host VARCHAR(128) NULL COMMENT '执行机器标识（可选）',
+  worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）',
   error_message TEXT NULL COMMENT '失败原因',
   started_at TIMESTAMP NULL DEFAULT NULL,
   finished_at TIMESTAMP NULL DEFAULT NULL,
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_search_task (
   INDEX idx_campaign_run (campaign_id, run_id),
   INDEX idx_status_priority_created (status, priority, created_at),
   INDEX idx_worker_status (worker_id, status),
+  INDEX idx_worker_host_ip_status (worker_host, worker_ip, status),
   INDEX idx_session_status (session_id, status),
   INDEX idx_keyword (campaign_id, keyword, created_at),
   INDEX idx_created_at (created_at DESC)
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tiktok_keyword_run_result (
   keyword_type ENUM('new','variant','high_performer','fallback') NOT NULL DEFAULT 'new',
   assigned_worker VARCHAR(128) NULL,
   assigned_worker_host VARCHAR(128) NULL,
+  assigned_worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）',
   search_count INT NOT NULL DEFAULT 0,
   enrich_success_count INT NOT NULL DEFAULT 0,
   analyze_recommended_count INT NOT NULL DEFAULT 0,
@@ -54,5 +57,6 @@ CREATE TABLE IF NOT EXISTS tiktok_keyword_run_result (
   INDEX idx_campaign_run_keyword (campaign_id, run_id, keyword),
   INDEX idx_campaign_score (campaign_id, score, created_at),
   INDEX idx_task_id (task_id),
+  INDEX idx_worker_ip_time (assigned_worker_host, assigned_worker_ip, created_at),
   INDEX idx_created_at (created_at DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='关键词任务执行效果评分';

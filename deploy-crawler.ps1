@@ -102,6 +102,14 @@ $workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_
 $executionOnePerTask = if ($env:CRAWLER_EXECUTION_ONE_PER_TASK) { "$($env:CRAWLER_EXECUTION_ONE_PER_TASK)" } else { "" }
 $workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
 $workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
+$workerIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
+if ([string]::IsNullOrWhiteSpace($workerIp)) {
+  try {
+    $workerIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object { $_.IPAddress -and $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -ne "WellKnown" } |
+      Select-Object -ExpandProperty IPAddress -First 1)
+  } catch { $workerIp = "" }
+}
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
@@ -123,6 +131,7 @@ $launchUrl9223 = if ($env:CHROME_9223_URL) { "$($env:CHROME_9223_URL)" } else { 
 $guard9222 = Join-Path $scriptsDir "guard-chrome-9222.ps1"
 $guard9223 = Join-Path $scriptsDir "guard-chrome-9223.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
+$guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
@@ -163,6 +172,7 @@ $guardCrawlerContent = @"
 `$env:EXECUTION_ONE_PER_TASK = "$($executionOnePerTask.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 while (`$true) {
@@ -174,14 +184,34 @@ while (`$true) {
 }
 "@
 
+$healthScript = Join-Path $Root "scripts\worker-health-heartbeat.js"
+$guardHealthContent = @"
+`$ErrorActionPreference = "SilentlyContinue"
+`$node = "$($nodeExe.Replace("\", "\\"))"
+`$script = "$($healthScript.Replace("\", "\\"))"
+`$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
+`$env:WORKER_HEALTH_INTERVAL_MS = "30000"
+while (`$true) {
+  `$p = Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-health-heartbeat\.js" }
+  if (-not `$p) {
+    Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory "$($Root.Replace("\", "\\"))" -WindowStyle Hidden | Out-Null
+  }
+  Start-Sleep -Seconds 8
+}
+"@
+
 Set-Content -Path $guard9222 -Value $guard9222Content -Encoding ASCII
 Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
+Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
 Stop-StaleCdpBrowsers
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
 Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
+Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
 
 Start-Sleep -Seconds 4
 $ok9222 = Test-Cdp -Port 9222
