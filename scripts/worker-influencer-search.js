@@ -4,12 +4,12 @@
 
 import dotenv from "dotenv";
 import path from "path";
-import os from "os";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { createWorkLiveStepBridge } from "../lib/utils/work-live-step-bridge.js";
 import { publishWorkLiveFromWorker } from "../lib/realtime/work-live-worker-publisher.js";
 import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.js";
+import { detectPrimaryIpv4 } from "../lib/utils/net-ip.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -19,17 +19,7 @@ dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
 function detectWorkerIp() {
-  const preferred = String(process.env.SEARCH_WORKER_IP || "").trim();
-  if (preferred) return preferred;
-  const nets = os.networkInterfaces();
-  const candidates = [];
-  for (const entries of Object.values(nets || {})) {
-    for (const info of entries || []) {
-      if (!info || info.family !== "IPv4" || info.internal) continue;
-      candidates.push(info.address);
-    }
-  }
-  return candidates[0] || null;
+  return detectPrimaryIpv4({ preferEnvKey: "SEARCH_WORKER_IP" });
 }
 
 const CURRENT_WORKER_ID =

@@ -137,14 +137,26 @@ $workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_
 $executionOnePerTask = if ($env:CRAWLER_EXECUTION_ONE_PER_TASK) { "$($env:CRAWLER_EXECUTION_ONE_PER_TASK)" } else { "" }
 $workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
 $workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
-$workerIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
-if ([string]::IsNullOrWhiteSpace($workerIp)) {
+$workerPublicIp = if ($env:CRAWLER_WORKER_PUBLIC_IP) { "$($env:CRAWLER_WORKER_PUBLIC_IP)" } else { "" }
+if ([string]::IsNullOrWhiteSpace($workerPublicIp)) {
   try {
-    $workerIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    $tmp = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.ipify.org" -TimeoutSec 6)
+    $tmp = "$tmp".Trim()
+    if ($tmp -match '^\d{1,3}(\.\d{1,3}){3}$') { $workerPublicIp = $tmp }
+  } catch { $workerPublicIp = "" }
+}
+
+$workerLanIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
+if ([string]::IsNullOrWhiteSpace($workerLanIp)) {
+  try {
+    $workerLanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
       Where-Object { $_.IPAddress -and $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -ne "WellKnown" } |
       Select-Object -ExpandProperty IPAddress -First 1)
-  } catch { $workerIp = "" }
+  } catch { $workerLanIp = "" }
 }
+
+# 写入 DB 的 worker_ip 优先公网 IP（便于控制面按公网 IP 做白名单/SSH/诊断）；拿不到再回退内网 IP
+$workerIp = if (-not [string]::IsNullOrWhiteSpace($workerPublicIp)) { $workerPublicIp } else { $workerLanIp }
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
@@ -208,6 +220,7 @@ $guardCrawlerContent = @"
 `$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_LAN_IP = "$($workerLanIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 while (`$true) {
