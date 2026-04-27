@@ -1,5 +1,5 @@
 -- Crawler 机器健康状态（每台机器一行，持续 upsert）
-CREATE TABLE IF NOT EXISTS crawler_worker_health (
+CREATE TABLE IF NOT EXISTS tiktok_crawler_worker_health (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   worker_host VARCHAR(128) NOT NULL,
   worker_ip VARCHAR(64) NULL,
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS crawler_worker_health (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Crawler 机器健康状态';
 
 -- Crawler 自动修复动作日志（审计）
-CREATE TABLE IF NOT EXISTS crawler_repair_action_log (
+CREATE TABLE IF NOT EXISTS tiktok_crawler_repair_action_log (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   worker_host VARCHAR(128) NOT NULL,
   worker_ip VARCHAR(64) NULL,

@@ -1,6 +1,6 @@
 /**
  * Crawler 机器健康上报（部署在每台 crawler VM 上）。
- * 每 30-60s 上报一次到 crawler_worker_health：
+ * 每 30-60s 上报一次到 tiktok_crawler_worker_health：
  * - worker_host/worker_ip/worker_id
  * - worker_alive
  * - cdp_9222_ok/cdp_9223_ok + fail streak
@@ -45,7 +45,7 @@ async function upsertHealth({
 }) {
   await queryTikTok(
     `
-    INSERT INTO crawler_worker_health (
+    INSERT INTO tiktok_crawler_worker_health (
       worker_host,
       worker_ip,
       worker_id,

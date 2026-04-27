@@ -1,8 +1,8 @@
 /**
  * 运行在控制面（建议：152.32.216.107）：
- * - 每 1 分钟检查 crawler_worker_health + task + run_result
+ * - 每 1 分钟检查 tiktok_crawler_worker_health + task + run_result
  * - 命中规则直接 SSH 远程执行 deploy-crawler.ps1 重部署
- * - 写 crawler_repair_action_log 审计
+ * - 写 tiktok_crawler_repair_action_log 审计
  *
  * 触发规则（默认）：
  * A last_seen_at 超时 > 120s
@@ -51,7 +51,7 @@ async function logActionStart({ workerHost, workerIp, triggerReason, detail }) {
   const startedAt = new Date();
   const res = await queryTikTok(
     `
-    INSERT INTO crawler_repair_action_log (
+    INSERT INTO tiktok_crawler_repair_action_log (
       worker_host, worker_ip, action_type, trigger_reason, result, detail, started_at, operator
     ) VALUES (?, ?, 'redeploy_crawler', ?, 'started', ?, ?, 'auto')
   `,
@@ -70,7 +70,7 @@ async function logActionFinish({ id, ok, detail }) {
   if (!id) return;
   await queryTikTok(
     `
-    UPDATE crawler_repair_action_log
+    UPDATE tiktok_crawler_repair_action_log
     SET result = ?,
         detail = ?,
         finished_at = NOW(),
@@ -94,7 +94,7 @@ async function rateLimitOk({ workerIp }) {
   const perMachine = await queryTikTok(
     `
     SELECT COUNT(*) AS n
-    FROM crawler_repair_action_log
+    FROM tiktok_crawler_repair_action_log
     WHERE action_type='redeploy_crawler'
       AND worker_ip = ?
       AND started_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
@@ -106,7 +106,7 @@ async function rateLimitOk({ workerIp }) {
   const global = await queryTikTok(
     `
     SELECT COUNT(*) AS n
-    FROM crawler_repair_action_log
+    FROM tiktok_crawler_repair_action_log
     WHERE action_type='redeploy_crawler'
       AND started_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
   `,
@@ -164,7 +164,7 @@ async function waitForRecovery({ workerHost, workerIp }) {
     const rows = await queryTikTok(
       `
       SELECT worker_alive, cdp_9222_ok, cdp_9223_ok, last_seen_at
-      FROM crawler_worker_health
+      FROM tiktok_crawler_worker_health
       WHERE worker_host = ?
       LIMIT 1
     `,
@@ -194,7 +194,7 @@ async function computeTriggers({ workerHost, workerIp }) {
     SELECT worker_alive, cdp_9222_ok, cdp_9223_ok,
            cdp_9222_fail_streak, cdp_9223_fail_streak,
            last_seen_at
-    FROM crawler_worker_health
+    FROM tiktok_crawler_worker_health
     WHERE worker_host = ?
     LIMIT 1
   `,
@@ -265,7 +265,7 @@ async function main() {
   const rows = await queryTikTok(
     `
     SELECT worker_host AS workerHost, worker_ip AS workerIp
-    FROM crawler_worker_health
+    FROM tiktok_crawler_worker_health
   `,
     []
   );
@@ -284,7 +284,7 @@ async function main() {
     if (!rl.ok) {
       await queryTikTok(
         `
-        INSERT INTO crawler_repair_action_log (
+        INSERT INTO tiktok_crawler_repair_action_log (
           worker_host, worker_ip, action_type, trigger_reason, result, detail, started_at, operator
         ) VALUES (?, ?, 'redeploy_crawler', ?, 'skipped', ?, NOW(), 'auto')
       `,
