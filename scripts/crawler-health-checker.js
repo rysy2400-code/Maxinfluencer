@@ -20,6 +20,7 @@
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import os from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
@@ -119,12 +120,15 @@ async function rateLimitOk({ workerIp }) {
 async function sshRedeploy({ workerIp }) {
   const user = String(process.env.CRAWLER_SSH_USER || "Administrator").trim();
   const port = String(process.env.CRAWLER_SSH_PORT || "22").trim();
-  const keyPath = String(process.env.CRAWLER_SSH_KEY_PATH || "").trim();
+  const defaultKeyPath = os.platform() === "win32" ? "C:/ProgramData/ssh/maxin_crawler_key" : "";
+  const keyPath = String(process.env.CRAWLER_SSH_KEY_PATH || defaultKeyPath).trim();
   const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 180_000) || 180_000);
 
   if (!keyPath) {
-    throw new Error("CRAWLER_SSH_KEY_PATH is required");
+    throw new Error("CRAWLER_SSH_KEY_PATH is required (set in .env.local or environment)");
   }
+
+  const nullHosts = os.platform() === "win32" ? "NUL" : "/dev/null";
 
   const sshArgs = [
     "-i",
@@ -134,7 +138,7 @@ async function sshRedeploy({ workerIp }) {
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
-    "UserKnownHostsFile=/dev/null",
+    `UserKnownHostsFile=${nullHosts}`,
     "-o",
     "ConnectTimeout=10",
     `${user}@${workerIp}`,
