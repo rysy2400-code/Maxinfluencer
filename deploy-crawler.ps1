@@ -264,6 +264,17 @@ Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
+# 重要：worker/health 进程在启动后不会自动继承新的 env。
+# 这里强制结束旧进程，让 guard 以最新 worker_ip 重新拉起（幂等：杀完再起，不会叠多个）。
+try {
+  $oldHealth = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-health-heartbeat\.js" }
+  foreach ($p in $oldHealth) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+} catch {}
+try {
+  $oldWorker = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search\.js" }
+  foreach ($p in $oldWorker) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+} catch {}
+
 Stop-StaleCdpBrowsers
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
 Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
