@@ -2,9 +2,11 @@ $ErrorActionPreference = "Stop"
 
 # Search crawler deploy script (Windows VM).
 # Goals:
-# 1) Pull/update code and dependencies.
+# 1) git pull + npm ci（与仅 SSH 执行本脚本的 CI 一致，无需在 Action 里单独 pull）
 # 2) Start and guard two CDP browser instances (9222 / 9223).
-# 3) Start and guard search worker (worker-influencer-search.js).
+# 3) Start and guard search worker + worker-health-heartbeat（计划任务守护）。
+#
+# 若本脚本自身在 pull 后被更新，会子进程重新执行一遍（避免 PowerShell 仍跑内存里的旧脚本体）。
 
 $Root = "C:\maxinfluencer"
 if (-not (Test-Path $Root)) { throw "Deploy root not found: $Root" }
@@ -84,6 +86,39 @@ function Ensure-Schtask {
   try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null } catch {}
   Start-Process -FilePath "schtasks.exe" -ArgumentList "/Run /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null
 }
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+  throw "Git not found. Install Git for Windows and ensure git.exe is in PATH."
+}
+
+$deployCrawlerSelfPath = Join-Path $Root "deploy-crawler.ps1"
+$deployCrawlerSelfHashAtStart = $null
+if (Test-Path $deployCrawlerSelfPath) {
+  $deployCrawlerSelfHashAtStart = (Get-FileHash -Algorithm SHA256 -Path $deployCrawlerSelfPath).Hash
+}
+
+$nodeDirForPath = "C:\Program Files\nodejs"
+if (Test-Path $nodeDirForPath) {
+  $env:Path = "$nodeDirForPath;$env:Path"
+}
+
+Write-Host "[deploy-crawler] Fetch + pull main..."
+git fetch origin
+git checkout main
+git pull origin main
+
+$deployCrawlerSelfHashAfterPull = $null
+if (Test-Path $deployCrawlerSelfPath) {
+  $deployCrawlerSelfHashAfterPull = (Get-FileHash -Algorithm SHA256 -Path $deployCrawlerSelfPath).Hash
+}
+if ($deployCrawlerSelfHashAtStart -and $deployCrawlerSelfHashAfterPull -and ($deployCrawlerSelfHashAtStart -ne $deployCrawlerSelfHashAfterPull)) {
+  Write-Host "[deploy-crawler] deploy-crawler.ps1 changed after git pull; re-invoking..."
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployCrawlerSelfPath
+  exit $LASTEXITCODE
+}
+
+Write-Host "[deploy-crawler] npm ci..."
+npm ci
 
 $chromeExe = Get-ChromeExe
 if (-not $chromeExe) { throw "Chrome/Edge executable not found." }
