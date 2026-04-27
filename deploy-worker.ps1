@@ -16,6 +16,12 @@ if (-not (Test-Path $Root)) {
 }
 Set-Location $Root
 
+$deployWorkerSelfPath = Join-Path $Root "deploy-worker.ps1"
+$deployWorkerSelfHashAtStart = $null
+if (Test-Path $deployWorkerSelfPath) {
+  $deployWorkerSelfHashAtStart = (Get-FileHash -Algorithm SHA256 -Path $deployWorkerSelfPath).Hash
+}
+
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   throw "Git not found. Install Git for Windows and ensure git.exe is in PATH."
 }
@@ -25,10 +31,33 @@ if (Test-Path $nodeDir) {
   $env:Path = "$nodeDir;$env:Path"
 }
 
+# 非交互 SSH / LocalSystem 等会话常缺少 npm 全局目录，导致找不到 pm2.cmd
+$npmRoaming = Join-Path $env:APPDATA "npm"
+if (Test-Path $npmRoaming) {
+  $env:Path = "$npmRoaming;$env:Path"
+}
+try {
+  $npmGlobalBin = ([string](& npm bin -g 2>$null)).Trim()
+  if ($npmGlobalBin -and (Test-Path $npmGlobalBin)) {
+    $env:Path = "$npmGlobalBin;$env:Path"
+  }
+}
+catch {}
+
 Write-Host "[deploy-worker] Fetch + pull main..."
 git fetch origin
 git checkout main
 git pull origin main
+
+$deployWorkerSelfHashAfterPull = $null
+if (Test-Path $deployWorkerSelfPath) {
+  $deployWorkerSelfHashAfterPull = (Get-FileHash -Algorithm SHA256 -Path $deployWorkerSelfPath).Hash
+}
+if ($deployWorkerSelfHashAtStart -and $deployWorkerSelfHashAfterPull -and ($deployWorkerSelfHashAtStart -ne $deployWorkerSelfHashAfterPull)) {
+  Write-Host "[deploy-worker] deploy-worker.ps1 changed after git pull; re-invoking so new logic runs..."
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployWorkerSelfPath
+  exit $LASTEXITCODE
+}
 
 Write-Host "[deploy-worker] npm ci..."
 npm ci
