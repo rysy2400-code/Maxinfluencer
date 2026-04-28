@@ -87,6 +87,41 @@ function Ensure-Schtask {
   Start-Process -FilePath "schtasks.exe" -ArgumentList "/Run /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null
 }
 
+function Resolve-PublicIpFromIpip {
+  param([int]$MaxAttempts = 3)
+  $lastErr = $null
+  for ($i = 1; $i -le $MaxAttempts; $i++) {
+    try {
+      try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+      $resp = Invoke-WebRequest -UseBasicParsing -Uri "https://myip.ipip.net" -TimeoutSec 8
+      if (-not $resp -or [int]$resp.StatusCode -ne 200) {
+        throw "http_status=$($resp.StatusCode)"
+      }
+      $body = [string]$resp.Content
+      if ($body -match '(\d{1,3}(?:\.\d{1,3}){3})') {
+        return @{
+          Ok = $true
+          Ip = $matches[1]
+          Attempts = $i
+          Error = $null
+        }
+      }
+      throw "unparseable_response=$body"
+    } catch {
+      $lastErr = $_.Exception.Message
+      if ($i -lt $MaxAttempts) {
+        Start-Sleep -Seconds $i
+      }
+    }
+  }
+  return @{
+    Ok = $false
+    Ip = ""
+    Attempts = $MaxAttempts
+    Error = $lastErr
+  }
+}
+
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   throw "Git not found. Install Git for Windows and ensure git.exe is in PATH."
 }
@@ -137,23 +172,6 @@ $workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_
 $executionOnePerTask = if ($env:CRAWLER_EXECUTION_ONE_PER_TASK) { "$($env:CRAWLER_EXECUTION_ONE_PER_TASK)" } else { "" }
 $workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
 $workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
-$workerPublicIp = if ($env:CRAWLER_WORKER_PUBLIC_IP) { "$($env:CRAWLER_WORKER_PUBLIC_IP)" } else { "" }
-if ([string]::IsNullOrWhiteSpace($workerPublicIp)) {
-  try {
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-    $tmp = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.ipify.org" -TimeoutSec 8)
-    $tmp = "$tmp".Trim()
-    if ($tmp -match '^\d{1,3}(\.\d{1,3}){3}$') { $workerPublicIp = $tmp }
-  } catch { $workerPublicIp = "" }
-}
-if ([string]::IsNullOrWhiteSpace($workerPublicIp)) {
-  try {
-    $tmp = (& curl.exe -fsSL "https://api.ipify.org" 2>$null)
-    $tmp = "$tmp".Trim()
-    if ($tmp -match '^\d{1,3}(\.\d{1,3}){3}$') { $workerPublicIp = $tmp }
-  } catch { $workerPublicIp = "" }
-}
-
 $workerLanIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
 if ([string]::IsNullOrWhiteSpace($workerLanIp)) {
   try {
@@ -163,9 +181,27 @@ if ([string]::IsNullOrWhiteSpace($workerLanIp)) {
   } catch { $workerLanIp = "" }
 }
 
-# 写入 DB 的 worker_ip 优先公网 IP（便于控制面按公网 IP 做白名单/SSH/诊断）；拿不到再回退内网 IP
-$workerIp = if (-not [string]::IsNullOrWhiteSpace($workerPublicIp)) { $workerPublicIp } else { $workerLanIp }
-Write-Host "[deploy-crawler] worker_ip(public=$workerPublicIp, lan=$workerLanIp) -> using=$workerIp"
+$ipCacheFile = Join-Path $Root ".last_worker_ip"
+$ipRes = Resolve-PublicIpFromIpip -MaxAttempts 3
+$workerIp = ""
+$workerIpSource = ""
+if ($ipRes.Ok -and -not [string]::IsNullOrWhiteSpace($ipRes.Ip)) {
+  $workerIp = [string]$ipRes.Ip
+  $workerIpSource = "myip.ipip.net"
+  try { Set-Content -Path $ipCacheFile -Value $workerIp -Encoding ASCII } catch {}
+} elseif (Test-Path $ipCacheFile) {
+  try { $workerIp = (Get-Content -Path $ipCacheFile -Raw).Trim() } catch { $workerIp = "" }
+  if (-not [string]::IsNullOrWhiteSpace($workerIp)) {
+    $workerIpSource = "cache"
+    Write-Warning "resolve public ip failed from myip.ipip.net after $($ipRes.Attempts) attempts: $($ipRes.Error); fallback to cached ip=$workerIp"
+  }
+}
+if ([string]::IsNullOrWhiteSpace($workerIp)) {
+  $workerIp = $workerLanIp
+  $workerIpSource = "lan"
+  Write-Warning "resolve public ip failed from myip.ipip.net after $($ipRes.Attempts) attempts: $($ipRes.Error); fallback to lan ip=$workerLanIp"
+}
+Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, attempts=$($ipRes.Attempts), lan=$workerLanIp) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
