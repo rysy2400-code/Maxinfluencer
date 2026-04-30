@@ -183,6 +183,7 @@ else {
       --name $hcName `
       --cwd $Root `
       --interpreter node `
+      --interpreter-args "--experimental-default-type=module" `
       --no-autorestart `
       --cron-restart "*/1 * * * *"
   }
