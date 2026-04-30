@@ -186,6 +186,8 @@ async function claimOnePendingTask(workerId) {
         worker_id = ?,
         worker_host = ?,
         worker_ip = ?,
+        last_progress_at = NOW(),
+        progress_analyzed_count = 0,
         started_at = NOW(),
         attempt_count = attempt_count + 1,
         updated_at = NOW()
@@ -342,6 +344,7 @@ async function processTask(task) {
         maxResults: target,
         maxEnrichCount: target,
         enrichProfileData: true,
+        taskId: task.id,
         onStepUpdate,
       }
     );
@@ -473,6 +476,24 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function reclaimStuckProcessingTasks() {
+  // 仅按 last_progress_at 判断（用户确认）：超过 5 分钟无推进则回收
+  const rows = await queryTikTok(
+    `
+    UPDATE tiktok_influencer_search_task
+    SET status = 'failed',
+        finished_at = NOW(),
+        error_message = 'stuck_reclaimed(last_progress_at>5m)',
+        updated_at = NOW()
+    WHERE status = 'processing'
+      AND last_progress_at IS NOT NULL
+      AND last_progress_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+  `,
+    []
+  );
+  return Number(rows?.affectedRows || 0);
+}
+
 async function main() {
   const workerId = CURRENT_WORKER_ID;
   const idleSleepMs = Math.max(
@@ -480,6 +501,7 @@ async function main() {
     500
   );
   const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
+  let lastReclaimMs = 0;
 
   console.log(
     `[worker-influencer-search] 启动 workerId=${workerId}, host=${CURRENT_WORKER_HOST || "unknown"}, ip=${CURRENT_WORKER_IP || "unknown"}, loop=${loopMode}, idleSleepMs=${idleSleepMs}`
@@ -488,6 +510,14 @@ async function main() {
   do {
     let processed = false;
     try {
+      if (Date.now() - lastReclaimMs > 60_000) {
+        lastReclaimMs = Date.now();
+        const n = await reclaimStuckProcessingTasks();
+        if (n > 0) {
+          console.warn(`[worker-influencer-search] reclaimed stuck processing tasks: ${n}`);
+        }
+      }
+
       const task = await claimOnePendingTask(workerId);
       if (task) {
         processed = true;

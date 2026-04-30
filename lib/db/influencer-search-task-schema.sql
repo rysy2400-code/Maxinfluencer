@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_search_task (
   worker_id VARCHAR(128) NULL COMMENT '当前处理该任务的 worker 标识',
   worker_host VARCHAR(128) NULL COMMENT '执行机器标识（可选）',
   worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）',
+  last_progress_at DATETIME NULL COMMENT '最近一次确认任务有推进的时间（用于 stuck 回收）',
+  progress_analyzed_count INT NOT NULL DEFAULT 0 COMMENT '候选写入尝试数（包含重复/INSERT IGNORE）',
   error_message TEXT NULL COMMENT '失败原因',
   started_at TIMESTAMP NULL DEFAULT NULL,
   finished_at TIMESTAMP NULL DEFAULT NULL,

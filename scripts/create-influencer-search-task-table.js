@@ -92,6 +92,8 @@ async function main() {
   if (await ensureColumn(taskTable, "keyword_type", "keyword_type ENUM('new','variant','high_performer','fallback') NOT NULL DEFAULT 'new'")) changed.push("task.keyword_type");
   if (await ensureColumn(taskTable, "worker_host", "worker_host VARCHAR(128) NULL COMMENT '执行机器标识（可选）'")) changed.push("task.worker_host");
   if (await ensureColumn(taskTable, "worker_ip", "worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("task.worker_ip");
+  if (await ensureColumn(taskTable, "last_progress_at", "last_progress_at DATETIME NULL COMMENT '最近一次确认任务有推进的时间（用于 stuck 回收）'")) changed.push("task.last_progress_at");
+  if (await ensureColumn(taskTable, "progress_analyzed_count", "progress_analyzed_count INT NOT NULL DEFAULT 0 COMMENT '候选写入尝试数（包含重复/INSERT IGNORE）'")) changed.push("task.progress_analyzed_count");
 
   // indexes / unique key
   if (await ensureIndex(taskTable, "idx_campaign_run", "INDEX idx_campaign_run (campaign_id, run_id)")) changed.push("task.idx_campaign_run");
