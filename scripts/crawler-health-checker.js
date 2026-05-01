@@ -117,12 +117,16 @@ async function rateLimitOk({ workerIp }) {
   return { ok: true };
 }
 
+/**
+ * 远程 SSH 执行爬虫机上的 deploy-crawler.ps1。
+ * `CRAWLER_SSH_TIMEOUT_MS`：单次 SSH 整体超时（含 git pull / npm ci），默认 15 分钟；过短会导致误杀仍在部署中的会话。
+ */
 async function sshRedeploy({ workerIp }) {
   const user = String(process.env.CRAWLER_SSH_USER || "Administrator").trim();
   const port = String(process.env.CRAWLER_SSH_PORT || "22").trim();
   const defaultKeyPath = os.platform() === "win32" ? "C:/ProgramData/ssh/maxin_crawler_key" : "";
   const keyPath = String(process.env.CRAWLER_SSH_KEY_PATH || defaultKeyPath).trim();
-  const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 180_000) || 180_000);
+  const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 900_000) || 900_000);
 
   if (!keyPath) {
     throw new Error("CRAWLER_SSH_KEY_PATH is required (set in .env.local or environment)");
@@ -141,6 +145,14 @@ async function sshRedeploy({ workerIp }) {
     `UserKnownHostsFile=${nullHosts}`,
     "-o",
     "ConnectTimeout=10",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectionAttempts=1",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
     `${user}@${workerIp}`,
     "powershell",
     "-NoProfile",
@@ -156,6 +168,22 @@ async function sshRedeploy({ workerIp }) {
     maxBuffer: 1024 * 1024,
   });
   return { stdout, stderr };
+}
+
+/**
+ * @param {unknown} e
+ * @returns {string}
+ */
+function formatExecError(e) {
+  const parts = [String(e?.message || e)];
+  if (e && typeof e === "object") {
+    const o = /** @type {Record<string, unknown>} */ (e);
+    if (o.code != null) parts.push(`code=${String(o.code)}`);
+    if (o.signal != null) parts.push(`signal=${String(o.signal)}`);
+    if (o.stdout) parts.push(`stdout:\n${String(o.stdout)}`);
+    if (o.stderr) parts.push(`stderr:\n${String(o.stderr)}`);
+  }
+  return parts.join("\n");
 }
 
 async function waitForRecovery({ workerHost, workerIp }) {
@@ -311,17 +339,30 @@ async function main() {
       if (!ok) detail += `\n\nrecovery_check_failed: ${rec.reason || "unknown"}`;
     } catch (e) {
       ok = false;
-      detail = `redeploy_error: ${e?.message || e}`;
+      detail = `redeploy_error: ${formatExecError(e)}`;
     }
 
     await logActionFinish({ id: started.id, ok, detail });
   }
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
+let _running = false;
+async function tick() {
+  if (_running) return;
+  _running = true;
+  const tickAt = nowIso();
+  console.log(`[crawler-health-checker] tick start ${tickAt}`);
+  try {
+    await main();
+    console.log(`[crawler-health-checker] tick done ${tickAt}`);
+  } catch (e) {
     console.error("[crawler-health-checker] fatal:", e?.message || e);
-    process.exit(1);
-  });
+  } finally {
+    _running = false;
+  }
+}
+
+// Run once immediately, then every 60s. This avoids PM2 cron restarts killing in-flight repairs.
+tick();
+setInterval(tick, 60_000);
 

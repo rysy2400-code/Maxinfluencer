@@ -152,10 +152,32 @@ if (-not (Get-Command pm2 -ErrorAction SilentlyContinue)) {
 }
 Write-Host "[deploy-worker] pm2 $(pm2 -v)"
 
+$pm2Home = $env:PM2_HOME
+if ([string]::IsNullOrWhiteSpace($pm2Home)) {
+  $pm2Home = Join-Path $env:USERPROFILE ".pm2"
+  $env:PM2_HOME = $pm2Home
+}
+Write-Host "[deploy-worker] PM2_HOME=$pm2Home"
+
+# Some sessions start pm2 daemon but do not auto-load dump.pm2, so `pm2 list` is empty.
+# Best-effort `pm2 resurrect` to restore saved processes into current daemon.
+try {
+  Write-Host "[deploy-worker] pm2 resurrect (best-effort)..."
+  & pm2 resurrect | Out-Null
+}
+catch {}
+
 $envLocalPath = Join-Path $Root ".env.local"
 $defaultSshKey = "C:/ProgramData/ssh/maxin_crawler_key"
 $sshKeyPath = if ($env:CRAWLER_SSH_KEY_PATH) { $env:CRAWLER_SSH_KEY_PATH.Trim() } elseif ($env:DEPLOY_CRAWLER_SSH_KEY_PATH) { $env:DEPLOY_CRAWLER_SSH_KEY_PATH.Trim() } else { $defaultSshKey }
 Merge-EnvLocalLine -EnvLocalPath $envLocalPath -Key "CRAWLER_SSH_KEY_PATH" -Value $sshKeyPath
+
+# 自动修复 SSH 执行 deploy-crawler.ps1 需要覆盖 git pull + npm ci；默认 15 分钟，可用环境变量 CRAWLER_SSH_TIMEOUT_MS 覆盖。
+$sshTimeoutMs = "900000"
+if (-not [string]::IsNullOrWhiteSpace($env:CRAWLER_SSH_TIMEOUT_MS)) {
+  $sshTimeoutMs = $env:CRAWLER_SSH_TIMEOUT_MS.Trim()
+}
+Merge-EnvLocalLine -EnvLocalPath $envLocalPath -Key "CRAWLER_SSH_TIMEOUT_MS" -Value $sshTimeoutMs
 
 if ($env:CRAWLER_SSH_USER) {
   Merge-EnvLocalLine -EnvLocalPath $envLocalPath -Key "CRAWLER_SSH_USER" -Value $env:CRAWLER_SSH_USER.Trim()
@@ -176,22 +198,36 @@ if (-not (Test-Path $hcScript)) {
   Write-Host "[deploy-worker] WARN: missing $hcScript — skip PM2 $hcName."
 }
 else {
-  $exists = Test-Pm2ProcessByName -Name $hcName
-  if (-not $exists) {
-    Write-Host "[deploy-worker] pm2 start $hcName (cron */1 * * * *, no-autorestart)..."
-    & pm2 start $hcScript `
-      --name $hcName `
-      --cwd $Root `
-      --interpreter node `
-      --interpreter-args "--experimental-default-type=module" `
-      --no-autorestart `
-      --cron-restart "*/1 * * * *"
-  }
-  else {
-    Write-Host "[deploy-worker] pm2 reload $hcName --update-env..."
-    & pm2 reload $hcName --update-env
-  }
+  # PM2 fork wrapper loads app via require(), which breaks ESM `.js` even with interpreter-args.
+  # To guarantee ESM works on Windows, start `node` as the script and pass ESM flags/app path as args.
+  #
+  # Also: do not rely on `pm2 jlist` for existence checks in fresh sessions (daemon boot logs can break JSON).
+  # Instead, delete by name best-effort then create exactly one process.
+  Write-Host "[deploy-worker] pm2 delete $hcName (best-effort, ensure single instance)..."
+  try { & pm2 delete $hcName | Out-Null } catch {}
+
+  Write-Host "[deploy-worker] pm2 start $hcName via node (daemon mode, interval inside script)..."
+  $pm2Args = @(
+    "start",
+    "node",
+    "--name",
+    $hcName,
+    "--cwd",
+    $Root,
+    "--",
+    "--experimental-default-type=module",
+    $hcScript
+  )
+  & pm2 @pm2Args
   & pm2 save
+
+  Write-Host "[deploy-worker] pm2 list (post-save)..."
+  & pm2 list
+  try {
+    Write-Host "[deploy-worker] pm2 describe $hcName (post-save)..."
+    & pm2 describe $hcName
+  }
+  catch {}
 }
 
 Write-Host "[deploy-worker] Done."
