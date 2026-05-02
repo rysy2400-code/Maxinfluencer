@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/process-*.js"
       - "scripts/run-*.js"
+      - "scripts/crawler-health-checker.js"
       - "lib/heartbeat/**"
       - "lib/db/**"
       - "package.json"
