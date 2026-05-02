@@ -11,8 +11,7 @@
  * D 有 processing 超时 > 60min
  *
  * 限流：
- * - 同机 30 分钟最多 1 次重部署
- * - 全局 15 分钟最多 1 台重部署
+ * - 全局 15 分钟最多 1 台重部署（无同机冷却，避免失败后长时间无法重试）
  *
  * 白名单：
  * - CRAWLER_WHITELIST_IPS=ip1,ip2
@@ -45,6 +44,31 @@ function parseList(s) {
 
 function minutesAgo(min) {
   return new Date(Date.now() - min * 60 * 1000);
+}
+
+/**
+ * @param {string} stdout
+ * @returns {{ worker_ok: boolean, cdp_9222_ok: boolean, cdp_9223_ok: boolean } | null}
+ */
+function parseRemoteHealth(stdout) {
+  const marker = "[maxin-health-json]";
+  const lines = String(stdout || "").split(/\r?\n/u);
+  const line = lines.find((x) => x.includes(marker));
+  if (!line) return null;
+  const idx = line.indexOf(marker);
+  if (idx < 0) return null;
+  const raw = line.slice(idx + marker.length).trim();
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return {
+      worker_ok: Boolean(v.worker_ok),
+      cdp_9222_ok: Boolean(v.cdp_9222_ok),
+      cdp_9223_ok: Boolean(v.cdp_9223_ok),
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function logActionStart({ workerHost, workerIp, triggerReason, detail }) {
@@ -81,27 +105,36 @@ async function logActionFinish({ id, ok, detail }) {
   );
 }
 
+/**
+ * 回收长时间停留在 started 且未 finished 的修复日志，避免历史脏数据长期挂起。
+ * 典型场景：部署进程在外部被重启/中断，导致未走到 logActionFinish。
+ */
+async function reconcileStuckStartedActions() {
+  const staleMinutes = Number(process.env.CRAWLER_REPAIR_ACTION_STALE_MINUTES || 20) || 20;
+  const detailSuffix = `auto_cleanup: started_timeout>${staleMinutes}m at ${nowIso()}`;
+  await queryTikTok(
+    `
+    UPDATE tiktok_crawler_repair_action_log
+    SET result = 'failed',
+        detail = CONCAT(COALESCE(detail, ''), '\n\n', ?),
+        finished_at = NOW(),
+        updated_at = NOW()
+    WHERE result = 'started'
+      AND finished_at IS NULL
+      AND started_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+  `,
+    [detailSuffix, staleMinutes]
+  );
+}
+
 async function isWhitelisted(workerIp) {
   const wl = new Set(parseList(process.env.CRAWLER_WHITELIST_IPS));
   if (wl.size === 0) return false;
   return wl.has(String(workerIp || "").trim());
 }
 
-async function rateLimitOk({ workerIp }) {
-  const perMachineMinutes = Number(process.env.CRAWLER_REDEPLOY_COOLDOWN_MINUTES || 30) || 30;
+async function rateLimitOk() {
   const globalMinutes = Number(process.env.CRAWLER_REDEPLOY_GLOBAL_MINUTES || 15) || 15;
-
-  const perMachine = await queryTikTok(
-    `
-    SELECT COUNT(*) AS n
-    FROM tiktok_crawler_repair_action_log
-    WHERE action_type='redeploy_crawler'
-      AND worker_ip = ?
-      AND started_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
-  `,
-    [workerIp, perMachineMinutes]
-  );
-  if (Number(perMachine?.[0]?.n || 0) > 0) return { ok: false, reason: "per_machine_cooldown" };
 
   const global = await queryTikTok(
     `
@@ -119,14 +152,14 @@ async function rateLimitOk({ workerIp }) {
 
 /**
  * 远程 SSH 执行爬虫机上的 deploy-crawler.ps1。
- * `CRAWLER_SSH_TIMEOUT_MS`：单次 SSH 整体超时（含 git pull / npm ci），默认 15 分钟；过短会导致误杀仍在部署中的会话。
+ * `CRAWLER_SSH_TIMEOUT_MS`：单次 SSH 整体超时（含 git pull / npm ci），默认 10 分钟；过短会误杀仍在部署中的会话。
  */
 async function sshRedeploy({ workerIp }) {
   const user = String(process.env.CRAWLER_SSH_USER || "Administrator").trim();
   const port = String(process.env.CRAWLER_SSH_PORT || "22").trim();
   const defaultKeyPath = os.platform() === "win32" ? "C:/ProgramData/ssh/maxin_crawler_key" : "";
   const keyPath = String(process.env.CRAWLER_SSH_KEY_PATH || defaultKeyPath).trim();
-  const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 900_000) || 900_000);
+  const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 600_000) || 600_000);
 
   if (!keyPath) {
     throw new Error("CRAWLER_SSH_KEY_PATH is required (set in .env.local or environment)");
@@ -134,7 +167,23 @@ async function sshRedeploy({ workerIp }) {
 
   const nullHosts = os.platform() === "win32" ? "NUL" : "/dev/null";
 
+  const remotePs = [
+    "$ErrorActionPreference = 'Stop'",
+    "& 'C:\\maxinfluencer\\deploy-crawler.ps1'",
+    "Start-Sleep -Seconds 8",
+    "$workerOk = $false",
+    "$proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'worker-influencer-search.js' } | Select-Object -First 1",
+    "if ($proc) { $workerOk = $true }",
+    "$cdp9222 = Test-NetConnection -ComputerName 127.0.0.1 -Port 9222 -WarningAction SilentlyContinue",
+    "$cdp9223 = Test-NetConnection -ComputerName 127.0.0.1 -Port 9223 -WarningAction SilentlyContinue",
+    "$health = [PSCustomObject]@{ worker_ok = $workerOk; cdp_9222_ok = [bool]$cdp9222.TcpTestSucceeded; cdp_9223_ok = [bool]$cdp9223.TcpTestSucceeded }",
+    "Write-Output ('[maxin-health-json]' + ($health | ConvertTo-Json -Compress))",
+    "if ($health.worker_ok -and $health.cdp_9222_ok -and $health.cdp_9223_ok) { exit 0 }",
+    "exit 2",
+  ].join("; ");
+
   const sshArgs = [
+    "ssh.exe",
     "-i",
     keyPath,
     "-p",
@@ -153,21 +202,35 @@ async function sshRedeploy({ workerIp }) {
     "ServerAliveInterval=10",
     "-o",
     "ServerAliveCountMax=3",
+    "-o",
+    "LogLevel=ERROR",
     `${user}@${workerIp}`,
     "powershell",
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
-    "-File",
-    "C:\\maxinfluencer\\deploy-crawler.ps1",
+    "-Command",
+    remotePs,
   ];
 
-  const { stdout, stderr } = await execFileAsync("ssh", sshArgs, {
+  const escaped = sshArgs.map((x) => {
+    const s = String(x);
+    if (/[ \t"]/u.test(s)) {
+      return `"${s.replace(/"/g, '\\"')}"`;
+    }
+    return s;
+  });
+
+  const { stdout, stderr } = await execFileAsync("cmd.exe", ["/d", "/s", "/c", escaped.join(" ")], {
     timeout: timeoutMs,
     windowsHide: true,
     maxBuffer: 1024 * 1024,
   });
-  return { stdout, stderr };
+  return {
+    stdout,
+    stderr,
+    remoteHealth: parseRemoteHealth(stdout),
+  };
 }
 
 /**
@@ -288,6 +351,9 @@ async function main() {
     return;
   }
 
+  // 每轮先做一次 started 超时回收，保证 repair_action_log 可收口。
+  await reconcileStuckStartedActions();
+
   // 白名单主机：两台
   const allowHosts = new Set(parseList(process.env.CRAWLER_WHITELIST_HOSTS));
   const rows = await queryTikTok(
@@ -308,7 +374,7 @@ async function main() {
     const triggers = await computeTriggers({ workerHost, workerIp });
     if (triggers.length === 0) continue;
 
-    const rl = await rateLimitOk({ workerIp });
+    const rl = await rateLimitOk();
     if (!rl.ok) {
       await queryTikTok(
         `
@@ -334,9 +400,16 @@ async function main() {
     try {
       const out = await sshRedeploy({ workerIp });
       detail = `stdout:\n${out.stdout || ""}\n\nstderr:\n${out.stderr || ""}`;
-      const rec = await waitForRecovery({ workerHost, workerIp });
-      ok = Boolean(rec.ok);
-      if (!ok) detail += `\n\nrecovery_check_failed: ${rec.reason || "unknown"}`;
+      if (out.remoteHealth) {
+        ok = Boolean(out.remoteHealth.worker_ok && out.remoteHealth.cdp_9222_ok && out.remoteHealth.cdp_9223_ok);
+        if (!ok) {
+          detail += `\n\nremote_health_failed: ${JSON.stringify(out.remoteHealth)}`;
+        }
+      } else {
+        const rec = await waitForRecovery({ workerHost, workerIp });
+        ok = Boolean(rec.ok);
+        if (!ok) detail += `\n\nrecovery_check_failed: ${rec.reason || "unknown"}`;
+      }
     } catch (e) {
       ok = false;
       detail = `redeploy_error: ${formatExecError(e)}`;

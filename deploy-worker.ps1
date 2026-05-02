@@ -172,8 +172,8 @@ $defaultSshKey = "C:/ProgramData/ssh/maxin_crawler_key"
 $sshKeyPath = if ($env:CRAWLER_SSH_KEY_PATH) { $env:CRAWLER_SSH_KEY_PATH.Trim() } elseif ($env:DEPLOY_CRAWLER_SSH_KEY_PATH) { $env:DEPLOY_CRAWLER_SSH_KEY_PATH.Trim() } else { $defaultSshKey }
 Merge-EnvLocalLine -EnvLocalPath $envLocalPath -Key "CRAWLER_SSH_KEY_PATH" -Value $sshKeyPath
 
-# 自动修复 SSH 执行 deploy-crawler.ps1 需要覆盖 git pull + npm ci；默认 15 分钟，可用环境变量 CRAWLER_SSH_TIMEOUT_MS 覆盖。
-$sshTimeoutMs = "900000"
+# 自动修复 SSH 执行 deploy-crawler.ps1 需要覆盖 git pull + npm ci；默认 10 分钟，可用环境变量 CRAWLER_SSH_TIMEOUT_MS 覆盖。
+$sshTimeoutMs = "600000"
 if (-not [string]::IsNullOrWhiteSpace($env:CRAWLER_SSH_TIMEOUT_MS)) {
   $sshTimeoutMs = $env:CRAWLER_SSH_TIMEOUT_MS.Trim()
 }
