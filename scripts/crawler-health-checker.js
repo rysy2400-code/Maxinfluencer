@@ -10,9 +10,6 @@
  * C 同机 10 分钟内 failed 任务 >= 3
  * D 有 processing 超时 > 60min
  *
- * 限流：
- * - 全局 15 分钟最多 1 台重部署（无同机冷却，避免失败后长时间无法重试）
- *
  * 白名单：
  * - CRAWLER_WHITELIST_IPS=ip1,ip2
  */
@@ -131,23 +128,6 @@ async function isWhitelisted(workerIp) {
   const wl = new Set(parseList(process.env.CRAWLER_WHITELIST_IPS));
   if (wl.size === 0) return false;
   return wl.has(String(workerIp || "").trim());
-}
-
-async function rateLimitOk() {
-  const globalMinutes = Number(process.env.CRAWLER_REDEPLOY_GLOBAL_MINUTES || 15) || 15;
-
-  const global = await queryTikTok(
-    `
-    SELECT COUNT(*) AS n
-    FROM tiktok_crawler_repair_action_log
-    WHERE action_type='redeploy_crawler'
-      AND started_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
-  `,
-    [globalMinutes]
-  );
-  if (Number(global?.[0]?.n || 0) > 0) return { ok: false, reason: "global_cooldown" };
-
-  return { ok: true };
 }
 
 /**
@@ -373,19 +353,6 @@ async function main() {
 
     const triggers = await computeTriggers({ workerHost, workerIp });
     if (triggers.length === 0) continue;
-
-    const rl = await rateLimitOk();
-    if (!rl.ok) {
-      await queryTikTok(
-        `
-        INSERT INTO tiktok_crawler_repair_action_log (
-          worker_host, worker_ip, action_type, trigger_reason, result, detail, started_at, operator
-        ) VALUES (?, ?, 'redeploy_crawler', ?, 'skipped', ?, NOW(), 'auto')
-      `,
-        [workerHost, workerIp, triggers.map((t) => `${t.code}:${t.reason}`).join("|"), rl.reason]
-      );
-      continue;
-    }
 
     const triggerReason = triggers.map((t) => `${t.code}:${t.reason}`).join(" | ");
     const started = await logActionStart({
