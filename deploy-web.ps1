@@ -146,7 +146,16 @@ try {
 }
 
 Write-Host "[deploy-web] npm run build..."
-Invoke-Npm @("run", "build")
+# Next.js on small Windows VMs can hit V8 OOM during static generation without a higher limit.
+$prevNodeOpts = $env:NODE_OPTIONS
+if ($env:NODE_OPTIONS -notmatch "max-old-space-size") {
+  $env:NODE_OPTIONS = $(if ($env:NODE_OPTIONS) { "$env:NODE_OPTIONS --max-old-space-size=8192" } else { "--max-old-space-size=8192" })
+}
+try {
+  Invoke-Npm @("run", "build")
+} finally {
+  $env:NODE_OPTIONS = $prevNodeOpts
+}
 
 Write-Host "[deploy-web] pm2 start maxin-web via ecosystem..."
 pm2 start $ecosystemPath --only maxin-web --update-env
