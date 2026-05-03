@@ -874,6 +874,21 @@ export default function HomePage() {
         }
       }
 
+      if (!sessionIdForChat) {
+        window.alert('无法创建或解析会话 ID，不能发起对话（发布时需要 sessionId 对齐数据库）。请刷新页面后重试。');
+        setMessages((prev) => {
+          const updated = [...prev];
+          if (updated[assistantMessageIndex]) {
+            updated[assistantMessageIndex] = {
+              ...updated[assistantMessageIndex],
+              content: '无法发起对话：缺少会话 ID。请刷新后重试。',
+            };
+          }
+          return updated;
+        });
+        return;
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -882,7 +897,7 @@ export default function HomePage() {
         body: JSON.stringify({
           messages: nextMessages,
           context,
-          ...(sessionIdForChat ? { sessionId: sessionIdForChat } : {}),
+          sessionId: sessionIdForChat,
           stream: true // 启用流式传输
         })
       });
@@ -1802,17 +1817,27 @@ export default function HomePage() {
       const response = await fetch(`/api/sessions/${sessionId}`, {
         method: 'DELETE',
       });
-      const data = await response.json();
-      if (data.success) {
-        if (sessionId === currentSessionId) {
-          setCurrentSessionId(null);
-          setMessages(defaultMessage);
-          setContext({ workflowState: 'idle' });
-        }
-        await loadCampaignSessions();
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
       }
+      if (!response.ok || !data.success) {
+        const msg = data.error || data.message || `删除失败（HTTP ${response.status}）`;
+        console.error('[HomePage] 删除已发布 campaign 未成功:', msg);
+        window.alert(msg);
+        return;
+      }
+      if (sessionId === currentSessionId) {
+        setCurrentSessionId(null);
+        setMessages(defaultMessage);
+        setContext({ workflowState: 'idle' });
+      }
+      await loadCampaignSessions();
     } catch (error) {
       console.error('[HomePage] 删除已发布 campaign 失败:', error);
+      window.alert(error?.message || '删除请求异常，请稍后重试');
     }
   };
 
