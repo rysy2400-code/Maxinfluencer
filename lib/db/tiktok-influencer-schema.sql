@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
   email VARCHAR(255) NULL COMMENT '候选红人的主联系邮箱（标准化）',
   has_email TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否有邮箱（1=有）',
   analysis_summary TEXT NULL COMMENT '匹配结论摘要（给前端展示）',
+  match_analysis JSON NULL COMMENT '结构化匹配分析（长文等）；analysis_summary 为短摘要',
   analyzed_at TIMESTAMP NULL DEFAULT NULL COMMENT '分析完成时间',
 
   picked_at TIMESTAMP NULL DEFAULT NULL COMMENT '已被执行心跳消费并入执行表的时间',

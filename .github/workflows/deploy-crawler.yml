@@ -11,6 +11,7 @@ on:
       - "lib/tools/influencer-functions/**"
       - "lib/agents/**"
       - "lib/db/**"
+      - "lib/utils/work-live-step-bridge.js"
       - "package.json"
       - "package-lock.json"
       - "deploy-crawler.ps1"

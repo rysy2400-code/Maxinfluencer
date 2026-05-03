@@ -106,6 +106,11 @@ async function createTables() {
     "has_email",
     "has_email TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否有邮箱（1=有）' AFTER email"
   );
+  await ensureColumn(
+    "tiktok_campaign_influencer_candidates",
+    "match_analysis",
+    "match_analysis JSON NULL COMMENT '结构化匹配分析（长文）；analysis_summary 为短摘要' AFTER analysis_summary"
+  );
   await ensureIndex(
     "tiktok_campaign_influencer_candidates",
     "idx_campaign_email_contact",

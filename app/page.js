@@ -172,8 +172,12 @@ export default function HomePage() {
               : currentThinking.screenshots || [],
           influencerAnalyses:
             d.influencerAnalyses !== undefined
-              ? d.influencerAnalyses
-              : currentThinking.influencerAnalyses || [],
+              ? (Array.isArray(d.influencerAnalyses)
+                  ? d.influencerAnalyses.slice(-1)
+                  : d.influencerAnalyses)
+              : (Array.isArray(currentThinking.influencerAnalyses)
+                  ? currentThinking.influencerAnalyses.slice(-1)
+                  : currentThinking.influencerAnalyses || []),
           workNotes:
             d.workNotes !== undefined
               ? d.workNotes
@@ -546,6 +550,12 @@ export default function HomePage() {
               browserSteps: []
             };
           }
+          if (cleaned.thinking?.influencerAnalyses) {
+            cleaned.thinking = {
+              ...cleaned.thinking,
+              influencerAnalyses: []
+            };
+          }
           return cleaned;
         });
         
@@ -568,6 +578,9 @@ export default function HomePage() {
               const cleaned = { ...msg };
               if (cleaned.thinking?.screenshots) {
                 cleaned.thinking = { ...cleaned.thinking, screenshots: [] };
+              }
+              if (cleaned.thinking?.influencerAnalyses) {
+                cleaned.thinking = { ...cleaned.thinking, influencerAnalyses: [] };
               }
               return cleaned;
             });
@@ -940,9 +953,13 @@ export default function HomePage() {
                         screenshots: data.data.screenshots !== undefined 
                           ? data.data.screenshots 
                           : (currentThinking.screenshots || []),
-                        influencerAnalyses: data.data.influencerAnalyses !== undefined 
-                          ? data.data.influencerAnalyses 
-                          : (currentThinking.influencerAnalyses || []),
+                        influencerAnalyses: data.data.influencerAnalyses !== undefined
+                          ? (Array.isArray(data.data.influencerAnalyses)
+                              ? data.data.influencerAnalyses.slice(-1)
+                              : data.data.influencerAnalyses)
+                          : (Array.isArray(currentThinking.influencerAnalyses)
+                              ? currentThinking.influencerAnalyses.slice(-1)
+                              : currentThinking.influencerAnalyses || []),
                       };
                       
                       if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
@@ -988,7 +1005,10 @@ export default function HomePage() {
                           ...finalThinking,
                           browserSteps: finalThinking.browserSteps || currentThinking.browserSteps || [],
                           screenshots: finalThinking.screenshots || currentThinking.screenshots || [],
-                          influencerAnalyses: finalThinking.influencerAnalyses || currentThinking.influencerAnalyses || [],
+                          influencerAnalyses: (() => {
+                            const merged = finalThinking.influencerAnalyses || currentThinking.influencerAnalyses || [];
+                            return Array.isArray(merged) ? merged.slice(-1) : merged;
+                          })(),
                         }
                       };
                     }

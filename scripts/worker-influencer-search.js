@@ -328,6 +328,10 @@ async function processTask(task) {
   const target = requestedBatch > 0 ? requestedBatch : defaultTarget;
   let result = null;
   try {
+    const primaryKeyword =
+      taskKeyword ||
+      (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
+      null;
     result = await searchAndExtractInfluencers(
       {
         keywords: { search_queries: kwResult.search_queries },
@@ -345,6 +349,8 @@ async function processTask(task) {
         maxEnrichCount: target,
         enrichProfileData: true,
         taskId: task.id,
+        runId: runId || null,
+        searchKeyword: primaryKeyword,
         onStepUpdate,
       }
     );
