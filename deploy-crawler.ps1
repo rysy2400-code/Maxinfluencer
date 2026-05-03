@@ -12,6 +12,31 @@ $Root = "C:\maxinfluencer"
 if (-not (Test-Path $Root)) { throw "Deploy root not found: $Root" }
 Set-Location $Root
 
+function Import-RepoDotEnv {
+  param([string]$ProjectRoot)
+  foreach ($name in @(".env", ".env.local")) {
+    $path = Join-Path $ProjectRoot $name
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    Get-Content -LiteralPath $path | ForEach-Object {
+      $line = $_.Trim()
+      if (-not $line -or $line.StartsWith("#")) { return }
+      $idx = $line.IndexOf("=")
+      if ($idx -lt 1) { return }
+      $key = $line.Substring(0, $idx).Trim()
+      $val = $line.Substring($idx + 1).Trim()
+      if ($val.Length -ge 2) {
+        $q0 = $val[0]
+        $qn = $val[$val.Length - 1]
+        if (($q0 -eq [char]34 -and $qn -eq [char]34) -or ($q0 -eq [char]39 -and $qn -eq [char]39)) {
+          $val = $val.Substring(1, $val.Length - 2)
+        }
+      }
+      if ($key) { Set-Item -Path "Env:$key" -Value $val }
+    }
+  }
+}
+Import-RepoDotEnv -ProjectRoot $Root
+
 $scriptsDir = Join-Path $Root "scripts"
 if (-not (Test-Path $scriptsDir)) { New-Item -ItemType Directory -Path $scriptsDir | Out-Null }
 
@@ -138,6 +163,12 @@ if (Test-Path $nodeDirForPath) {
 }
 
 Write-Host "[deploy-crawler] Fetch + pull main..."
+# Mitigate Windows Git/libcurl "getaddrinfo() thread failed to start" / flaky DNS (esp. over SSH sessions).
+try {
+  git config http.sslBackend schannel 2>$null | Out-Null
+  git config http.version HTTP/1.1 2>$null | Out-Null
+  git config core.preferIPv4 true 2>$null | Out-Null
+} catch {}
 git fetch origin
 git checkout main
 git pull origin main
