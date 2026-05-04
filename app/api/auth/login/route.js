@@ -74,7 +74,7 @@ export async function POST(req) {
 
     res.cookies.set(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: cookieIsSecure(),
+      secure: cookieIsSecure(req),
       sameSite: "lax",
       path: "/",
       maxAge: MAX_AGE_SEC,
