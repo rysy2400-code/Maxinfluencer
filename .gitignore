@@ -26,3 +26,7 @@ tiktok-user-data-chrome/
 
 # local venv (if any)
 .venv/
+
+# one-off local deploy bundles / scratch scripts（勿提交）
+tmp-*-deploy.zip
+tmp-setup-*.ps1

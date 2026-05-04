@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { getCampaignSessionById } from "../../../../../lib/db/campaign-session-dao.js";
 import { subscribeWorkLive } from "../../../../../lib/realtime/work-live-bus.js";
+import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
+import { assertUserCanAccessSession } from "../../../../../lib/auth/session-access.js";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,11 @@ export const runtime = "nodejs";
  */
 export async function GET(req, { params }) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const { id: sessionId } = params;
 
     if (!sessionId) {
@@ -20,7 +26,15 @@ export async function GET(req, { params }) {
       );
     }
 
-    const session = await getCampaignSessionById(sessionId);
+    const access = await assertUserCanAccessSession(sessionId, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+        { status: access.status }
+      );
+    }
+
+    const session = access.session;
     if (!session) {
       return NextResponse.json(
         { success: false, error: "会话不存在" },

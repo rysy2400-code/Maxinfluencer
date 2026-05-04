@@ -15,6 +15,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { appendBinMessageToSession } from "../lib/db/campaign-session-dao.js";
+import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import {
+  buildCampaignUpdateMessageId,
+  buildTraceIdFromInboundMessageId,
+} from "../lib/utils/timeline-ids.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -208,6 +213,57 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
   }
 }
 
+async function logCampaignUpdateTimelineEvent({
+  influencerId,
+  campaignId,
+  advertiserAgentEventId,
+  advertiserEventType,
+  sourceInboundMessageId,
+  status,
+  errorMessage,
+  payloadSummary,
+}) {
+  if (!influencerId) return;
+  const traceId = sourceInboundMessageId
+    ? buildTraceIdFromInboundMessageId(sourceInboundMessageId)
+    : `trace:adv_event:${advertiserAgentEventId}`;
+
+  await logConversationMessage({
+    influencerId,
+    campaignId: campaignId || null,
+    direction: "bin",
+    channel: "email",
+    fromEmail: null,
+    toEmail: null,
+    subject: null,
+    bodyText: `[campaign_update] ${advertiserEventType} ${status}${
+      errorMessage ? `: ${errorMessage}` : ""
+    }`,
+    messageId: buildCampaignUpdateMessageId(advertiserAgentEventId),
+    sourceType: "advertiser_agent_event",
+    sourceEventTable: "tiktok_advertiser_agent_event",
+    sourceEventId: advertiserAgentEventId,
+    sentAt: new Date(),
+    eventType: "campaign_update",
+    eventTime: new Date(),
+    actorType: "system",
+    traceId,
+    payload: {
+      kind: "campaign_update",
+      status,
+      error: errorMessage ? { message: errorMessage } : null,
+      advertiserAgentEvent: {
+        id: advertiserAgentEventId,
+        eventType: advertiserEventType,
+      },
+      campaignId: campaignId || null,
+      influencerId,
+      sourceInboundMessageId: sourceInboundMessageId || null,
+      summary: payloadSummary || null,
+    },
+  });
+}
+
 async function processCampaignAgentEvent(eventRow) {
   await markCampaignAgentEventStatus(eventRow.id, "processing", null);
 
@@ -216,14 +272,71 @@ async function processCampaignAgentEvent(eventRow) {
 
   // 当前版本只处理 InfluencerAgent 发来的「execution_update_suggested」类事件
   if (type === "execution_update_suggested") {
-    await applyExecutionUpdateSuggested(eventRow, payload);
-    await markCampaignAgentEventStatus(eventRow.id, "succeeded", null);
+    try {
+      await applyExecutionUpdateSuggested(eventRow, payload);
+      await markCampaignAgentEventStatus(eventRow.id, "succeeded", null);
+      await logCampaignUpdateTimelineEvent({
+        influencerId: payload.influencerId || eventRow.influencer_id,
+        campaignId: payload.campaignId || eventRow.campaign_id,
+        advertiserAgentEventId: eventRow.id,
+        advertiserEventType: type,
+        sourceInboundMessageId: payload?.emailEvent?.messageId || payload?.sourceMessageId || null,
+        status: "succeeded",
+        errorMessage: null,
+        payloadSummary: {
+          newStage: payload.newStage || null,
+          flatFeeUSD: payload.flatFeeUSD || null,
+          videoLink: payload.videoLink || null,
+        },
+      });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      await markCampaignAgentEventStatus(eventRow.id, "failed", msg);
+      await logCampaignUpdateTimelineEvent({
+        influencerId: payload.influencerId || eventRow.influencer_id,
+        campaignId: payload.campaignId || eventRow.campaign_id,
+        advertiserAgentEventId: eventRow.id,
+        advertiserEventType: type,
+        sourceInboundMessageId: payload?.emailEvent?.messageId || payload?.sourceMessageId || null,
+        status: "failed",
+        errorMessage: msg,
+        payloadSummary: null,
+      });
+    }
     return;
   }
 
   if (type === "creator_replied_special_request") {
-    await applyCreatorRepliedSpecialRequest(eventRow, payload);
-    await markCampaignAgentEventStatus(eventRow.id, "succeeded", null);
+    try {
+      await applyCreatorRepliedSpecialRequest(eventRow, payload);
+      await markCampaignAgentEventStatus(eventRow.id, "succeeded", null);
+      await logCampaignUpdateTimelineEvent({
+        influencerId: payload.influencerId || eventRow.influencer_id,
+        campaignId: payload.campaignId || eventRow.campaign_id,
+        advertiserAgentEventId: eventRow.id,
+        advertiserEventType: type,
+        sourceInboundMessageId: payload?.sourceMessageId || null,
+        status: "succeeded",
+        errorMessage: null,
+        payloadSummary: {
+          specialRequestId: payload.specialRequestId || null,
+          specialRequestStatus: payload.specialRequestStatus || null,
+        },
+      });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      await markCampaignAgentEventStatus(eventRow.id, "failed", msg);
+      await logCampaignUpdateTimelineEvent({
+        influencerId: payload.influencerId || eventRow.influencer_id,
+        campaignId: payload.campaignId || eventRow.campaign_id,
+        advertiserAgentEventId: eventRow.id,
+        advertiserEventType: type,
+        sourceInboundMessageId: payload?.sourceMessageId || null,
+        status: "failed",
+        errorMessage: msg,
+        payloadSummary: null,
+      });
+    }
     return;
   }
 

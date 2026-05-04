@@ -142,13 +142,25 @@ async function main() {
   await queryTikTok(
     `
     INSERT INTO tiktok_influencer_conversation_messages
-    (influencer_id, campaign_id, direction, channel, from_email, to_email, subject, body_text, message_id, source_type, source_event_table, source_event_id)
+    (influencer_id, campaign_id, direction, channel, from_email, to_email, subject, body_text, message_id, source_type, source_event_table, source_event_id, event_type, event_time, actor_type, trace_id, payload)
     VALUES (?, ?, 'influencer', 'email', 'rysy2400@gmail.com', 'annie@binfluencer.online',
             'Re: Binfluencer x Rysy Test | Social Media Collaboration',
             'I agree to 300 for 2 + 200 for 1 more, and will post on March 20.',
-            ?, 'influencer_email_event', 'tiktok_influencer_email_events', ?)
+            ?, 'influencer_email_event', 'tiktok_influencer_email_events', ?, 'email_inbound', NOW(), 'system', ?, ?)
   `,
-    [TEST_INFLUENCER_ID, campaignId, simMessageId, evId]
+    [
+      TEST_INFLUENCER_ID,
+      campaignId,
+      simMessageId,
+      evId,
+      `trace:${simMessageId}`,
+      JSON.stringify({
+        kind: "email_inbound",
+        status: "succeeded",
+        email: { messageId: simMessageId },
+        test: true,
+      }),
+    ]
   );
 
   // Step 4: 处理红人邮件事件 → 产出 creator_replied_special_request

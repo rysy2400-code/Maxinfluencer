@@ -23,6 +23,10 @@ import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
+import {
+  buildTraceIdFromInboundMessageId,
+  buildTraceIdFromSourceKey,
+} from "../lib/utils/timeline-ids.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -127,13 +131,25 @@ async function handleOutboundEmail(eventRow, payload) {
     headers["References"] = ctx.references;
   }
 
-  const result = await sendMail({
-    fromAccount,
-    to,
-    subject,
-    text: body,
-    headers,
-  });
+  const inboundMessageId =
+    payload.inReplyTo || payload.emailEvent?.messageId || null;
+  const traceId = inboundMessageId
+    ? buildTraceIdFromInboundMessageId(inboundMessageId)
+    : buildTraceIdFromSourceKey(`influencer_agent_event:${eventRow.id}`);
+
+  let result = null;
+  let sendErr = null;
+  try {
+    result = await sendMail({
+      fromAccount,
+      to,
+      subject,
+      text: body,
+      headers,
+    });
+  } catch (err) {
+    sendErr = err;
+  }
 
   // 记录到对话记忆表
   try {
@@ -156,12 +172,37 @@ async function handleOutboundEmail(eventRow, payload) {
       sourceEventTable: "tiktok_influencer_agent_event",
       sourceEventId: eventRow.id,
       sentAt: new Date(),
+      eventType: "email_outbound",
+      eventTime: new Date(),
+      actorType: "agent",
+      sendMode: "auto_send",
+      contentOrigin: "agent_generated",
+      traceId,
+      payload: {
+        kind: "email_outbound",
+        status: sendErr ? "failed" : "succeeded",
+        error: sendErr ? { message: sendErr?.message || String(sendErr) } : null,
+        email: {
+          to,
+          subject,
+          inReplyTo: inboundMessageId,
+          messageId: result?.messageId || null,
+        },
+        source: {
+          eventTable: "tiktok_influencer_agent_event",
+          eventId: eventRow.id,
+        },
+      },
     });
   } catch (err) {
     console.error(
       "[ProcessInfluencerAgentEvents] 写入 tiktok_influencer_conversation_messages 失败:",
       err
     );
+  }
+
+  if (sendErr) {
+    throw sendErr;
   }
 }
 
@@ -265,13 +306,23 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
     headers["References"] = ctx.references;
   }
 
-  const result = await sendMail({
-    fromAccount,
-    to: toEmail,
-    subject,
-    text: bodyText,
-    headers,
-  });
+  const traceId = buildTraceIdFromSourceKey(
+    `special_request:${specialRequestId || eventRow.id}`
+  );
+
+  let result = null;
+  let sendErr = null;
+  try {
+    result = await sendMail({
+      fromAccount,
+      to: toEmail,
+      subject,
+      text: bodyText,
+      headers,
+    });
+  } catch (err) {
+    sendErr = err;
+  }
 
   // 记录到对话记忆表
   try {
@@ -294,12 +345,41 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
       sourceEventTable: "tiktok_influencer_agent_event",
       sourceEventId: eventRow.id,
       sentAt: new Date(),
+      eventType: "email_outbound",
+      eventTime: new Date(),
+      actorType: "agent",
+      sendMode: "auto_send",
+      contentOrigin: "agent_generated",
+      traceId,
+      payload: {
+        kind: "email_outbound",
+        status: sendErr ? "failed" : "succeeded",
+        error: sendErr ? { message: sendErr?.message || String(sendErr) } : null,
+        email: {
+          to: toEmail,
+          subject,
+          inReplyTo: payload.inReplyTo || null,
+          messageId: result?.messageId || null,
+        },
+        specialRequest: {
+          specialRequestId,
+          specialRequestStatus,
+        },
+        source: {
+          eventTable: "tiktok_influencer_agent_event",
+          eventId: eventRow.id,
+        },
+      },
     });
   } catch (err) {
     console.error(
       "[ProcessInfluencerAgentEvents] 写入特殊请求邮件到对话表失败:",
       err
     );
+  }
+
+  if (sendErr) {
+    throw sendErr;
   }
 }
 

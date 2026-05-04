@@ -5,6 +5,10 @@ import {
   deleteCampaignSession,
 } from "../../../../lib/db/campaign-session-dao.js";
 import { softDeleteCampaignBySessionId } from "../../../../lib/db/campaign-dao.js";
+import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
+import { assertUserCanAccessSession } from "../../../../lib/auth/session-access.js";
+
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/sessions/[id]
@@ -12,6 +16,11 @@ import { softDeleteCampaignBySessionId } from "../../../../lib/db/campaign-dao.j
  */
 export async function GET(req, { params }) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const { id } = params;
 
     if (!id) {
@@ -24,7 +33,15 @@ export async function GET(req, { params }) {
       );
     }
 
-    const session = await getCampaignSessionById(id);
+    const access = await assertUserCanAccessSession(id, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+        { status: access.status }
+      );
+    }
+
+    const session = access.session;
 
     if (!session) {
       return NextResponse.json(
@@ -63,6 +80,11 @@ export async function GET(req, { params }) {
  */
 export async function PUT(req, { params }) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const { id } = params;
     const body = await req.json();
     const { title, status, messages, context } = body;
@@ -74,6 +96,14 @@ export async function PUT(req, { params }) {
           error: "缺少会话 ID",
         },
         { status: 400 }
+      );
+    }
+
+    const access = await assertUserCanAccessSession(id, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+        { status: access.status }
       );
     }
 
@@ -139,6 +169,11 @@ export async function PUT(req, { params }) {
  */
 export async function DELETE(req, { params }) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const { id } = params;
 
     if (!id) {
@@ -151,7 +186,15 @@ export async function DELETE(req, { params }) {
       );
     }
 
-    const session = await getCampaignSessionById(id);
+    const access = await assertUserCanAccessSession(id, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+        { status: access.status }
+      );
+    }
+
+    const session = access.session;
     if (!session) {
       return NextResponse.json(
         {

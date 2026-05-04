@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_conversation_messages (
   body_text TEXT NOT NULL COMMENT '已清洗后的可读正文',
 
   message_id VARCHAR(255) NULL COMMENT '邮件 Message-ID（如有）',
+  event_type VARCHAR(64) NOT NULL DEFAULT 'email_outbound' COMMENT '时间线事件类型：email_inbound / email_outbound / draft_outbound / agent_action / campaign_update',
+  event_time TIMESTAMP NULL DEFAULT NULL COMMENT '事件业务时间（时间线排序主字段）',
+  actor_type ENUM('agent','human','system') NOT NULL DEFAULT 'agent' COMMENT '事件执行者类型',
+  actor_id VARCHAR(128) NULL COMMENT '执行者 ID（如 agent 名称或人工用户 ID）',
+  send_mode VARCHAR(64) NULL COMMENT '发送模式：auto_send / human_approved / human_manual_send',
+  content_origin VARCHAR(64) NULL COMMENT '内容来源：agent_generated / human_written / human_edited_agent',
+  trace_id VARCHAR(128) NULL COMMENT '同一触发链路追踪 ID',
+  payload JSON NULL COMMENT '事件扩展信息',
 
   source_type VARCHAR(64) NOT NULL COMMENT '消息来源类型：seed_outreach / influencer_email_event / influencer_agent_event / llm_outbound 等',
   source_event_table VARCHAR(64) NULL COMMENT '来源事件表名：tiktok_influencer_email_events / tiktok_influencer_agent_event / tiktok_advertiser_agent_event 等',
@@ -123,8 +131,30 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_conversation_messages (
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+  UNIQUE KEY uk_influencer_message_id (influencer_id, message_id),
   INDEX idx_influencer_time (influencer_id, sent_at),
   INDEX idx_campaign_time (campaign_id, sent_at),
-  INDEX idx_message_id (message_id)
+  INDEX idx_message_id (message_id),
+  INDEX idx_influencer_event_time (influencer_id, event_time DESC),
+  INDEX idx_trace_id (trace_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='红人对话记忆表（Bin 与红人的往来对话）';
+
+-- 红人发件附件表：用于存储“人工/Agent 发出邮件”的附件二进制内容
+CREATE TABLE IF NOT EXISTS tiktok_influencer_outbound_attachments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+
+  conversation_message_id BIGINT NULL COMMENT '发送成功后回填关联到 tiktok_influencer_conversation_messages.id',
+  dedupe_key VARCHAR(255) NOT NULL COMMENT '幂等键：outatt:{client_message_id}:{index}',
+
+  filename VARCHAR(512) NULL,
+  content_type VARCHAR(128) NULL,
+  size_bytes INT NULL,
+
+  content LONGBLOB NOT NULL COMMENT '附件二进制内容（原始 bytes）',
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uk_dedupe_key (dedupe_key),
+  INDEX idx_conversation_message_id (conversation_message_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='红人发件附件表（outbound）';
 

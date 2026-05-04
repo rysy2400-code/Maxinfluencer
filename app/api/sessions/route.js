@@ -3,6 +3,9 @@ import {
   createCampaignSession,
   getAllCampaignSessions,
 } from "../../../lib/db/campaign-session-dao.js";
+import { getAuthenticatedAdvertiserUser } from "../../../lib/auth/advertiser-auth-http.js";
+
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/sessions
@@ -13,6 +16,11 @@ import {
  */
 export async function GET(req) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status") || null;
     const limit = parseInt(searchParams.get("limit") || "50", 10);
@@ -21,6 +29,7 @@ export async function GET(req) {
       status,
       limit,
       includeMessages: false, // 列表只返回元数据，避免 messages/context 过大导致 DB/网络压力
+      advertiserUserId: auth.advertiserUserId,
     });
 
     return NextResponse.json({
@@ -64,6 +73,11 @@ export async function GET(req) {
  */
 export async function POST(req) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
     const body = await req.json();
     const { title, messages, context, status } = body;
 
@@ -83,6 +97,7 @@ export async function POST(req) {
       messages,
       context: context || {},
       status: status || "draft",
+      advertiserUserId: auth.advertiserUserId,
     });
 
     if (!result.success) {

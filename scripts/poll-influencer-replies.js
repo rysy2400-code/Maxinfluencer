@@ -17,6 +17,7 @@ import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { listRecentMessages } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { buildTraceIdFromInboundMessageId } from "../lib/utils/timeline-ids.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -223,6 +224,7 @@ async function pollOnce() {
 
         // 记录红人来信到对话记忆表（仅保存清洗后的最新回复内容）
         try {
+          const traceId = buildTraceIdFromInboundMessageId(msg.messageId);
           await logConversationMessage({
             influencerId,
             campaignId: null,
@@ -237,6 +239,27 @@ async function pollOnce() {
             sourceEventTable: "tiktok_influencer_email_events",
             sourceEventId: eventId,
             sentAt: msg.date || null,
+            eventType: "email_inbound",
+            eventTime: msg.date || new Date(),
+            actorType: "system",
+            traceId,
+            payload: {
+              kind: "email_inbound",
+              imap: {
+                uid: msg.uid || null,
+                receivedAt: msg.date || null,
+              },
+              email: {
+                from: msg.from || null,
+                to: msg.to || null,
+                subject: msg.subject || null,
+                messageId: msg.messageId || null,
+                inReplyTo: msg.inReplyTo || null,
+              },
+              attachmentsCount: Array.isArray(msg.attachments)
+                ? msg.attachments.length
+                : 0,
+            },
           });
         } catch (err) {
           console.error(

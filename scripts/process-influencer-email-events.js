@@ -16,6 +16,10 @@ import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt
 import { loadConversationHistoryForInfluencer } from "../lib/agents/influencer-agent.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
+import {
+  buildActionMessageId,
+  buildTraceIdFromInboundMessageId,
+} from "../lib/utils/timeline-ids.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -143,7 +147,7 @@ async function createCampaignAgentEvent({
   eventType,
   payload,
 }) {
-  await queryTikTok(
+  const r = await queryTikTok(
     `
     INSERT INTO tiktok_advertiser_agent_event (
       campaign_id,
@@ -156,6 +160,7 @@ async function createCampaignAgentEvent({
   `,
     [campaignId || null, influencerId || null, eventType, JSON.stringify(payload || {})]
   );
+  return r?.insertId || null;
 }
 
 async function handleOutboundEmails(decision, event, executions) {
@@ -191,6 +196,8 @@ async function handleOutboundEmails(decision, event, executions) {
     const subject =
       (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
     const body = email.body || email.bodyText || "";
+    const inboundMessageId = email.inReplyTo || event.message_id || null;
+    const traceId = buildTraceIdFromInboundMessageId(inboundMessageId);
 
     const headers = {
       "X-Maxin-Influencer-Id": influencerId || "",
@@ -204,14 +211,20 @@ async function handleOutboundEmails(decision, event, executions) {
       headers["References"] = ctx.references;
     }
 
-    // 直接发信
-    const result = await sendMail({
-      fromAccount,
-      to,
-      subject,
-      text: body,
-      headers,
-    });
+    // 直接发信（失败也要落时间线事件，方便排查）
+    let result = null;
+    let sendErr = null;
+    try {
+      result = await sendMail({
+        fromAccount,
+        to,
+        subject,
+        text: body,
+        headers,
+      });
+    } catch (err) {
+      sendErr = err;
+    }
 
     // 写入对话记忆表
     try {
@@ -234,11 +247,35 @@ async function handleOutboundEmails(decision, event, executions) {
         sourceEventTable: "tiktok_influencer_email_events",
         sourceEventId: event.id,
         sentAt: new Date(),
+        eventType: "email_outbound",
+        eventTime: new Date(),
+        actorType: "agent",
+        sendMode: "auto_send",
+        contentOrigin: "agent_generated",
+        traceId,
+        payload: {
+          kind: "email_outbound",
+          status: sendErr ? "failed" : "succeeded",
+          error: sendErr ? { message: sendErr?.message || String(sendErr) } : null,
+          email: {
+            to,
+            subject,
+            inReplyTo: inboundMessageId,
+            messageId: result?.messageId || null,
+          },
+        },
       });
     } catch (err) {
       console.error(
         "[ProcessInfluencerEmailEvents] 写入 tiktok_influencer_conversation_messages 失败:",
         err
+      );
+    }
+
+    if (sendErr) {
+      console.error(
+        "[ProcessInfluencerEmailEvents] sendMail 失败：",
+        sendErr?.message || sendErr
       );
     }
   }
@@ -271,12 +308,50 @@ async function handleAgentEvents(decision, event, executions) {
       createdAt: new Date().toISOString(),
     };
 
-    await createCampaignAgentEvent({
+    const advEventId = await createCampaignAgentEvent({
       campaignId,
       influencerId,
       eventType,
       payload,
     });
+
+    // 记录 agent_action 到时间线
+    try {
+      const inboundMessageId = event.message_id || null;
+      const traceId = buildTraceIdFromInboundMessageId(inboundMessageId);
+      const actionName = `write_adv_event:${eventType}`;
+      await logConversationMessage({
+        influencerId,
+        campaignId,
+        direction: "bin",
+        channel: "email",
+        fromEmail: null,
+        toEmail: null,
+        subject: null,
+        bodyText: `[agent_action] ${actionName}`,
+        messageId: buildActionMessageId(inboundMessageId, actionName),
+        sourceType: "influencer_agent_event",
+        sourceEventTable: "tiktok_advertiser_agent_event",
+        sourceEventId: advEventId,
+        sentAt: new Date(),
+        eventType: "agent_action",
+        eventTime: new Date(),
+        actorType: "agent",
+        traceId,
+        payload: {
+          actionName,
+          advertiserAgentEventId: advEventId,
+          advertiserEventType: eventType,
+          campaignId,
+          influencerId,
+        },
+      });
+    } catch (err) {
+      console.error(
+        "[ProcessInfluencerEmailEvents] 写入 agent_action 时间线失败:",
+        err
+      );
+    }
   }
 }
 
@@ -354,12 +429,50 @@ async function applyDecision(decision, event, executions) {
       createdAt: new Date().toISOString(),
     };
 
-    await createCampaignAgentEvent({
+    const advEventId = await createCampaignAgentEvent({
       campaignId,
       influencerId: exec.influencerId,
       eventType: payload.type,
       payload,
     });
+
+    // 记录 agent_action 到时间线（更新建议写入 advertiser agent event）
+    try {
+      const inboundMessageId = event.message_id || null;
+      const traceId = buildTraceIdFromInboundMessageId(inboundMessageId);
+      const actionName = `write_adv_event:${payload.type}`;
+      await logConversationMessage({
+        influencerId: exec.influencerId,
+        campaignId,
+        direction: "bin",
+        channel: "email",
+        fromEmail: null,
+        toEmail: null,
+        subject: null,
+        bodyText: `[agent_action] ${actionName}`,
+        messageId: buildActionMessageId(inboundMessageId, actionName),
+        sourceType: "influencer_agent_event",
+        sourceEventTable: "tiktok_advertiser_agent_event",
+        sourceEventId: advEventId,
+        sentAt: new Date(),
+        eventType: "agent_action",
+        eventTime: new Date(),
+        actorType: "agent",
+        traceId,
+        payload: {
+          actionName,
+          advertiserAgentEventId: advEventId,
+          advertiserEventType: payload.type,
+          campaignId,
+          influencerId: exec.influencerId,
+        },
+      });
+    } catch (err) {
+      console.error(
+        "[ProcessInfluencerEmailEvents] 写入 agent_action（applyDecision）失败:",
+        err
+      );
+    }
   }
 }
 

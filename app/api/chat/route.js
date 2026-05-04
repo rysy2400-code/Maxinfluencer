@@ -1,13 +1,31 @@
 import { NextResponse } from "next/server";
 import { AgentRouter } from "../../../lib/utils/agent-router.js";
+import { getAuthenticatedAdvertiserUser } from "../../../lib/auth/advertiser-auth-http.js";
+import { assertUserCanAccessSession } from "../../../lib/auth/session-access.js";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    }
+
     const body = await req.json();
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const rawContext = body.context || {};
     // 会话 ID 单独传参，避免写进 DB 的 context JSON；发布成功后会话需据此标记 published
     const sessionId = body.sessionId || rawContext.sessionId || null;
+    if (sessionId) {
+      const access = await assertUserCanAccessSession(sessionId, auth);
+      if (!access.ok) {
+        return NextResponse.json(
+          { error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+          { status: access.status }
+        );
+      }
+    }
     const context = sessionId ? { ...rawContext, sessionId } : { ...rawContext };
     const stream = body.stream !== false; // 默认启用流式传输
 

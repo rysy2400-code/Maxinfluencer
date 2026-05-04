@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "clean": "rm -rf .next node_modules/.cache",
     "dev": "next dev",
+    "dev:clean": "npm run clean && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -11,10 +13,12 @@
   "dependencies": {
     "@langchain/core": "^0.3.0",
     "@langchain/openai": "^0.3.0",
+    "bcryptjs": "^2.4.3",
     "cheerio": "^1.0.0-rc.12",
     "dotenv": "^17.3.1",
     "imapflow": "^1.0.187",
     "ioredis": "^5.4.1",
+    "jose": "^5.9.6",
     "langchain": "^0.3.0",
     "mysql2": "^3.6.5",
     "next": "14.2.5",

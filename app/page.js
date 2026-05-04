@@ -105,6 +105,16 @@ export default function HomePage() {
   const [loadingSessions, setLoadingSessions] = useState(false); // 加载草稿列表状态
   const [sessionsError, setSessionsError] = useState(null); // 加载草稿列表的错误信息
 
+  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin } | null
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginCompany, setLoginCompany] = useState("");
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginErr, setLoginErr] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const pendingSendRef = useRef(null); // 未登录拦截发送后，登录成功自动重试
+
   // 输入框自适应高度（欢迎页大输入框 + 底部输入框共用同一输入值）
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
@@ -354,7 +364,16 @@ export default function HomePage() {
       }
 
       // 1）加载草稿
-      const draftResponse = await fetch('/api/sessions?status=draft&limit=50');
+      const draftResponse = await fetch('/api/sessions?status=draft&limit=50', {
+        credentials: 'include',
+      });
+      if (draftResponse.status === 401) {
+        setCampaignSessions([]);
+        setPublishedSessions([]);
+        setAuthUser(null);
+        if (!silent) setLoadingSessions(false);
+        return;
+      }
       if (!draftResponse.ok) {
         const errorData = await draftResponse.json().catch(() => ({}));
         throw new Error(errorData.error || `HTTP ${draftResponse.status}: ${draftResponse.statusText}`);
@@ -364,7 +383,9 @@ export default function HomePage() {
       // 2）加载已发布（出错不影响草稿展示）
       let publishedData = { success: false, sessions: [] };
       try {
-        const publishedResponse = await fetch('/api/sessions?status=published&limit=50');
+        const publishedResponse = await fetch('/api/sessions?status=published&limit=50', {
+          credentials: 'include',
+        });
         if (publishedResponse.ok) {
           publishedData = await publishedResponse.json();
         }
@@ -401,13 +422,33 @@ export default function HomePage() {
     }
   };
 
+  // 登录态（HttpOnly Cookie）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/auth/me", { credentials: "include" });
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled && d.success && d.user) setAuthUser(d.user);
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) setAuthChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authChecked) return;
+    loadCampaignSessions();
+  }, [authChecked]);
+
   // 客户端挂载后从 localStorage 恢复数据，并加载草稿列表
   useEffect(() => {
     setMounted(true);
-    
-    // 加载草稿列表
-    loadCampaignSessions();
-    
+
     if (typeof window !== "undefined") {
       const savedVersion = localStorage.getItem(STORAGE_KEY_VERSION);
       
@@ -495,6 +536,7 @@ export default function HomePage() {
       
       const response = await fetch(`/api/sessions/${currentSessionId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title,
@@ -809,13 +851,23 @@ export default function HomePage() {
   async function handleSend(e) {
     e.preventDefault();
     if (!input.trim() || loading) return;
+    if (!authChecked) return;
+    const trimmed = input.trim();
+    if (!authUser) {
+      pendingSendRef.current = trimmed;
+      setLoginOpen(true);
+      return;
+    }
+    await runChatSend(trimmed);
+  }
 
+  async function runChatSend(trimmedContent) {
     // 用户发送消息时，启用自动滚动
     shouldAutoScrollRef.current = true;
 
     const userMessage = {
       role: "user",
-      content: input.trim()
+      content: trimmedContent
     };
 
     const nextMessages = [...messages, userMessage];
@@ -852,9 +904,10 @@ export default function HomePage() {
       // 如果还没有会话 ID，创建新会话
       if (!sessionIdForChat) {
         try {
-          const title = input.trim().slice(0, 50) || '新 Campaign';
+          const title = trimmedContent.slice(0, 50) || '新 Campaign';
           const createRes = await fetch('/api/sessions', {
             method: 'POST',
+            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               title,
@@ -891,6 +944,7 @@ export default function HomePage() {
 
       const res = await fetch("/api/chat", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json"
         },
@@ -1770,7 +1824,7 @@ export default function HomePage() {
       }
       
       // 加载新会话
-      const response = await fetch(`/api/sessions/${sessionId}`);
+      const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
       const data = await response.json();
       if (data.success && data.session) {
         setCurrentSessionId(sessionId);
@@ -1791,6 +1845,7 @@ export default function HomePage() {
     try {
       const response = await fetch(`/api/sessions/${sessionId}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       let data = {};
       try {
@@ -1824,6 +1879,7 @@ export default function HomePage() {
     try {
       const response = await fetch(`/api/sessions/${sessionId}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       let data = {};
       try {
@@ -1846,6 +1902,57 @@ export default function HomePage() {
     } catch (error) {
       console.error('[HomePage] 删除已发布 campaign 失败:', error);
       window.alert(error?.message || '删除请求异常，请稍后重试');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch (_) {
+      /* ignore */
+    }
+    setAuthUser(null);
+    setCurrentSessionId(null);
+    setMessages(defaultMessage);
+    setContext({ workflowState: "idle" });
+    setCampaignSessions([]);
+    setPublishedSessions([]);
+  };
+
+  const submitLogin = async (e) => {
+    e.preventDefault();
+    setLoginBusy(true);
+    setLoginErr("");
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: loginCompany.trim(),
+          username: loginUser.trim(),
+          password: loginPass,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        setLoginErr(data.error || "登录失败");
+        setLoginBusy(false);
+        return;
+      }
+      setAuthUser(data.user);
+      setLoginPass("");
+      setLoginBusy(false);
+      setLoginOpen(false);
+      await loadCampaignSessions();
+      const pending = pendingSendRef.current;
+      pendingSendRef.current = null;
+      if (pending) {
+        await runChatSend(pending);
+      }
+    } catch (err) {
+      setLoginErr(err?.message || "网络错误");
+      setLoginBusy(false);
     }
   };
 
@@ -2639,6 +2746,48 @@ export default function HomePage() {
             </>
           )}
         </div>
+        {authUser && (
+          <div
+            style={{
+              borderTop: "1px solid #E5E7EB",
+              padding: "10px 12px",
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleLogout}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                fontSize: 12,
+                color: "#6B7280",
+                background: "#FFFFFF",
+                border: "1px solid #E5E7EB",
+                borderRadius: 8,
+                cursor: "pointer",
+              }}
+            >
+              退出登录
+            </button>
+            {authUser.isAdmin ? (
+              <a
+                href="/admin"
+                style={{
+                  fontSize: 11,
+                  color: "#3B82F6",
+                  textAlign: "center",
+                  textDecoration: "none",
+                }}
+              >
+                会话管理（管理员）
+              </a>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* 中间和右侧面板容器 */}
@@ -3845,6 +3994,141 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {loginOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(15, 23, 42, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+        >
+          <form
+            onSubmit={submitLogin}
+            style={{
+              width: "100%",
+              maxWidth: 400,
+              background: "#0F172A",
+              border: "1px solid #334155",
+              borderRadius: 16,
+              padding: "24px 22px",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+            }}
+          >
+            <div style={{ color: "#F8FAFC", fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
+              登录 Maxin AI
+            </div>
+            <div style={{ color: "#94A3B8", fontSize: 12, marginBottom: 20, lineHeight: 1.5 }}>
+              请输入对接时提供的公司名、用户名与 6 位数字密码
+            </div>
+            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>
+              公司名（与开户展示名一致）
+            </label>
+            <input
+              value={loginCompany}
+              onChange={(e) => setLoginCompany(e.target.value)}
+              autoComplete="organization"
+              style={{
+                width: "100%",
+                marginBottom: 14,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #334155",
+                background: "#020617",
+                color: "#F8FAFC",
+                fontSize: 14,
+                boxSizing: "border-box",
+              }}
+            />
+            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>用户名</label>
+            <input
+              value={loginUser}
+              onChange={(e) => setLoginUser(e.target.value)}
+              autoComplete="username"
+              style={{
+                width: "100%",
+                marginBottom: 14,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #334155",
+                background: "#020617",
+                color: "#F8FAFC",
+                fontSize: 14,
+                boxSizing: "border-box",
+              }}
+            />
+            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>
+              密码（6 位数字）
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              value={loginPass}
+              onChange={(e) => setLoginPass(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              autoComplete="current-password"
+              style={{
+                width: "100%",
+                marginBottom: 8,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #334155",
+                background: "#020617",
+                color: "#F8FAFC",
+                fontSize: 14,
+                boxSizing: "border-box",
+              }}
+            />
+            {loginErr ? (
+              <div style={{ color: "#F87171", fontSize: 12, marginTop: 4 }}>{loginErr}</div>
+            ) : null}
+            <div style={{ display: "flex", gap: 10, marginTop: 18, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginOpen(false);
+                  setLoginErr("");
+                  pendingSendRef.current = null;
+                }}
+                style={{
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  color: "#94A3B8",
+                  background: "transparent",
+                  border: "1px solid #475569",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                disabled={loginBusy}
+                style={{
+                  padding: "8px 18px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#FFFFFF",
+                  background: loginBusy ? "#475569" : "#3B82F6",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: loginBusy ? "not-allowed" : "pointer",
+                }}
+              >
+                {loginBusy ? "登录中…" : "登录"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <style jsx>{`
         @keyframes fadeIn {
