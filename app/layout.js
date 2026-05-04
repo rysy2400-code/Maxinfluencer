@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Maxinfluencer Agent",
   description: "Chat with Bin, your influencer marketing sales lead."
