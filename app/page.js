@@ -154,6 +154,29 @@ const STORAGE_KEY_CURRENT_SESSION_ID = "maxinfluencer_current_session_id";
 const STORAGE_KEY_VERSION = "maxinfluencer_message_version";
 const MESSAGE_VERSION = "v2.0"; // 修改 defaultMessage 时更新此版本号
 
+function cloneWelcomeMessages() {
+  return [
+    {
+      role: "assistant",
+      name: "Bin",
+      content:
+        "您好，我是Bin，告诉我您想推广的产品链接，我来帮您发布campaign！",
+    },
+  ];
+}
+
+/** 清除本机持久化的聊天状态（换账号登录 / 会话 id 无效时避免沿用他人超长对话导致 POST 创建会话失败） */
+function clearChatPersistenceKeys() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(STORAGE_KEY_MESSAGES);
+    localStorage.removeItem(STORAGE_KEY_CONTEXT);
+    localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 工作笔记条目去重键：优先 taskId；缺失时勿仅用 keyword（多轮同词会误合并） */
 function workNoteMergeKey(note) {
   if (!note || typeof note !== "object") return "";
@@ -169,14 +192,7 @@ function workNoteMergeKey(note) {
 
 export default function HomePage() {
   // 统一的初始状态（服务端和客户端一致）
-  const defaultMessage = [
-    {
-      role: "assistant",
-      name: "Bin",
-      content:
-        "您好，我是Bin，告诉我您想推广的产品链接，我来帮您发布campaign！"
-    }
-  ];
+  const defaultMessage = cloneWelcomeMessages();
 
 
   const [messages, setMessages] = useState(defaultMessage);
@@ -612,6 +628,33 @@ export default function HomePage() {
     if (!authChecked) return;
     loadCampaignSessions();
   }, [authChecked]);
+
+  // 已登录后：若 localStorage 恢复的会话不属于当前账号（或已删除），清空以免沿用他人会话 id / 超长 messages 导致创建会话失败
+  useEffect(() => {
+    if (!authChecked || !authUser || !currentSessionId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/sessions/${currentSessionId}`, { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok && data.success && data.session) return;
+        clearChatPersistenceKeys();
+        setCurrentSessionId(null);
+        setMessages(cloneWelcomeMessages());
+        setContext({ workflowState: "idle" });
+      } catch {
+        if (cancelled) return;
+        clearChatPersistenceKeys();
+        setCurrentSessionId(null);
+        setMessages(cloneWelcomeMessages());
+        setContext({ workflowState: "idle" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, authUser, currentSessionId]);
 
   // 客户端挂载后从 localStorage 恢复数据，并加载草稿列表
   useEffect(() => {
@@ -1102,19 +1145,35 @@ export default function HomePage() {
               status: 'draft',
             }),
           });
-          const createData = await createRes.json();
-          if (createData.success) {
+          let createData = {};
+          try {
+            createData = await createRes.json();
+          } catch {
+            createData = {};
+          }
+          if (createData.success && createData.session?.id) {
             sessionIdForChat = createData.session.id;
             setCurrentSessionId(createData.session.id);
             await loadCampaignSessions();
+          } else {
+            const errMsg =
+              createData.error ||
+              createData.message ||
+              (!createRes.ok ? `HTTP ${createRes.status}` : "创建会话未返回成功");
+            console.error("[HomePage] 创建会话失败:", errMsg, createRes.status, createData);
+            window.alert(
+              `无法创建会话，不能发起对话。\n\n原因：${errMsg}\n\n若刚换账号登录，请关闭本提示后重试；仍失败请联系管理员查看服务日志。`
+            );
           }
         } catch (error) {
           console.error('[HomePage] 创建会话失败:', error);
+          window.alert(
+            `无法创建会话（网络或服务器异常）：${error?.message || String(error)}\n\n请稍后重试。`
+          );
         }
       }
 
       if (!sessionIdForChat) {
-        window.alert('无法创建或解析会话 ID，不能发起对话（发布时需要 sessionId 对齐数据库）。请刷新页面后重试。');
         setMessages((prev) => {
           const updated = [...prev];
           if (updated[assistantMessageIndex]) {
@@ -2232,7 +2291,8 @@ export default function HomePage() {
     setSessionRowMenuId(null);
     setAuthUser(null);
     setCurrentSessionId(null);
-    setMessages(defaultMessage);
+    clearChatPersistenceKeys();
+    setMessages(cloneWelcomeMessages());
     setContext({ workflowState: "idle" });
     setCampaignSessions([]);
     setPublishedSessions([]);
@@ -2263,6 +2323,12 @@ export default function HomePage() {
       setLoginPass("");
       setLoginBusy(false);
       setLoginOpen(false);
+      // 换账号登录：勿沿用浏览器里上一用户的会话 id / 超长 messages（会导致 POST /api/sessions 失败或误用他人会话）
+      clearChatPersistenceKeys();
+      setCurrentSessionId(null);
+      setMessages(cloneWelcomeMessages());
+      setContext({ workflowState: "idle" });
+      setImageErrors({});
       await loadCampaignSessions();
       const pending = pendingSendRef.current;
       pendingSendRef.current = null;
