@@ -147,7 +147,8 @@ try {
 
 Write-Host "[deploy-web] next build (node --max-old-space-size + NODE_OPTIONS for workers)..."
 $prevNodeOpts = $env:NODE_OPTIONS
-$heap = "--max-old-space-size=12288"
+# Windows 上 next build 静态 worker 易 OOM；与手动构建一致提高到 20GB
+$heap = "--max-old-space-size=20480"
 $env:NODE_OPTIONS = $heap
 $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $nextCli = Join-Path $Root "node_modules\next\dist\bin\next"
