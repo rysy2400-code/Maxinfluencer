@@ -145,14 +145,20 @@ try {
   throw
 }
 
-Write-Host "[deploy-web] npm run build..."
-# Next.js on small Windows VMs can hit V8 OOM during static generation without a higher limit.
+Write-Host "[deploy-web] next build (node --max-old-space-size + NODE_OPTIONS for workers)..."
 $prevNodeOpts = $env:NODE_OPTIONS
-if ($env:NODE_OPTIONS -notmatch "max-old-space-size") {
-  $env:NODE_OPTIONS = $(if ($env:NODE_OPTIONS) { "$env:NODE_OPTIONS --max-old-space-size=8192" } else { "--max-old-space-size=8192" })
+$heap = "--max-old-space-size=12288"
+$env:NODE_OPTIONS = $heap
+$nodeExe = (Get-Command node -ErrorAction Stop).Source
+$nextCli = Join-Path $Root "node_modules\next\dist\bin\next"
+if (-not (Test-Path $nextCli)) {
+  throw "next CLI not found: $nextCli (npm ci incomplete?)"
 }
 try {
-  Invoke-Npm @("run", "build")
+  & $nodeExe $heap $nextCli "build"
+  if ($LASTEXITCODE -ne 0) {
+    throw "next build failed (exit $LASTEXITCODE)"
+  }
 } finally {
   $env:NODE_OPTIONS = $prevNodeOpts
 }
