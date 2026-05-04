@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { ChatSendUpIcon } from "../../chat-send-up-icon";
 
 function formatTime(v) {
   if (!v) return "";
@@ -777,11 +778,15 @@ export default function InfluencerChatPage() {
                   background: "#07C160",
                   color: "#fff",
                   borderRadius: 8,
-                  padding: "10px 20px",
+                  padding: "10px 16px",
                   fontWeight: 800,
                   cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
                 }}
               >
+                {!sending ? <ChatSendUpIcon size={18} /> : null}
                 {sending ? "发送中…" : "发送"}
               </button>
             </div>

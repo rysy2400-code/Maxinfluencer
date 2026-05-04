@@ -50,20 +50,31 @@ export async function GET(req, { params }) {
       [campaignId, limit]
     );
 
+    // mysql2 行字段多为小写蛇形（与 AS 大小写无关），勿用 r.taskId 等驼峰否则全为 undefined，
+    // 前端会退化为仅按 keyword 去重，同一关键词多轮任务会合并成一条（重登后只剩「最新」）。
     const notes = (rows || [])
-      .map((r) => ({
-        taskId: r.taskId,
-        time: r.noteTime ? new Date(r.noteTime).toISOString() : null,
-        keyword: r.keyword || "",
-        reasonText:
-          (typeof r.keywordReason === "string" && r.keywordReason.trim()) ||
-          "该关键词与当前 campaign 的目标受众方向更贴合。",
-        extractedCount:
-          r.extractedCount == null ? null : Number(r.extractedCount || 0),
-        matchedCount:
-          r.matchedCount == null ? null : Number(r.matchedCount || 0),
-        status: mapTaskStatusToNoteStatus(r.taskStatus),
-      }))
+      .map((r) => {
+        const taskIdRaw = r.taskId ?? r.taskid ?? r.TASK_ID;
+        const keywordRaw = r.keyword ?? r.KEYWORD ?? "";
+        const noteTimeRaw = r.noteTime ?? r.notetime ?? r.NOTE_TIME;
+        const taskStatusRaw = r.taskStatus ?? r.taskstatus ?? r.TASK_STATUS;
+        const keywordReasonRaw = r.keywordReason ?? r.keywordreason ?? r.KEYWORD_REASON;
+        const extractedRaw = r.extractedCount ?? r.extractedcount ?? r.EXTRACTED_COUNT;
+        const matchedRaw = r.matchedCount ?? r.matchedcount ?? r.MATCHED_COUNT;
+        return {
+          taskId: taskIdRaw != null ? Number(taskIdRaw) : null,
+          time: noteTimeRaw ? new Date(noteTimeRaw).toISOString() : null,
+          keyword: String(keywordRaw || ""),
+          reasonText:
+            (typeof keywordReasonRaw === "string" && keywordReasonRaw.trim()) ||
+            "该关键词与当前 campaign 的目标受众方向更贴合。",
+          extractedCount:
+            extractedRaw == null ? null : Number(extractedRaw || 0),
+          matchedCount:
+            matchedRaw == null ? null : Number(matchedRaw || 0),
+          status: mapTaskStatusToNoteStatus(taskStatusRaw),
+        };
+      })
       .filter((x) => x.keyword);
 
     return NextResponse.json({

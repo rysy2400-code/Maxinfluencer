@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { ChatSendUpIcon } from "./chat-send-up-icon";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -42,10 +43,129 @@ function useAutoResizeTextArea(value, maxHeight = 220) {
   return ref;
 }
 
+/** 侧栏会话行「⋯」更多菜单（悬停显隐由父级控制），对齐 DeepSeek 式交互 */
+function CampaignSessionRowMenu({ sessionId, showTrigger, menuOpen, onToggleMenu, onRename, onDelete }) {
+  return (
+    <div
+      data-session-menu-root={sessionId}
+      style={{
+        position: "relative",
+        flexShrink: 0,
+        alignSelf: "center",
+        opacity: showTrigger ? 1 : 0,
+        pointerEvents: showTrigger ? "auto" : "none",
+        transition: "opacity 0.12s ease",
+      }}
+    >
+      <button
+        type="button"
+        aria-label="更多操作"
+        aria-expanded={menuOpen}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMenu(e);
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "2px 6px",
+          color: "#6B7280",
+          fontSize: 15,
+          lineHeight: 1,
+          borderRadius: 6,
+        }}
+      >
+        …
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "100%",
+            marginTop: 4,
+            minWidth: 128,
+            background: "#FFFFFF",
+            border: "1px solid #E5E7EB",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+            zIndex: 80,
+            padding: "4px 0",
+            fontSize: 13,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRename();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#111827",
+              fontSize: 13,
+            }}
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#DC2626",
+              fontSize: 13,
+            }}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const STORAGE_KEY_MESSAGES = "maxinfluencer_chat_messages";
 const STORAGE_KEY_CONTEXT = "maxinfluencer_chat_context";
+const STORAGE_KEY_CURRENT_SESSION_ID = "maxinfluencer_current_session_id";
 const STORAGE_KEY_VERSION = "maxinfluencer_message_version";
 const MESSAGE_VERSION = "v2.0"; // 修改 defaultMessage 时更新此版本号
+
+/** 工作笔记条目去重键：优先 taskId；缺失时勿仅用 keyword（多轮同词会误合并） */
+function workNoteMergeKey(note) {
+  if (!note || typeof note !== "object") return "";
+  const tid = note.taskId ?? note.task_id;
+  if (tid != null && String(tid).trim() !== "") {
+    const n = Number(tid);
+    if (!Number.isNaN(n)) return `id:${n}`;
+  }
+  const kw = String(note.keyword ?? "").trim();
+  const t = String(note.time ?? "");
+  return `kw:${kw}@${t}`;
+}
 
 export default function HomePage() {
   // 统一的初始状态（服务端和客户端一致）
@@ -104,6 +224,15 @@ export default function HomePage() {
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
   const [loadingSessions, setLoadingSessions] = useState(false); // 加载草稿列表状态
   const [sessionsError, setSessionsError] = useState(null); // 加载草稿列表的错误信息
+  const [sessionRowHoverId, setSessionRowHoverId] = useState(null);
+  const [sessionRowMenuId, setSessionRowMenuId] = useState(null);
+  const [renamingSessionId, setRenamingSessionId] = useState(null);
+  const [renameInputValue, setRenameInputValue] = useState("");
+  const renameInputRef = useRef(null);
+  const renameBaselineRef = useRef({ id: null, title: "" });
+  const renameValueRef = useRef("");
+  const renamingSessionIdRef = useRef(null);
+  const ignoreRenameBlurRef = useRef(false);
 
   const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin } | null
   const [authChecked, setAuthChecked] = useState(false);
@@ -114,6 +243,44 @@ export default function HomePage() {
   const [loginErr, setLoginErr] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const pendingSendRef = useRef(null); // 未登录拦截发送后，登录成功自动重试
+  /** 已登录即显示左侧栏（退出 / 管理员入口在侧栏底部，不再使用顶栏） */
+  const showCampaignSidebar = Boolean(authUser);
+  const prevSidForSidebarRef = useRef(null);
+
+  // 从「无会话」进入「有会话」时左侧栏默认展开
+  useEffect(() => {
+    if (authUser && currentSessionId != null && prevSidForSidebarRef.current == null) {
+      setSidebarCollapsed(false);
+    }
+    prevSidForSidebarRef.current = currentSessionId;
+  }, [authUser, currentSessionId]);
+
+  useEffect(() => {
+    if (!sessionRowMenuId) return;
+    const onDown = (e) => {
+      const root = document.querySelector(`[data-session-menu-root="${sessionRowMenuId}"]`);
+      if (root && !root.contains(e.target)) {
+        setSessionRowMenuId(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sessionRowMenuId]);
+
+  useEffect(() => {
+    renamingSessionIdRef.current = renamingSessionId;
+  }, [renamingSessionId]);
+
+  useEffect(() => {
+    if (!renamingSessionId) return;
+    const id = requestAnimationFrame(() => {
+      const el = renameInputRef.current;
+      if (!el) return;
+      el.focus();
+      el.select();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [renamingSessionId]);
 
   // 输入框自适应高度（欢迎页大输入框 + 底部输入框共用同一输入值）
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
@@ -234,10 +401,8 @@ export default function HomePage() {
           const note = data.data;
           setKeywordWorkNotes((prev) => {
             const merged = [...(Array.isArray(prev) ? prev : [])];
-            const key = String(note.taskId || note.keyword || "");
-            const idx = merged.findIndex(
-              (x) => String(x?.taskId || x?.keyword || "") === key
-            );
+            const key = workNoteMergeKey(note);
+            const idx = merged.findIndex((x) => workNoteMergeKey(x) === key);
             if (idx >= 0) {
               merged[idx] = { ...merged[idx], ...note };
             } else {
@@ -264,10 +429,8 @@ export default function HomePage() {
             const currentThinking = updated[idx].thinking || {};
             const existing = Array.isArray(currentThinking.workNotes) ? currentThinking.workNotes : [];
             const merged = [...existing];
-            const key = String(note.taskId || note.keyword || "");
-            const foundIdx = merged.findIndex(
-              (x) => String(x?.taskId || x?.keyword || "") === key
-            );
+            const key = workNoteMergeKey(note);
+            const foundIdx = merged.findIndex((x) => workNoteMergeKey(x) === key);
             if (foundIdx >= 0) {
               merged[foundIdx] = { ...merged[foundIdx], ...note };
             } else {
@@ -355,8 +518,9 @@ export default function HomePage() {
     }
   };
 
-  // 加载 Campaign 会话列表（草稿 + 已发布）
+  // 加载 Campaign 会话列表（草稿 + 已发布）；成功时返回最新列表供删除后切换会话等逻辑使用
   const loadCampaignSessions = async ({ silent = false } = {}) => {
+    const fail = { ok: false, drafts: [], published: [] };
     try {
       if (!silent) {
         setLoadingSessions(true);
@@ -371,8 +535,16 @@ export default function HomePage() {
         setCampaignSessions([]);
         setPublishedSessions([]);
         setAuthUser(null);
+        setCurrentSessionId(null);
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
+          }
+        } catch (_) {
+          /* ignore */
+        }
         if (!silent) setLoadingSessions(false);
-        return;
+        return { ...fail, loggedOut: true };
       }
       if (!draftResponse.ok) {
         const errorData = await draftResponse.json().catch(() => ({}));
@@ -394,31 +566,27 @@ export default function HomePage() {
       }
 
       if (draftData.success) {
-        setCampaignSessions(draftData.sessions || []);
-        if (publishedData.success) {
-          setPublishedSessions(publishedData.sessions || []);
-        } else {
-          setPublishedSessions([]);
-        }
-      } else {
-        // 如果是表不存在的错误，显示更友好的提示
-        if (draftData.code === 'TABLE_NOT_EXISTS') {
-          throw new Error('数据库表未创建，请先执行创建表的 SQL');
-        }
-        throw new Error(draftData.error || '获取草稿列表失败');
+        const drafts = draftData.sessions || [];
+        const published = publishedData.success ? (publishedData.sessions || []) : [];
+        setCampaignSessions(drafts);
+        setPublishedSessions(published);
+        if (!silent) setLoadingSessions(false);
+        return { ok: true, drafts, published };
       }
+      // 如果是表不存在的错误，显示更友好的提示
+      if (draftData.code === 'TABLE_NOT_EXISTS') {
+        throw new Error('数据库表未创建，请先执行创建表的 SQL');
+      }
+      throw new Error(draftData.error || '获取草稿列表失败');
     } catch (error) {
       console.error('[HomePage] 加载会话列表失败:', error);
       if (!silent) {
         setSessionsError(error.message || '加载失败，请检查数据库连接');
-        // 即使失败也设置空数组，避免显示错误时还显示"暂无草稿"
         setCampaignSessions([]);
         setPublishedSessions([]);
       }
-    } finally {
-      if (!silent) {
-        setLoadingSessions(false);
-      }
+      if (!silent) setLoadingSessions(false);
+      return fail;
     }
   };
 
@@ -458,6 +626,7 @@ export default function HomePage() {
         try {
           localStorage.removeItem(STORAGE_KEY_MESSAGES);
           localStorage.removeItem(STORAGE_KEY_CONTEXT);
+          localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
           localStorage.setItem(STORAGE_KEY_VERSION, MESSAGE_VERSION);
         } catch (error) {
           console.error('[HomePage] 清除 localStorage 失败:', error);
@@ -516,30 +685,48 @@ export default function HomePage() {
       } catch (error) {
         console.error("[HomePage] 读取上下文数据失败:", error);
       }
+
+      // 恢复当前选中的会话 ID（与消息/上下文一并持久化；仅内存会导致刷新后侧栏消失）
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY_CURRENT_SESSION_ID);
+        if (raw) {
+          const sid = String(raw).trim();
+          if (sid.length > 0 && sid.length <= 128) {
+            setCurrentSessionId(sid);
+          }
+        }
+      } catch (e) {
+        console.error("[HomePage] 恢复当前会话 ID 失败:", e);
+      }
     }
   }, []);
 
+  // 将当前会话 ID 写入 localStorage（须在客户端 mounted 之后，避免与首次恢复竞态清空）
+  useEffect(() => {
+    if (typeof window === "undefined" || !mounted) return;
+    try {
+      if (currentSessionId) {
+        localStorage.setItem(STORAGE_KEY_CURRENT_SESSION_ID, String(currentSessionId));
+      } else {
+        localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
+      }
+    } catch (e) {
+      console.warn("[HomePage] 同步当前会话 ID 到 localStorage 失败:", e);
+    }
+  }, [currentSessionId, mounted]);
+
   // 保存当前会话到后端（如果存在 currentSessionId）
   // options.reloadSessions: 是否在保存成功后刷新左侧会话列表（默认 false，避免每次回复造成左侧闪烁）
+  // 不传 title：标题仅由创建会话、侧栏重命名等显式写入；避免保存消息/切换会话时按首条用户消息覆盖改名
   const saveCurrentSession = React.useCallback(async (options = { reloadSessions: false }) => {
     if (!currentSessionId) return;
     
     try {
-      // 生成标题（从第一条用户消息提取，或使用默认标题）
-      let title = '';
-      const firstUserMessage = messages.find(m => m.role === 'user');
-      if (firstUserMessage && firstUserMessage.content) {
-        title = firstUserMessage.content.slice(0, 50);
-      } else {
-        title = '新 Campaign';
-      }
-      
       const response = await fetch(`/api/sessions/${currentSessionId}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title,
           messages: messages.slice(-50), // 只保存最近 50 条
           context,
         }),
@@ -633,6 +820,7 @@ export default function HomePage() {
             try {
               localStorage.removeItem(STORAGE_KEY_MESSAGES);
               localStorage.removeItem(STORAGE_KEY_CONTEXT);
+              localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
             } catch (clearError) {
               console.error('[HomePage] 无法清除 localStorage:', clearError);
             }
@@ -796,10 +984,8 @@ export default function HomePage() {
         setKeywordWorkNotes((prev) => {
           const merged = [...(Array.isArray(prev) ? prev : [])];
           for (const note of incoming) {
-            const key = String(note?.taskId || note?.keyword || "");
-            const idx = merged.findIndex(
-              (x) => String(x?.taskId || x?.keyword || "") === key
-            );
+            const key = workNoteMergeKey(note);
+            const idx = merged.findIndex((x) => workNoteMergeKey(x) === key);
             if (idx >= 0) {
               merged[idx] = { ...merged[idx], ...note };
             } else {
@@ -1796,30 +1982,52 @@ export default function HomePage() {
     messages[0].role === "assistant" &&
     messages[0].name === "Bin";
 
-  // 发布 Campaign：仅返回首页，新建对话，不改变任何会话的草稿 / 已发布状态
+  // 仅已发布 campaign 展示「Bin的电脑」；草稿/发布对话阶段中间栏占满
+  const showBinComputerPanel = !isEmptyState && isExecutionPhaseGlobal;
+
+  // 新建一条服务端草稿并进入对话区（不再进入无会话的欢迎顶栏页）
+  async function createDraftSessionAndActivate() {
+    const createRes = await fetch("/api/sessions", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "新 Campaign",
+        messages: defaultMessage.map((m) => ({ ...m })),
+        context: { workflowState: "idle" },
+        status: "draft",
+      }),
+    });
+    const createData = await createRes.json();
+    if (!createData.success) {
+      throw new Error(createData.error || "创建草稿失败");
+    }
+    setCurrentSessionId(createData.session.id);
+    setMessages(createData.session.messages || defaultMessage);
+    setContext(createData.session.context || { workflowState: "idle" });
+    setImageErrors({});
+    setSidebarCollapsed(false);
+    await loadCampaignSessions({ silent: true });
+  }
+
+  // 发布 Campaign：先按需保存当前草稿，再创建并进入新草稿
   const handleCreateNewSession = async () => {
     try {
-      // 如果当前有会话且不是空状态，仅保存为草稿，不修改 status
       if (currentSessionId && !isEmptyState) {
         await saveCurrentSession();
       }
-
-      // 回到首页空对话状态：当前编辑的会话仍然是草稿，已发布会话保持已发布
-      setCurrentSessionId(null);
-      setMessages(defaultMessage);
-      setContext({ workflowState: 'idle' });
-      await loadCampaignSessions();
+      await createDraftSessionAndActivate();
     } catch (error) {
-      console.error('[HomePage] 处理发布 Campaign 点击失败:', error);
+      console.error("[HomePage] 处理发布 Campaign 点击失败:", error);
+      window.alert(error?.message || "创建失败");
     }
   };
 
-  // 切换到指定会话
-  const handleSwitchSession = async (sessionId) => {
+  // 切换到指定会话（skipSave：当前会话已删除等情况，勿对已失效 id 执行 PUT）
+  const handleSwitchSession = async (sessionId, opts = {}) => {
+    const skipSave = Boolean(opts.skipSave);
     try {
-      // 先保存当前会话
-      if (currentSessionId && currentSessionId !== sessionId) {
-        // 切换会话时无需刷新左侧列表，避免视觉闪烁
+      if (!skipSave && currentSessionId && currentSessionId !== sessionId) {
         await saveCurrentSession({ reloadSessions: false });
       }
       
@@ -1838,8 +2046,9 @@ export default function HomePage() {
 
   // 删除会话
   const handleDeleteSession = async (sessionId, e) => {
-    e.stopPropagation(); // 阻止触发切换会话
-    
+    if (e?.stopPropagation) e.stopPropagation();
+    setSessionRowMenuId((open) => (open === sessionId ? null : open));
+
     if (!confirm('确定要删除这个草稿吗？')) return;
     
     try {
@@ -1859,12 +2068,24 @@ export default function HomePage() {
         window.alert(msg);
         return;
       }
-      if (sessionId === currentSessionId) {
-        setCurrentSessionId(null);
-        setMessages(defaultMessage);
-        setContext({ workflowState: 'idle' });
+      const wasCurrent = sessionId === currentSessionId;
+      const lists = await loadCampaignSessions();
+      if (wasCurrent && lists.ok) {
+        const nextId = lists.drafts[0]?.id || lists.published[0]?.id;
+        if (nextId) {
+          await handleSwitchSession(nextId, { skipSave: true });
+        } else {
+          await createDraftSessionAndActivate();
+        }
+      } else if (wasCurrent && !lists.ok) {
+        try {
+          await createDraftSessionAndActivate();
+        } catch (_) {
+          setCurrentSessionId(null);
+          setMessages(defaultMessage);
+          setContext({ workflowState: "idle" });
+        }
       }
-      await loadCampaignSessions();
     } catch (error) {
       console.error('[HomePage] 删除会话失败:', error);
       window.alert(error?.message || '删除请求异常，请稍后重试');
@@ -1872,7 +2093,8 @@ export default function HomePage() {
   };
 
   const handleDeletePublishedSession = async (sessionId, e) => {
-    e.stopPropagation();
+    if (e?.stopPropagation) e.stopPropagation();
+    setSessionRowMenuId((open) => (open === sessionId ? null : open));
 
     if (!confirm('确定要删除这个已发布的 Campaign 吗？删除后不可恢复。')) return;
 
@@ -1893,16 +2115,111 @@ export default function HomePage() {
         window.alert(msg);
         return;
       }
-      if (sessionId === currentSessionId) {
-        setCurrentSessionId(null);
-        setMessages(defaultMessage);
-        setContext({ workflowState: 'idle' });
+      const wasCurrent = sessionId === currentSessionId;
+      const lists = await loadCampaignSessions();
+      if (wasCurrent && lists.ok) {
+        const nextId = lists.drafts[0]?.id || lists.published[0]?.id;
+        if (nextId) {
+          await handleSwitchSession(nextId, { skipSave: true });
+        } else {
+          await createDraftSessionAndActivate();
+        }
+      } else if (wasCurrent && !lists.ok) {
+        try {
+          await createDraftSessionAndActivate();
+        } catch (_) {
+          setCurrentSessionId(null);
+          setMessages(defaultMessage);
+          setContext({ workflowState: "idle" });
+        }
       }
-      await loadCampaignSessions();
     } catch (error) {
       console.error('[HomePage] 删除已发布 campaign 失败:', error);
       window.alert(error?.message || '删除请求异常，请稍后重试');
     }
+  };
+
+  const cancelRenameSession = () => {
+    setRenamingSessionId(null);
+    setRenameInputValue("");
+    renameBaselineRef.current = { id: null, title: "" };
+  };
+
+  const beginRenameSession = (sessionId, currentTitle) => {
+    setSessionRowMenuId(null);
+    const t = currentTitle || "";
+    renameBaselineRef.current = { id: sessionId, title: t };
+    renameValueRef.current = t;
+    setRenamingSessionId(sessionId);
+    setRenameInputValue(t);
+  };
+
+  const commitRenameSession = async (sessionId) => {
+    if (!sessionId || renamingSessionIdRef.current !== sessionId) return;
+    const baseline = renameBaselineRef.current;
+    const title = String(renameValueRef.current || "").trim();
+    if (!title) {
+      window.alert("标题不能为空");
+      if (baseline.id === sessionId) {
+        setRenameInputValue(baseline.title);
+        renameValueRef.current = baseline.title;
+      }
+      requestAnimationFrame(() => renameInputRef.current?.focus());
+      return;
+    }
+    if (baseline.id === sessionId && baseline.title === title) {
+      cancelRenameSession();
+      return;
+    }
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        window.alert(data.error || `重命名失败（HTTP ${response.status}）`);
+        return;
+      }
+      const session = data.session;
+      const newTitle = session?.title ?? title;
+      const updatedAt = session?.updatedAt ?? null;
+      setCampaignSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId ? { ...s, title: newTitle, ...(updatedAt ? { updatedAt } : {}) } : s
+        )
+      );
+      setPublishedSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId ? { ...s, title: newTitle, ...(updatedAt ? { updatedAt } : {}) } : s
+        )
+      );
+      cancelRenameSession();
+    } catch (error) {
+      console.error("[HomePage] 重命名会话失败:", error);
+      window.alert(error?.message || "重命名请求异常，请稍后重试");
+    }
+  };
+
+  const onRenameInputKeyDown = (e, sessionId) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commitRenameSession(sessionId);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      ignoreRenameBlurRef.current = true;
+      cancelRenameSession();
+      queueMicrotask(() => {
+        ignoreRenameBlurRef.current = false;
+      });
+    }
+  };
+
+  const onRenameInputBlur = (sessionId) => {
+    if (ignoreRenameBlurRef.current) return;
+    void commitRenameSession(sessionId);
   };
 
   const handleLogout = async () => {
@@ -1911,6 +2228,8 @@ export default function HomePage() {
     } catch (_) {
       /* ignore */
     }
+    cancelRenameSession();
+    setSessionRowMenuId(null);
     setAuthUser(null);
     setCurrentSessionId(null);
     setMessages(defaultMessage);
@@ -1997,7 +2316,9 @@ export default function HomePage() {
   const handleMouseMove = (e) => {
     if (!isResizingRef.current) return;
     const deltaX = e.clientX - resizeStartXRef.current;
-    const containerWidth = window.innerWidth - (sidebarCollapsed ? 60 : 240);
+    const sidebarGutter =
+      showCampaignSidebar ? (sidebarCollapsed ? 48 : 240) : 0;
+    const containerWidth = window.innerWidth - sidebarGutter;
     const deltaPercent = (deltaX / containerWidth) * 100;
     const newWidth = Math.max(30, Math.min(70, resizeStartWidthRef.current + deltaPercent));
     setMiddlePanelWidth(newWidth);
@@ -2055,11 +2376,12 @@ export default function HomePage() {
         backgroundColor: "#FFFFFF",
         position: "relative",
         overflow: "hidden",
-        paddingLeft: sidebarCollapsed ? 48 : 0, // 收起时预留左侧窄栏空间，避免遮挡聊天内容
+        paddingLeft:
+          showCampaignSidebar && sidebarCollapsed ? 48 : 0,
       }}
     >
       {/* 收缩状态下的左侧窄栏（仿照 Manus 左栏） */}
-      {sidebarCollapsed && (
+      {showCampaignSidebar && sidebarCollapsed && (
       <div
         style={{
             position: "absolute",
@@ -2171,7 +2493,8 @@ export default function HomePage() {
           </button>
         </div>
       )}
-      {/* 左侧菜单栏 */}
+      {/* 左侧菜单栏：已登录即可见 */}
+      {showCampaignSidebar && (
       <div
         style={{
           width: sidebarCollapsed ? 0 : 240,
@@ -2509,13 +2832,22 @@ export default function HomePage() {
                 return (
                   <div
                     key={session.id}
-                    onClick={() => handleSwitchSession(session.id)}
+                    onClick={() => {
+                      if (renamingSessionId === session.id) return;
+                      handleSwitchSession(session.id);
+                    }}
                     style={{
                                 padding: "10px 12px",
                       borderRadius: 8,
                       backgroundColor: isActive ? "#E0F2FE" : "#FFFFFF",
-                      border: `1px solid ${isActive ? "#3B82F6" : "#E5E7EB"}`,
-                      cursor: "pointer",
+                      border: `1px solid ${
+                        renamingSessionId === session.id
+                          ? "#2563EB"
+                          : isActive
+                            ? "#3B82F6"
+                            : "#E5E7EB"
+                      }`,
+                      cursor: renamingSessionId === session.id ? "default" : "pointer",
                       fontSize: 12,
                       color: "#1F2937",
                       display: "flex",
@@ -2526,76 +2858,99 @@ export default function HomePage() {
                                 transition: "all 0.2s",
                     }}
                     onMouseEnter={(e) => {
-                      if (!isActive) {
+                      setSessionRowHoverId(session.id);
+                      if (!isActive && renamingSessionId !== session.id) {
                         e.currentTarget.style.backgroundColor = "#F3F4F6";
                         e.currentTarget.style.borderColor = "#D1D5DB";
                       }
                     }}
                     onMouseLeave={(e) => {
-                      if (!isActive) {
+                      setSessionRowHoverId((cur) => (cur === session.id ? null : cur));
+                      if (!isActive && renamingSessionId !== session.id) {
                         e.currentTarget.style.backgroundColor = "#FFFFFF";
                         e.currentTarget.style.borderColor = "#E5E7EB";
                       }
                     }}
                   >
                         <div style={{ flex: 1, minWidth: 0 }}>
-                                <div
-                                  style={{
-                            fontWeight: isActive ? 600 : 500,
-                            marginBottom: 2,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                            {session.title || "未命名草稿"}
-                          </div>
-                                <div
-                                  style={{
-                            fontSize: 10,
-                            color: "#9CA3AF",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                            {session.updatedAt 
-                                    ? new Date(session.updatedAt).toLocaleString("zh-CN", {
-                                        month: "short",
-                                        day: "numeric",
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })
-                                    : ""}
+                          {renamingSessionId === session.id ? (
+                            <input
+                              ref={renameInputRef}
+                              value={renameInputValue}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setRenameInputValue(v);
+                                renameValueRef.current = v;
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => onRenameInputKeyDown(e, session.id)}
+                              onBlur={() => onRenameInputBlur(session.id)}
+                              maxLength={200}
+                              style={{
+                                width: "100%",
+                                fontSize: 12,
+                                fontWeight: isActive ? 600 : 500,
+                                marginBottom: 2,
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #2563EB",
+                                outline: "none",
+                                boxSizing: "border-box",
+                                color: "#111827",
+                                background: "#FFFFFF",
+                              }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                fontWeight: isActive ? 600 : 500,
+                                marginBottom: 2,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {session.title || "未命名草稿"}
+                            </div>
+                          )}
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: "#9CA3AF",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {session.updatedAt
+                              ? new Date(session.updatedAt).toLocaleString("zh-CN", {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : ""}
                           </div>
                         </div>
-                        <button
-                          onClick={(e) => handleDeleteSession(session.id, e)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                            padding: "4px",
-                            color: "#9CA3AF",
-                            fontSize: 14,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            borderRadius: 4,
-                                  transition: "all 0.2s",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "#EF4444";
-                            e.currentTarget.style.backgroundColor = "#FEE2E2";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.color = "#9CA3AF";
-                            e.currentTarget.style.backgroundColor = "transparent";
-                          }}
-                          title="删除草稿"
-                        >
-                          ×
-                        </button>
+                        {renamingSessionId !== session.id ? (
+                          <CampaignSessionRowMenu
+                            sessionId={session.id}
+                            showTrigger={
+                              sessionRowHoverId === session.id || sessionRowMenuId === session.id
+                            }
+                            menuOpen={sessionRowMenuId === session.id}
+                            onToggleMenu={() =>
+                              setSessionRowMenuId((open) =>
+                                open === session.id ? null : session.id
+                              )
+                            }
+                            onRename={() =>
+                              beginRenameSession(session.id, session.title || "未命名草稿")
+                            }
+                            onDelete={() => handleDeleteSession(session.id)}
+                          />
+                        ) : null}
                   </div>
                 );
               })}
@@ -2649,13 +3004,22 @@ export default function HomePage() {
                     return (
                       <div
                         key={session.id}
-                        onClick={() => handleSwitchSession(session.id)}
+                        onClick={() => {
+                          if (renamingSessionId === session.id) return;
+                          handleSwitchSession(session.id);
+                        }}
                         style={{
                           padding: "8px 10px",
                           borderRadius: 8,
                           backgroundColor: isActive ? "#EEF2FF" : "#FFFFFF",
-                          border: `1px solid ${isActive ? "#4F46E5" : "#E5E7EB"}`,
-                          cursor: "pointer",
+                          border: `1px solid ${
+                            renamingSessionId === session.id
+                              ? "#2563EB"
+                              : isActive
+                                ? "#4F46E5"
+                                : "#E5E7EB"
+                          }`,
+                          cursor: renamingSessionId === session.id ? "default" : "pointer",
                           fontSize: 12,
                           color: "#1F2937",
                           display: "flex",
@@ -2664,58 +3028,81 @@ export default function HomePage() {
                                 transition: "all 0.2s",
                         }}
                         onMouseEnter={(e) => {
-                          if (!isActive) {
+                          setSessionRowHoverId(session.id);
+                          if (!isActive && renamingSessionId !== session.id) {
                             e.currentTarget.style.backgroundColor = "#F3F4F6";
                             e.currentTarget.style.borderColor = "#D1D5DB";
                           }
                         }}
                         onMouseLeave={(e) => {
-                          if (!isActive) {
+                          setSessionRowHoverId((cur) => (cur === session.id ? null : cur));
+                          if (!isActive && renamingSessionId !== session.id) {
                             e.currentTarget.style.backgroundColor = "#FFFFFF";
                             e.currentTarget.style.borderColor = "#E5E7EB";
                           }
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <div
-                            style={{
-                              fontWeight: isActive ? 600 : 500,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              flex: 1,
-                              minWidth: 0,
-                            }}
-                          >
-                            {session.title || "已发布 Campaign"}
-                          </div>
-                          <button
-                            onClick={(e) => handleDeletePublishedSession(session.id, e)}
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor: "pointer",
-                              padding: "4px",
-                              color: "#9CA3AF",
-                              fontSize: 14,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              borderRadius: 4,
-                              transition: "all 0.2s",
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.color = "#EF4444";
-                              e.currentTarget.style.backgroundColor = "#FEE2E2";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.color = "#9CA3AF";
-                              e.currentTarget.style.backgroundColor = "transparent";
-                            }}
-                            title="删除"
-                          >
-                            ×
-                          </button>
+                          {renamingSessionId === session.id ? (
+                            <input
+                              ref={renameInputRef}
+                              value={renameInputValue}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setRenameInputValue(v);
+                                renameValueRef.current = v;
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => onRenameInputKeyDown(e, session.id)}
+                              onBlur={() => onRenameInputBlur(session.id)}
+                              maxLength={200}
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                fontSize: 12,
+                                fontWeight: isActive ? 600 : 500,
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #2563EB",
+                                outline: "none",
+                                boxSizing: "border-box",
+                                color: "#111827",
+                                background: "#FFFFFF",
+                              }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                fontWeight: isActive ? 600 : 500,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                flex: 1,
+                                minWidth: 0,
+                              }}
+                            >
+                              {session.title || "已发布 Campaign"}
+                            </div>
+                          )}
+                          {renamingSessionId !== session.id ? (
+                            <CampaignSessionRowMenu
+                              sessionId={session.id}
+                              showTrigger={
+                                sessionRowHoverId === session.id || sessionRowMenuId === session.id
+                              }
+                              menuOpen={sessionRowMenuId === session.id}
+                              onToggleMenu={() =>
+                                setSessionRowMenuId((open) =>
+                                  open === session.id ? null : session.id
+                                )
+                              }
+                              onRename={() =>
+                                beginRenameSession(session.id, session.title || "已发布 Campaign")
+                              }
+                              onDelete={() => handleDeletePublishedSession(session.id)}
+                            />
+                          ) : null}
                         </div>
                         {session.updatedAt && (
                           <div
@@ -2789,6 +3176,7 @@ export default function HomePage() {
           </div>
         )}
       </div>
+      )}
 
       {/* 中间和右侧面板容器 */}
       <div
@@ -2796,16 +3184,22 @@ export default function HomePage() {
           flex: 1,
           display: "flex",
           overflow: "hidden",
-          position: "relative"
+          position: "relative",
+          paddingTop: 0,
+          boxSizing: "border-box",
         }}
       >
         {/* 右侧主区域：空状态时占满右侧（学习 Manus），有对话时再拆分中间/右侧 */}
         <div
           style={{
-            width: isEmptyState ? "100%" : `${middlePanelWidth}%`,
+            width: isEmptyState
+              ? "100%"
+              : showBinComputerPanel
+                ? `${middlePanelWidth}%`
+                : "100%",
             display: "flex",
             flexDirection: "column",
-            borderRight: "1px solid #E5E7EB",
+            borderRight: showBinComputerPanel ? "1px solid #E5E7EB" : "none",
             backgroundColor: "#FFFFFF",
             transition: "width 0.2s ease"
           }}
@@ -2958,25 +3352,13 @@ export default function HomePage() {
                     }
                   }}
                 >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                  </svg>
+                  <ChatSendUpIcon />
                 </button>
               </div>
             </form>
           </div>
         ) : (
-          // 有对话时：显示聊天界面
+          // 有对话时：显示聊天界面（发布阶段无右栏时居中收窄，参考常见 Chat 布局）
           <div
             style={{
               flex: 1,
@@ -2987,6 +3369,19 @@ export default function HomePage() {
               overflow: "hidden"
             }}
           >
+            <div
+              style={{
+                width: "100%",
+                maxWidth: showBinComputerPanel ? "none" : 820,
+                marginLeft: showBinComputerPanel ? 0 : "auto",
+                marginRight: showBinComputerPanel ? 0 : "auto",
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden"
+              }}
+            >
             <div
               ref={chatContainerRef}
               style={{
@@ -3172,18 +3567,19 @@ export default function HomePage() {
                   fontSize: 14
                 }}
               >
-                ➤
+                <ChatSendUpIcon />
               </button>
             </div>
           </div>
         </form>
+            </div>
           </div>
         )}
           </main>
         </div>
 
-        {/* 拖拽调整宽度的分隔条 */}
-        {!isEmptyState && (
+        {/* 拖拽调整宽度的分隔条（仅已发布且展示 Bin 的电脑时） */}
+        {showBinComputerPanel && (
           <div
             onMouseDown={handleMouseDown}
             style={{
@@ -3205,8 +3601,8 @@ export default function HomePage() {
           />
         )}
 
-        {/* 右侧：Agent 工作界面（浏览器截图和步骤） */}
-        {!isEmptyState && (
+        {/* 右侧：Agent 工作界面（仅已发布 campaign 展示） */}
+        {showBinComputerPanel && (
           <div
             style={{
               width: `${100 - middlePanelWidth}%`,
@@ -4001,7 +4397,9 @@ export default function HomePage() {
             position: "fixed",
             inset: 0,
             zIndex: 10000,
-            background: "rgba(15, 23, 42, 0.72)",
+            background: "rgba(255, 255, 255, 0.65)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -4013,22 +4411,47 @@ export default function HomePage() {
             onSubmit={submitLogin}
             style={{
               width: "100%",
-              maxWidth: 400,
-              background: "#0F172A",
-              border: "1px solid #334155",
-              borderRadius: 16,
-              padding: "24px 22px",
-              boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+              maxWidth: 380,
+              background: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+              borderRadius: 14,
+              padding: "28px 24px",
+              boxShadow:
+                "0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 40px rgba(15, 23, 42, 0.08)",
+              boxSizing: "border-box",
             }}
           >
-            <div style={{ color: "#F8FAFC", fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
+            <div
+              style={{
+                color: "#111827",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 6,
+                letterSpacing: "-0.02em",
+              }}
+            >
               登录 Maxin AI
             </div>
-            <div style={{ color: "#94A3B8", fontSize: 12, marginBottom: 20, lineHeight: 1.5 }}>
-              请输入对接时提供的公司名、用户名与 6 位数字密码
+            <div
+              style={{
+                color: "#6B7280",
+                fontSize: 12,
+                marginBottom: 22,
+                lineHeight: 1.55,
+              }}
+            >
+              请输入Maxin AI销售提供的账户信息
             </div>
-            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>
-              公司名（与开户展示名一致）
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                color: "#6B7280",
+                marginBottom: 6,
+              }}
+            >
+              公司名
             </label>
             <input
               value={loginCompany}
@@ -4037,16 +4460,27 @@ export default function HomePage() {
               style={{
                 width: "100%",
                 marginBottom: 14,
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#F8FAFC",
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FAFAFA",
+                color: "#111827",
                 fontSize: 14,
                 boxSizing: "border-box",
+                outline: "none",
               }}
             />
-            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>用户名</label>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                color: "#6B7280",
+                marginBottom: 6,
+              }}
+            >
+              用户名
+            </label>
             <input
               value={loginUser}
               onChange={(e) => setLoginUser(e.target.value)}
@@ -4054,16 +4488,25 @@ export default function HomePage() {
               style={{
                 width: "100%",
                 marginBottom: 14,
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#F8FAFC",
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FAFAFA",
+                color: "#111827",
                 fontSize: 14,
                 boxSizing: "border-box",
+                outline: "none",
               }}
             />
-            <label style={{ display: "block", fontSize: 12, color: "#94A3B8", marginBottom: 6 }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                color: "#6B7280",
+                marginBottom: 6,
+              }}
+            >
               密码（6 位数字）
             </label>
             <input
@@ -4077,19 +4520,21 @@ export default function HomePage() {
               style={{
                 width: "100%",
                 marginBottom: 8,
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#F8FAFC",
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FAFAFA",
+                color: "#111827",
                 fontSize: 14,
                 boxSizing: "border-box",
+                outline: "none",
+                letterSpacing: "0.12em",
               }}
             />
             {loginErr ? (
-              <div style={{ color: "#F87171", fontSize: 12, marginTop: 4 }}>{loginErr}</div>
+              <div style={{ color: "#DC2626", fontSize: 12, marginTop: 4 }}>{loginErr}</div>
             ) : null}
-            <div style={{ display: "flex", gap: 10, marginTop: 18, justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
               <button
                 type="button"
                 onClick={() => {
@@ -4098,12 +4543,12 @@ export default function HomePage() {
                   pendingSendRef.current = null;
                 }}
                 style={{
-                  padding: "8px 14px",
+                  padding: "9px 16px",
                   fontSize: 13,
-                  color: "#94A3B8",
-                  background: "transparent",
-                  border: "1px solid #475569",
-                  borderRadius: 8,
+                  color: "#6B7280",
+                  background: "#FFFFFF",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 10,
                   cursor: "pointer",
                 }}
               >
@@ -4113,13 +4558,13 @@ export default function HomePage() {
                 type="submit"
                 disabled={loginBusy}
                 style={{
-                  padding: "8px 18px",
+                  padding: "9px 20px",
                   fontSize: 13,
                   fontWeight: 600,
                   color: "#FFFFFF",
-                  background: loginBusy ? "#475569" : "#3B82F6",
+                  background: loginBusy ? "#9CA3AF" : "#111827",
                   border: "none",
-                  borderRadius: 8,
+                  borderRadius: 10,
                   cursor: loginBusy ? "not-allowed" : "pointer",
                 }}
               >
