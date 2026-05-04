@@ -4,10 +4,7 @@ import {
   updateCampaignSession,
   deleteCampaignSession,
 } from "../../../../lib/db/campaign-session-dao.js";
-import {
-  softDeleteCampaignBySessionId,
-  softDeleteCampaignById,
-} from "../../../../lib/db/campaign-dao.js";
+import { softDeleteCampaignBySessionId } from "../../../../lib/db/campaign-dao.js";
 
 /**
  * GET /api/sessions/[id]
@@ -166,35 +163,22 @@ export async function DELETE(req, { params }) {
     }
 
     let result;
-    // 草稿：物理删除；已发布：软删除关联 campaign（不可恢复）
+    // 草稿：物理删除 tiktok_campaign_sessions；已发布：仅软删 tiktok_campaign（会话行保留）
     if (session.status === "published") {
       result = await softDeleteCampaignBySessionId(id, {
         deletedBy: "user",
         deleteReason: "用户在前端删除已发布 campaign",
       });
-      // 历史数据：仅当按 session 查不到行时再按 context.campaignId 补删（避免无谓多一次 DB）
-      if (
-        !result.success &&
-        typeof result.message === "string" &&
-        result.message.includes("未找到关联的已发布 campaign") &&
-        session.context?.campaignId
-      ) {
-        const byCampaignId = await softDeleteCampaignById(session.context.campaignId, {
-          deletedBy: "user",
-          deleteReason: "用户在前端删除已发布 campaign（按 context.campaignId 补删）",
+      if (result.success) {
+        const mark = await updateCampaignSession(id, {
+          publishedUserHiddenAt: new Date(),
         });
-        if (byCampaignId.success) {
-          result = byCampaignId;
+        if (!mark.success) {
+          console.warn(
+            "[Sessions API] campaign 已软删，但 published_user_hidden_at 未写入:",
+            mark.message
+          );
         }
-      }
-      // 侧栏「已发布」会话在 DB 中无对应 tiktok_campaign 行时，仍允许从列表移除会话
-      const orphan =
-        !result.success &&
-        typeof result.message === "string" &&
-        (result.message.includes("未找到关联的已发布 campaign") ||
-          result.message.includes("未找到该 campaign"));
-      if (orphan) {
-        result = await deleteCampaignSession(id);
       }
     } else {
       result = await deleteCampaignSession(id);

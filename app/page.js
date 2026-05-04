@@ -1792,19 +1792,27 @@ export default function HomePage() {
       const response = await fetch(`/api/sessions/${sessionId}`, {
         method: 'DELETE',
       });
-      
-      const data = await response.json();
-      if (data.success) {
-        // 如果删除的是当前会话，重置为新会话
-        if (sessionId === currentSessionId) {
-          setCurrentSessionId(null);
-          setMessages(defaultMessage);
-          setContext({ workflowState: 'idle' });
-        }
-        await loadCampaignSessions();
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
       }
+      if (!response.ok || !data.success) {
+        const msg = data.error || data.message || `删除失败（HTTP ${response.status}）`;
+        console.error('[HomePage] 删除草稿未成功:', msg);
+        window.alert(msg);
+        return;
+      }
+      if (sessionId === currentSessionId) {
+        setCurrentSessionId(null);
+        setMessages(defaultMessage);
+        setContext({ workflowState: 'idle' });
+      }
+      await loadCampaignSessions();
     } catch (error) {
       console.error('[HomePage] 删除会话失败:', error);
+      window.alert(error?.message || '删除请求异常，请稍后重试');
     }
   };
 

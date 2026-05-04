@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS campaign_sessions (
   status ENUM('draft', 'published') NOT NULL DEFAULT 'draft' COMMENT '会话状态：draft=草稿中, published=已发布',
   messages JSON NOT NULL COMMENT '完整的对话消息数组（JSON 格式）',
   context JSON COMMENT '上下文对象（产品信息、红人画像等，JSON 格式）',
+  published_user_hidden_at DATETIME NULL COMMENT '用户从前端移除已发布列表的时间（生产表多为 tiktok_campaign_sessions，需与迁移脚本一致）',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   INDEX idx_status (status),
