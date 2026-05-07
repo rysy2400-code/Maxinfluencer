@@ -9,7 +9,6 @@ import React, {
   useState,
 } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChatSendUpIcon } from "../../chat-send-up-icon";
 
 function formatTime(v) {
   if (!v) return "";
@@ -88,6 +87,8 @@ export default function InfluencerChatPage() {
   const [composerText, setComposerText] = useState("");
   const [composerFiles, setComposerFiles] = useState([]);
   const [sending, setSending] = useState(false);
+  const [outboundFromEmail, setOutboundFromEmail] = useState(null);
+  const [outboundEmailLoading, setOutboundEmailLoading] = useState(false);
   const fileInputRef = useRef(null);
   const scrollRef = useRef(null);
   /** 加载更早一页后恢复滚动位置；为 null 时表示滚到最新消息 */
@@ -185,6 +186,27 @@ export default function InfluencerChatPage() {
     }
   }, []);
 
+  const loadOutboundFromEmail = useCallback(async (id) => {
+    if (!id) {
+      setOutboundFromEmail(null);
+      return;
+    }
+    setOutboundEmailLoading(true);
+    try {
+      const res = await fetch(`/api/influencers/${encodeURIComponent(id)}/thread-mail`);
+      const data = await res.json();
+      if (data?.success && data.outboundEmail) {
+        setOutboundFromEmail(String(data.outboundEmail));
+      } else {
+        setOutboundFromEmail(null);
+      }
+    } catch {
+      setOutboundFromEmail(null);
+    } finally {
+      setOutboundEmailLoading(false);
+    }
+  }, []);
+
   const loadTimeline = useCallback(async ({ id, cursor, reset }) => {
     if (!id) return;
     setTimelineLoading(true);
@@ -222,13 +244,14 @@ export default function InfluencerChatPage() {
     if (!influencerId) return;
     loadMode(influencerId);
     loadCampaignCards(influencerId);
+    loadOutboundFromEmail(influencerId);
     setTimelineItems([]);
     setTimelineCursor(null);
     setTimelineHasMore(false);
     loadTimeline({ id: influencerId, cursor: null, reset: true });
     setComposerText("");
     setComposerFiles([]);
-  }, [influencerId, loadMode, loadCampaignCards, loadTimeline]);
+  }, [influencerId, loadMode, loadCampaignCards, loadOutboundFromEmail, loadTimeline]);
 
   useEffect(() => {
     if (mode !== "assist") return;
@@ -290,6 +313,7 @@ export default function InfluencerChatPage() {
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadTimeline({ id: influencerId, cursor: null, reset: true });
       await loadConversations({ cursor: null, reset: true });
+      await loadOutboundFromEmail(influencerId);
     } catch (e) {
       alert(e?.message || String(e));
     } finally {
@@ -303,6 +327,7 @@ export default function InfluencerChatPage() {
     latestInbound,
     loadTimeline,
     loadConversations,
+    loadOutboundFromEmail,
   ]);
 
   const shellStyle = {
@@ -430,22 +455,6 @@ export default function InfluencerChatPage() {
 
   return (
     <div style={shellStyle}>
-      <div
-        style={{
-          flexShrink: 0,
-          padding: "14px 18px",
-          borderBottom: "1px solid rgba(0,0,0,0.08)",
-          background: "#F7F7F7",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontWeight: 800, fontSize: 17 }}>红人对话</div>
-          <div style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>
-            仅列出有邮件时间线的红人
-          </div>
-        </div>
-      </div>
-
       <div
         style={{
           flex: 1,
@@ -632,8 +641,24 @@ export default function InfluencerChatPage() {
               flexWrap: "wrap",
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: 16 }}>
-              {influencerId || "未选择"}
+            <div
+              style={{
+                minWidth: 0,
+                flex: "1 1 auto",
+                fontWeight: 800,
+                fontSize: 15,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={
+                outboundFromEmail ||
+                (outboundEmailLoading ? "加载发件邮箱…" : influencerId || "")
+              }
+            >
+              {outboundEmailLoading
+                ? "加载发件邮箱…"
+                : outboundFromEmail || influencerId || "未选择"}
             </div>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button
@@ -654,9 +679,10 @@ export default function InfluencerChatPage() {
               <button
                 type="button"
                 disabled={timelineLoading || !influencerId}
-                onClick={() =>
-                  loadTimeline({ id: influencerId, cursor: null, reset: true })
-                }
+                onClick={() => {
+                  void loadTimeline({ id: influencerId, cursor: null, reset: true });
+                  void loadOutboundFromEmail(influencerId);
+                }}
                 style={{
                   border: "1px solid rgba(0,0,0,0.12)",
                   background: "#fff",
@@ -752,7 +778,14 @@ export default function InfluencerChatPage() {
             <textarea
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
-              placeholder="输入消息…（主题与收件人由服务器按邮件线程自动匹配）"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey) return;
+                if (e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                if (sending || !influencerId) return;
+                void onSend();
+              }}
+              placeholder="输入消息…（Enter 发送，Shift+Enter 换行；主题与收件人由服务器按邮件线程自动匹配）"
               style={{
                 width: "100%",
                 minHeight: 72,
@@ -768,27 +801,9 @@ export default function InfluencerChatPage() {
             />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
               <input ref={fileInputRef} type="file" multiple onChange={onPickFiles} />
-              <button
-                type="button"
-                disabled={sending || !influencerId}
-                onClick={onSend}
-                style={{
-                  marginLeft: "auto",
-                  border: "none",
-                  background: "#07C160",
-                  color: "#fff",
-                  borderRadius: 8,
-                  padding: "10px 16px",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                {!sending ? <ChatSendUpIcon size={18} /> : null}
-                {sending ? "发送中…" : "发送"}
-              </button>
+              {sending ? (
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>发送中…</span>
+              ) : null}
             </div>
             {composerFiles.length ? (
               <div style={{ marginTop: 8, fontSize: 12, color: "#444" }}>

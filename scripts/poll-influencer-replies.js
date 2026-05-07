@@ -16,6 +16,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { listRecentMessages } from "../lib/email/enterprise-mail-client.js";
+import {
+  accountMatchesTemporaryOutboundPool,
+  getOpContactEmail,
+} from "../lib/email/temporary-outbound-pool.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { buildTraceIdFromInboundMessageId } from "../lib/utils/timeline-ids.js";
 
@@ -87,17 +91,24 @@ async function resolveInfluencerIdByEmail(email) {
   }
 }
 
+function hasImapConfig(account) {
+  const fromEmail = getOpContactEmail(account);
+  const imapHost = account?.imap;
+  const imapPort = Number(account?.imap_port || 0);
+  const password = account?.auth_code;
+  return Boolean(fromEmail && imapHost && imapPort && password);
+}
+
 async function pollOnce() {
   const allAccounts = await getAllOpContacts();
-  // 当前仅轮询指定测试账号，便于验证链路；后续可移除该过滤恢复多账号支持
+  // 临时：与随机发件同一批 7 个邮箱；须在白名单内且 op_contacts 已配置 IMAP
   const accounts = allAccounts.filter(
-    (a) =>
-      a.email === "annie@binfluencer.online" ||
-      a.email_address === "annie@binfluencer.online" ||
-      a.username === "annie@binfluencer.online"
+    (a) => accountMatchesTemporaryOutboundPool(a) && hasImapConfig(a)
   );
   if (!accounts.length) {
-    console.warn("[PollInfluencerReplies] 没有可用企业邮箱账号，退出。");
+    console.warn(
+      "[PollInfluencerReplies] 白名单内无可用 IMAP 账号（检查 op_contacts 是否含这 7 个邮箱的 imap/imap_port/auth_code），退出。"
+    );
     return;
   }
 

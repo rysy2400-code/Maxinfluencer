@@ -200,7 +200,6 @@ if ([string]::IsNullOrWhiteSpace($redisUrl)) {
   throw "REDIS_URL is required for crawler work-live events. Set CRAWLER_REDIS_URL (preferred) or REDIS_URL before deploy."
 }
 $workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_CHANNEL_PREFIX)" } else { "work-live" }
-$executionOnePerTask = if ($env:CRAWLER_EXECUTION_ONE_PER_TASK) { "$($env:CRAWLER_EXECUTION_ONE_PER_TASK)" } else { "" }
 $workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
 $workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
 $workerLanIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
@@ -292,7 +291,6 @@ $guardCrawlerContent = @"
 `$env:WORK_LIVE_CHANNEL_PREFIX = "$($workLiveChannelPrefix.Replace("\", "\\").Replace('"','\"'))"
 `$env:WORK_LIVE_PUSH_URL = ""
 `$env:WORK_LIVE_PUSH_SECRET = ""
-`$env:EXECUTION_ONE_PER_TASK = "$($executionOnePerTask.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
