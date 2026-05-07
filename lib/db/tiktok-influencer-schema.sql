@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer (
 CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
   id INT AUTO_INCREMENT PRIMARY KEY,
   campaign_id VARCHAR(36) NOT NULL COMMENT 'tiktok_campaign.id',
-  influencer_id VARCHAR(128) NOT NULL COMMENT 'tiktok_influencer.influencer_id（或来源侧唯一 ID）',
+  tiktok_username VARCHAR(128) NOT NULL COMMENT 'TikTok handle（无 @），与执行表一致',
+  influencer_id VARCHAR(128) NULL COMMENT 'TikTok userId，与 tiktok_influencer.influencer_id 一致（可空、可回填）',
 
   source VARCHAR(32) NOT NULL DEFAULT 'echotik' COMMENT '候选来源',
   influencer_snapshot JSON COMMENT '候选时的红人快照（用于审计/回溯，可为空）',
@@ -53,33 +54,10 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-  UNIQUE KEY uk_campaign_influencer (campaign_id, influencer_id),
+  UNIQUE KEY uk_campaign_influencer (campaign_id, tiktok_username),
+  INDEX idx_candidates_platform_influencer_id (influencer_id),
   INDEX idx_campaign_contact (campaign_id, should_contact, picked_at),
   INDEX idx_campaign_email_contact (campaign_id, has_email, should_contact, picked_at),
   INDEX idx_campaign_score (campaign_id, match_score DESC),
   INDEX idx_campaign_analyzed (campaign_id, analyzed_at DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Campaign 候选红人池 + 分析结果';
-
-  UNIQUE KEY uk_username (username),
-  
-  -- 查询索引
-  INDEX idx_followers (followers_count),
-  INDEX idx_views (avg_views),
-  INDEX idx_account_type (account_type),
-  INDEX idx_country (country),
-  INDEX idx_last_crawled (last_crawled_at),
-  INDEX idx_engagement (engagement_rate DESC),
-  INDEX idx_created_at (created_at DESC)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='TikTok 红人数据表';
-
-  UNIQUE KEY uk_username (username),
-  
-  -- 查询索引
-  INDEX idx_followers (followers_count),
-  INDEX idx_views (avg_views),
-  INDEX idx_account_type (account_type),
-  INDEX idx_country (country),
-  INDEX idx_last_crawled (last_crawled_at),
-  INDEX idx_engagement (engagement_rate DESC),
-  INDEX idx_created_at (created_at DESC)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='TikTok 红人数据表';

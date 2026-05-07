@@ -71,22 +71,27 @@ async function ensureExecutionRow(campaignId) {
   await queryTikTok(
     `
     INSERT INTO tiktok_campaign_execution (
-      campaign_id, influencer_id, influencer_snapshot, stage, last_event, created_at, updated_at
+      campaign_id, tiktok_username, influencer_id, influencer_snapshot, stage, last_event, created_at, updated_at
     ) VALUES (
-      ?, ?, ?, 'pending_quote', NULL, NOW(), NOW()
+      ?, ?, ?, ?, 'pending_quote', NULL, NOW(), NOW()
     )
     ON DUPLICATE KEY UPDATE
       influencer_snapshot = VALUES(influencer_snapshot),
+      influencer_id = COALESCE(VALUES(influencer_id), influencer_id),
       updated_at = NOW()
   `,
     [
       campaignId,
       TEST_INFLUENCER_ID,
+      inf?.influencerId || null,
       snapshot ? JSON.stringify(snapshot) : null,
     ]
   );
 
-  return snapshot;
+  return {
+    snapshot,
+    platformInfluencerId: inf?.influencerId || TEST_INFLUENCER_ID,
+  };
 }
 
 async function main() {
@@ -102,12 +107,13 @@ async function main() {
 
   for (const c of campaigns) {
     const campaignId = c.id;
-    const snapshot = await ensureExecutionRow(campaignId);
+    const { snapshot, platformInfluencerId } = await ensureExecutionRow(campaignId);
 
     console.log("[SeedTest] 写入首轮邀约事件：", { campaignId, influencerId: TEST_INFLUENCER_ID });
     await enqueueFirstOutreach({
       campaignId,
-      influencerId: TEST_INFLUENCER_ID,
+      tiktokUsername: TEST_INFLUENCER_ID,
+      platformInfluencerId,
       snapshot,
     });
   }

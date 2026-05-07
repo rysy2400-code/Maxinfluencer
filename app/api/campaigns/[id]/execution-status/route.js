@@ -3,7 +3,7 @@ import { getCampaignExecutionStatus } from "../../../../../lib/db/campaign-dao.j
 
 /**
  * GET /api/campaigns/[id]/execution-status
- * 返回红人执行进度四列：待审核价格、待寄样品、待审核草稿、已发布视频
+ * 返回红人执行进度：已联系、待审核价格、待寄样品、待审核草稿、已发布视频
  */
 export async function GET(req, { params }) {
   try {

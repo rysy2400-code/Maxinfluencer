@@ -15,41 +15,58 @@ export async function GET(req, { params }) {
       );
     }
 
-    // MySQL 8 支持窗口函数：为每个 influencer 取最新一条对话记录作为预览
     const rows = await queryTikTok(
       `
       WITH execs AS (
-        SELECT influencer_id
+        SELECT
+          tiktok_username,
+          influencer_id AS platform_influencer_id
         FROM tiktok_campaign_execution
         WHERE campaign_id = ?
       ),
       ranked AS (
         SELECT
-          m.*,
+          e.tiktok_username,
+          m.id AS msg_id,
+          m.event_time,
+          m.sent_at,
+          m.created_at,
+          m.event_type,
+          m.actor_type,
+          m.subject,
+          m.body_text,
           ROW_NUMBER() OVER (
-            PARTITION BY m.influencer_id
+            PARTITION BY e.tiktok_username
             ORDER BY COALESCE(m.event_time, m.sent_at, m.created_at) DESC, m.id DESC
           ) AS rn
-        FROM tiktok_influencer_conversation_messages m
-        JOIN execs e ON e.influencer_id = m.influencer_id
+        FROM execs e
+        LEFT JOIN tiktok_influencer_conversation_messages m
+          ON (
+            (e.platform_influencer_id IS NOT NULL AND m.influencer_id = e.platform_influencer_id)
+            OR m.influencer_id = e.tiktok_username
+          )
       )
       SELECT
-        e.influencer_id,
+        e.tiktok_username AS influencer_id,
         i.display_name,
         i.username,
         i.avatar_url,
         i.influencer_email,
         i.handover_mode,
-        r.id AS last_message_id,
+        r.msg_id AS last_message_id,
         COALESCE(r.event_time, r.sent_at, r.created_at) AS last_event_time,
         r.event_type AS last_event_type,
         r.actor_type AS last_actor_type,
         r.subject AS last_subject,
         r.body_text AS last_body_text
       FROM execs e
-      LEFT JOIN tiktok_influencer i ON i.influencer_id = e.influencer_id
-      LEFT JOIN ranked r ON r.influencer_id = e.influencer_id AND r.rn = 1
-      ORDER BY last_event_time DESC, e.influencer_id ASC
+      LEFT JOIN tiktok_influencer i
+        ON (
+          (e.platform_influencer_id IS NOT NULL AND i.influencer_id = e.platform_influencer_id)
+          OR i.username = e.tiktok_username
+        )
+      LEFT JOIN ranked r ON r.tiktok_username = e.tiktok_username AND r.rn = 1
+      ORDER BY last_event_time DESC, e.tiktok_username ASC
     `,
       [campaignId]
     );
@@ -83,4 +100,3 @@ export async function GET(req, { params }) {
     );
   }
 }
-

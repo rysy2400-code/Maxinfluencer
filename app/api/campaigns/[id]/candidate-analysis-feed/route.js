@@ -38,7 +38,8 @@ export async function GET(req, { params }) {
     const sql = `
       SELECT
         id,
-        influencer_id AS influencerId,
+        tiktok_username AS influencerId,
+        influencer_id AS platformInfluencerId,
         match_score AS matchScore,
         should_contact AS shouldContact,
         analysis_summary AS analysisSummary,
@@ -57,6 +58,7 @@ export async function GET(req, { params }) {
     const items = (rows || []).map((r) => ({
       id: r.id,
       influencerId: r.influencerId,
+      platformInfluencerId: r.platformInfluencerId || null,
       matchScore: r.matchScore,
       shouldContact: r.shouldContact,
       analysisSummary: r.analysisSummary,

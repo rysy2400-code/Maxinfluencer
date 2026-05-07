@@ -1,5 +1,5 @@
 /**
- * 验证 INSERT IGNORE：同一 (campaign_id, influencer_id) 第二次写入不改变行。
+ * 验证 INSERT IGNORE：同一 (campaign_id, tiktok_username) 第二次写入不改变行。
  * 用法：node scripts/test-candidate-insert-ignore.js
  */
 import dotenv from "dotenv";
@@ -18,7 +18,7 @@ const TEST_INF = "__test_influencer_insert_ignore__";
 
 async function main() {
   await queryTikTok(
-    `DELETE FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND influencer_id = ?`,
+    `DELETE FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND tiktok_username = ?`,
     [TEST_CAMPAIGN, TEST_INF]
   );
 
@@ -37,7 +37,7 @@ async function main() {
     { taskId: 1, runId: "r1", searchKeyword: "kw-a" }
   );
   const row1 = await queryTikTok(
-    `SELECT id, match_score, analysis_summary, match_analysis, updated_at FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND influencer_id = ?`,
+    `SELECT id, match_score, analysis_summary, match_analysis, updated_at FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND tiktok_username = ?`,
     [TEST_CAMPAIGN, TEST_INF]
   );
   const u1 = row1?.[0]?.updated_at;
@@ -48,7 +48,7 @@ async function main() {
     { taskId: 2, runId: "r2", searchKeyword: "kw-b" }
   );
   const row2 = await queryTikTok(
-    `SELECT id, match_score, analysis_summary, match_analysis, updated_at FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND influencer_id = ?`,
+    `SELECT id, match_score, analysis_summary, match_analysis, updated_at FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND tiktok_username = ?`,
     [TEST_CAMPAIGN, TEST_INF]
   );
   const u2 = row2?.[0]?.updated_at;
@@ -57,7 +57,7 @@ async function main() {
   const ma2 = typeof row2?.[0]?.match_analysis === "string" ? JSON.parse(row2[0].match_analysis) : row2?.[0]?.match_analysis;
 
   await queryTikTok(
-    `DELETE FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND influencer_id = ?`,
+    `DELETE FROM tiktok_campaign_influencer_candidates WHERE campaign_id = ? AND tiktok_username = ?`,
     [TEST_CAMPAIGN, TEST_INF]
   );
 

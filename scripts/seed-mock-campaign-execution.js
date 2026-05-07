@@ -228,9 +228,9 @@ async function seed() {
       const snapshot = JSON.stringify(inf);
       const lastEventJson = lastEvent ? JSON.stringify(lastEvent) : null;
       await queryTikTok(
-        `INSERT INTO tiktok_campaign_execution (campaign_id, influencer_id, influencer_snapshot, stage, last_event)
-         VALUES (?, ?, ?, ?, ?)`,
-        [CAMPAIGN_ID, inf.id, snapshot, stage, lastEventJson]
+        `INSERT INTO tiktok_campaign_execution (campaign_id, tiktok_username, influencer_id, influencer_snapshot, stage, last_event)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [CAMPAIGN_ID, inf.id, null, snapshot, stage, lastEventJson]
       );
     }
     console.log(`✅ tiktok_campaign_execution: ${stage} x ${indices.length}`);
@@ -251,9 +251,9 @@ async function seed() {
           const snapshot = JSON.stringify(inf);
           const lastEventJson = lastEvent ? JSON.stringify(lastEvent) : null;
           await queryTikTok(
-            `INSERT INTO tiktok_campaign_execution (campaign_id, influencer_id, influencer_snapshot, stage, last_event)
-             VALUES (?, ?, ?, ?, ?)`,
-            [cid, inf.id, snapshot, stage, lastEventJson]
+            `INSERT INTO tiktok_campaign_execution (campaign_id, tiktok_username, influencer_id, influencer_snapshot, stage, last_event)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [cid, inf.id, null, snapshot, stage, lastEventJson]
           );
         }
       }

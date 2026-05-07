@@ -9,7 +9,7 @@ import {
  * PATCH /api/campaigns/[id]/execution
  * 更新红人执行阶段（同意价格、寄样、通过草稿等）
  * Body: { influencerId, action, payload? }
- * action: approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo
+ * action: submitQuote | reopenQuote | approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo | updatePublished | updateShipping | updateDraft
  */
 export async function PATCH(req, { params }) {
   try {
@@ -39,23 +39,102 @@ export async function PATCH(req, { params }) {
     }
 
     let stage = null;
-    let lastEvent = {};
+    let lastEvent = null;
+    let quoteAppend = null;
 
     switch (action) {
+      case "submitQuote": {
+        const amount = Number(payload.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return NextResponse.json(
+            { success: false, error: "submitQuote 需要有效正数 amount" },
+            { status: 400 }
+          );
+        }
+        const reason =
+          typeof payload.reason === "string" ? payload.reason.trim().slice(0, 2000) : "";
+        quoteAppend = {
+          role: "advertiser",
+          amount,
+          currency: payload.currency || undefined,
+          reason: reason || null,
+          type: "counter",
+          source: "advertiser_portal",
+        };
+        lastEvent = { advertiserCounterQuoteAt: new Date().toISOString() };
+        break;
+      }
+      case "reopenQuote": {
+        const existing = await getExecutionRow(campaignId, influencerId);
+        if (!existing || existing.stage !== "quote_rejected") {
+          return NextResponse.json(
+            { success: false, error: "仅 quote_rejected 状态可撤销拒绝" },
+            { status: 400 }
+          );
+        }
+        const reopenReason = String(payload.reopenReason || "").trim();
+        if (!reopenReason) {
+          return NextResponse.json(
+            { success: false, error: "请填写撤销原因 reopenReason" },
+            { status: 400 }
+          );
+        }
+        stage = "quote_submitted";
+        lastEvent = {
+          quoteReopenedAt: new Date().toISOString(),
+          reopenReason: reopenReason.slice(0, 2000),
+          reopenedBy: payload.reopenedBy || "advertiser",
+        };
+        quoteAppend = {
+          role: "advertiser",
+          amount: null,
+          currency: existing.currency || "USD",
+          reason: reopenReason.slice(0, 2000),
+          type: "reopen",
+          source: "advertiser_portal",
+        };
+        break;
+      }
       case "updateShipping":
         lastEvent = { shippingAddress: payload.shippingAddress || payload };
         break;
       case "updateDraft":
         lastEvent = { draftLink: payload.draftLink || payload };
         break;
-      case "approveQuote":
-        stage = "pending_sample";
+      case "approveQuote": {
+        const needSample =
+          campaign.productInfo &&
+          typeof campaign.productInfo.needSample === "boolean"
+            ? campaign.productInfo.needSample
+            : true;
+        stage = needSample ? "pending_sample" : "pending_draft";
         lastEvent = { quoteApprovedAt: new Date().toISOString() };
         break;
-      case "rejectQuote":
-        stage = "failed";
-        lastEvent = { quoteRejectedAt: new Date().toISOString(), ...payload };
+      }
+      case "rejectQuote": {
+        const rejectReason = String(payload.rejectReason || "").trim();
+        if (!rejectReason) {
+          return NextResponse.json(
+            { success: false, error: "请填写拒绝原因 rejectReason" },
+            { status: 400 }
+          );
+        }
+        const row = await getExecutionRow(campaignId, influencerId);
+        stage = "quote_rejected";
+        lastEvent = {
+          quoteRejectedAt: new Date().toISOString(),
+          rejectReason: rejectReason.slice(0, 2000),
+        };
+        quoteAppend = {
+          role: "advertiser",
+          amount: null,
+          currency: row?.currency || "USD",
+          reason: rejectReason.slice(0, 2000),
+          type: "quote_rejected",
+          source: "advertiser_portal",
+        };
         break;
+      }
       case "confirmShip":
         stage = "pending_draft";
         lastEvent = {
@@ -117,6 +196,7 @@ export async function PATCH(req, { params }) {
     await updateExecutionStage(campaignId, influencerId, {
       stage,
       lastEvent,
+      quoteAppend,
     });
 
     return NextResponse.json({

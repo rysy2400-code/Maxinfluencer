@@ -19,7 +19,8 @@ export async function GET(req, { params }) {
     const rows = await queryTikTok(
       `
       SELECT
-        influencer_id,
+        tiktok_username,
+        influencer_id AS platform_influencer_id,
         influencer_snapshot,
         match_score,
         should_contact,
@@ -50,7 +51,8 @@ export async function GET(req, { params }) {
       }
 
       return {
-        influencerId: r.influencer_id,
+        influencerId: r.tiktok_username,
+        platformInfluencerId: r.platform_influencer_id || null,
         matchScore: typeof r.match_score === "number" ? r.match_score : null,
         shouldContact: !!r.should_contact,
         analysisSummary: r.analysis_summary || "",

@@ -9,6 +9,10 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import {
+  SQL_EXECUTION_CREATOR_MATCH_E,
+  paramsExecutionCreatorMatch,
+} from "../lib/db/campaign-execution-keys.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
@@ -57,7 +61,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
   const rows = await queryTikTok(
     `
     SELECT e.campaign_id,
-           e.influencer_id,
+           e.tiktok_username AS influencer_id,
            e.stage,
            e.influencer_snapshot,
            e.last_event,
@@ -65,9 +69,9 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
            c.campaign_info
     FROM tiktok_campaign_execution e
     JOIN tiktok_campaign c ON e.campaign_id = c.id
-    WHERE e.influencer_id = ?
+    WHERE ${SQL_EXECUTION_CREATOR_MATCH_E}
   `,
-    [influencerId]
+    [...paramsExecutionCreatorMatch(influencerId)]
   );
 
   return rows.map((r) => ({
@@ -623,15 +627,15 @@ ${influencerAgentBasePrompt}
   }
 
 - updates 只是「建议」，会被写入 tiktok_advertiser_agent_event，由 CampaignExecutionAgent 决定是否真正更新数据库。
-- newStage 必须是下列之一：
+- newStage 必须是下列之一（不要使用 failed、sample_sent 等已废弃取值）：
   - "pending_quote"
   - "quote_submitted"
   - "pending_sample"
-  - "sample_sent"
   - "pending_draft"
   - "draft_submitted"
   - "published"
-  - "failed"
+  - "quote_rejected"
+- quote_rejected **仅**用于：红人已提交报价后，**品牌方明确拒绝该报价**；其它终止合作场景不要用此 stage（可维持当前 stage 并在 note 说明）。
 - 如果你认为当前邮件不需要修改任何 Campaign 的 stage，请返回：{"updates": []}，但你仍然可以返回 outboundEmails 或 agentEvents。
 - 对于 creator_replied_special_request：当红人明确同意/接受品牌方的特殊请求（如改价、改时间、加条数等）时，specialRequestStatus 必须为 "resolved"；仅当红人拒绝或提出新条件需品牌再决定时，才用 "pending_brand"。
 `;

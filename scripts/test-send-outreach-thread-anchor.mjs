@@ -19,16 +19,21 @@ async function resolveCandidatePair(targetEmail) {
     `
     SELECT
       e.campaign_id,
-      e.influencer_id
+      e.tiktok_username,
+      e.influencer_id AS platform_influencer_id
     FROM tiktok_campaign_execution e
-    JOIN tiktok_influencer i ON i.influencer_id = e.influencer_id
+    JOIN tiktok_influencer i
+      ON i.influencer_id = e.influencer_id OR i.username = e.tiktok_username
     WHERE i.influencer_email = ?
       AND NOT EXISTS (
         SELECT 1
         FROM tiktok_influencer_conversation_messages m
         WHERE
           m.campaign_id = e.campaign_id
-          AND m.influencer_id = e.influencer_id
+          AND (
+            (e.influencer_id IS NOT NULL AND m.influencer_id = e.influencer_id)
+            OR m.influencer_id = e.tiktok_username
+          )
           AND m.direction = 'bin'
           AND m.channel = 'email'
       )
@@ -43,9 +48,11 @@ async function resolveCandidatePair(targetEmail) {
     `
     SELECT
       e.campaign_id,
-      e.influencer_id
+      e.tiktok_username,
+      e.influencer_id AS platform_influencer_id
     FROM tiktok_campaign_execution e
-    JOIN tiktok_influencer i ON i.influencer_id = e.influencer_id
+    JOIN tiktok_influencer i
+      ON i.influencer_id = e.influencer_id OR i.username = e.tiktok_username
     WHERE i.influencer_email = ?
     ORDER BY e.created_at DESC
     LIMIT 1
@@ -64,7 +71,13 @@ async function main() {
   }
 
   const campaignId = pair.campaign_id;
-  const influencerId = pair.influencer_id;
+  const tiktokUsername = pair.tiktok_username;
+  const platformInfluencerId = pair.platform_influencer_id;
+  if (!platformInfluencerId) {
+    throw new Error(
+      "tiktok_campaign_execution.influencer_id 为空，请先回填平台 userId"
+    );
+  }
 
   const beforeRows = await queryTikTok(
     `
@@ -72,15 +85,30 @@ async function main() {
     FROM tiktok_influencer_conversation_messages
     WHERE campaign_id = ? AND influencer_id = ?
   `,
-    [campaignId, influencerId]
+    [campaignId, platformInfluencerId]
   );
   const beforeMaxId = Number(beforeRows?.[0]?.max_id || 0);
 
-  console.log("[TEST] 使用组合:", { campaignId, influencerId, targetEmail: TARGET_EMAIL });
+  console.log("[TEST] 使用组合:", {
+    campaignId,
+    tiktokUsername,
+    platformInfluencerId,
+    targetEmail: TARGET_EMAIL,
+  });
   console.log("[TEST] 发送第 1 封...");
-  const first = await sendOutreach({ campaignId, influencerId, snapshot: null });
+  const first = await sendOutreach({
+    campaignId,
+    platformInfluencerId,
+    tiktokUsername,
+    snapshot: null,
+  });
   console.log("[TEST] 发送第 2 封...");
-  const second = await sendOutreach({ campaignId, influencerId, snapshot: null });
+  const second = await sendOutreach({
+    campaignId,
+    platformInfluencerId,
+    tiktokUsername,
+    snapshot: null,
+  });
 
   const inserted = await queryTikTok(
     `
@@ -101,7 +129,7 @@ async function main() {
       AND channel = 'email'
     ORDER BY id ASC
   `,
-    [campaignId, influencerId, beforeMaxId]
+    [campaignId, platformInfluencerId, beforeMaxId]
   );
 
   if (!inserted || inserted.length < 2) {

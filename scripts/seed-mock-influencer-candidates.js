@@ -123,11 +123,12 @@ async function upsertCandidate(m) {
   await queryTikTok(
     `
     INSERT INTO tiktok_campaign_influencer_candidates (
-      campaign_id, influencer_id, source, influencer_snapshot,
+      campaign_id, tiktok_username, influencer_id, source, influencer_snapshot,
       match_score, should_contact, email, has_email, analysis_summary, analyzed_at
-    ) VALUES (?, ?, 'mock', ?, ?, ?, ?, ?, ?, NOW())
+    ) VALUES (?, ?, ?, 'mock', ?, ?, ?, ?, ?, ?, NOW())
     ON DUPLICATE KEY UPDATE
       influencer_snapshot=VALUES(influencer_snapshot),
+      influencer_id=COALESCE(VALUES(influencer_id), influencer_id),
       match_score=VALUES(match_score),
       should_contact=VALUES(should_contact),
       analysis_summary=VALUES(analysis_summary),
@@ -136,7 +137,8 @@ async function upsertCandidate(m) {
   `,
     [
       campaignId,
-      m.influencerId,
+      m.username,
+      /^\d{10,}$/.test(String(m.influencerId || "")) ? String(m.influencerId) : null,
       JSON.stringify(m.snapshot || {}),
       m.matchScore ?? null,
       m.shouldContact ? 1 : 0,

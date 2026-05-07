@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
@@ -190,6 +190,667 @@ function workNoteMergeKey(note) {
   return `kw:${kw}@${t}`;
 }
 
+function buildTikTokProfileUrl(handle) {
+  const u = String(handle || "")
+    .trim()
+    .replace(/^@/, "");
+  if (!u) return "#";
+  return `https://www.tiktok.com/@${encodeURIComponent(u)}`;
+}
+
+function formatAnalysisSnippet(v) {
+  if (v == null || v === "") return "—";
+  if (typeof v === "string") return v.length > 900 ? `${v.slice(0, 900)}…` : v;
+  try {
+    const s = JSON.stringify(v, null, 2);
+    return s.length > 900 ? `${s.slice(0, 900)}…` : s;
+  } catch {
+    return String(v);
+  }
+}
+
+/** 粉丝/播放等指标：抓取链路常为 { count, display }，不可直接作为 React 子节点渲染 */
+function formatInfluencerStat(v) {
+  if (v == null || v === "") return "—";
+  if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+    if (typeof v.display === "string" && v.display.trim()) return v.display.trim();
+    if (typeof v.count === "number" && Number.isFinite(v.count)) {
+      return v.count.toLocaleString();
+    }
+    return "—";
+  }
+  if (typeof v === "number" && Number.isFinite(v)) return v.toLocaleString();
+  return String(v);
+}
+
+/** eCPM 用数值播放量：优先 views.count */
+function getNumericViewsForEcpm(item) {
+  const v = item.avg_views ?? item.avgViews ?? item.views;
+  if (
+    v != null &&
+    typeof v === "object" &&
+    !Array.isArray(v) &&
+    typeof v.count === "number" &&
+    Number.isFinite(v.count) &&
+    v.count > 0
+  ) {
+    return v.count;
+  }
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  return null;
+}
+
+function formatEcpmFromFlatAndViews(flatAmt, viewsNum, currencyCode) {
+  if (
+    flatAmt == null ||
+    !Number.isFinite(Number(flatAmt)) ||
+    viewsNum == null ||
+    viewsNum <= 0
+  ) {
+    return "—";
+  }
+  const v = Number(flatAmt) / (viewsNum / 1000);
+  return `${v.toFixed(2)} ${currencyCode || "USD"} / 千次播放`;
+}
+
+/** 执行进度 Tab 下单条红人卡片（按阶段展示字段） */
+function ExecutionProgressRow({
+  stageKey,
+  item,
+  needSample,
+  execPatchingId,
+  patchExecution,
+}) {
+  const [draftExpanded, setDraftExpanded] = React.useState(false);
+  const [negExpanded, setNegExpanded] = React.useState(false);
+  const [counterAmount, setCounterAmount] = React.useState("");
+  const [counterCurrency, setCounterCurrency] = React.useState("USD");
+  const [counterReason, setCounterReason] = React.useState("");
+  const username = item.id || "";
+
+  React.useEffect(() => {
+    setCounterCurrency((item.currency || "USD").toString().toUpperCase().slice(0, 8) || "USD");
+  }, [item.id, item.currency]);
+  const profileUrl = buildTikTokProfileUrl(username);
+  const busy = execPatchingId === username;
+
+  const followers = formatInfluencerStat(
+    item.followers ?? item.followerCount ?? item.follower_count
+  );
+  const views = formatInfluencerStat(
+    item.avg_views ?? item.avgViews ?? item.views
+  );
+  const recommendReasonRaw =
+    item.analysisSummary ||
+    item.reason ||
+    item.analysis_summary ||
+    item.match_analysis_summary ||
+    "";
+  const recommendReason =
+    typeof recommendReasonRaw === "string"
+      ? recommendReasonRaw
+      : recommendReasonRaw != null
+      ? formatAnalysisSnippet(recommendReasonRaw)
+      : "";
+  const matchObj =
+    item.matchAnalysis && typeof item.matchAnalysis === "object"
+      ? item.matchAnalysis
+      : null;
+  const profileAnalysis =
+    (matchObj && matchObj.analysis) ||
+    item.analysis ||
+    item.profile_analysis ||
+    "";
+
+  const shippingRaw =
+    item.executionShippingInfo ||
+    item.shippingAddress ||
+    item.shipping_info ||
+    {};
+  const shipping =
+    typeof shippingRaw === "object" && shippingRaw !== null
+      ? shippingRaw
+      : {};
+
+  const flatUsd =
+    item.flatFeeUsd ??
+    item.flat_fee ??
+    item.flatFeeUSD ??
+    item.campaignAgentDecision?.flatFeeUSD ??
+    null;
+  const viewsNumForEcpm = getNumericViewsForEcpm(item);
+  const ecpmDisplay =
+    item.ecpm != null && item.ecpm !== ""
+      ? String(item.ecpm)
+      : formatEcpmFromFlatAndViews(
+          flatUsd,
+          viewsNumForEcpm,
+          item.currency || "USD"
+        );
+
+  const quoteNegotiation = Array.isArray(item.quoteNegotiation)
+    ? item.quoteNegotiation
+    : [];
+  const canApproveReject = item.stage === "quote_submitted";
+  const canReopenRejected = item.stage === "quote_rejected";
+
+  let draftLink = item.draftLink || item.videoDraftLink;
+  const vd = item.executionVideoDraft;
+  if (!draftLink && Array.isArray(vd) && vd.length) {
+    const last = vd[vd.length - 1];
+    draftLink = last?.draftLink || last?.link || last?.url;
+  }
+  if (!draftLink && vd && typeof vd === "object" && !Array.isArray(vd)) {
+    draftLink = vd.draftLink || vd.link || vd.url;
+  }
+
+  const revisionHistory = Array.isArray(item.revisionHistory)
+    ? item.revisionHistory
+    : [];
+
+  const publishedLink =
+    item.videoLink || item.executionVideoLink || item.video_link;
+
+  const cardStyle = {
+    padding: "10px 12px",
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    border: "1px solid #E5E7EB",
+    fontSize: 12,
+    color: "#374151",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  };
+
+  const labelRow = (k, v) => (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>{k}</span>
+      <span style={{ flex: 1, wordBreak: "break-word" }}>{v ?? "—"}</span>
+    </div>
+  );
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <a
+          href={profileUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontWeight: 600, color: "#4F46E5", textDecoration: "none" }}
+        >
+          @{username}
+        </a>
+        {item.stage === "quote_rejected" && (
+          <span
+            style={{
+              fontSize: 11,
+              padding: "2px 8px",
+              borderRadius: 999,
+              backgroundColor: "#FEE2E2",
+              color: "#B91C1C",
+              whiteSpace: "nowrap",
+            }}
+          >
+            已拒绝报价
+          </span>
+        )}
+      </div>
+
+      {(stageKey === "contacted" ||
+        stageKey === "pendingPrice" ||
+        stageKey === "published") && (
+        <div style={{ fontSize: 11, color: "#6B7280" }}>
+          粉丝 {followers} · 播放 {views}
+        </div>
+      )}
+
+      {stageKey === "contacted" && (
+        <>
+          {labelRow("画像分析", formatAnalysisSnippet(profileAnalysis))}
+          {labelRow("推荐理由", recommendReason || "—")}
+        </>
+      )}
+
+      {stageKey === "pendingPrice" && (
+        <>
+          {labelRow("推荐理由", recommendReason || "—")}
+          {labelRow(
+            `报价 (${item.currency || "USD"})`,
+            flatUsd != null && flatUsd !== ""
+              ? `${Number(flatUsd)} ${item.currency || "USD"}`
+              : "—"
+          )}
+          {labelRow("eCPM", ecpmDisplay)}
+
+          {quoteNegotiation.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <button
+                type="button"
+                onClick={() => setNegExpanded(!negExpanded)}
+                style={{
+                  fontSize: 11,
+                  color: "#4F46E5",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {negExpanded ? "收起砍价记录" : `展开砍价记录（${quoteNegotiation.length}）`}
+              </button>
+              {negExpanded && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  {[...quoteNegotiation].reverse().map((entry, idx) => {
+                    const roleLabel =
+                      entry.role === "advertiser"
+                        ? "广告主"
+                        : entry.role === "influencer"
+                        ? "红人"
+                        : entry.role || "—";
+                    const typeLabel =
+                      entry.type === "counter"
+                        ? "还价"
+                        : entry.type === "quote_rejected"
+                        ? "拒绝报价"
+                        : entry.type === "reopen"
+                        ? "撤销拒绝"
+                        : entry.type || "";
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          fontSize: 11,
+                          borderLeft: "2px solid #E5E7EB",
+                          paddingLeft: 8,
+                          color: "#4B5563",
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, color: "#374151" }}>
+                          {roleLabel}
+                          {typeLabel ? ` · ${typeLabel}` : ""}
+                          {entry.amount != null && Number.isFinite(Number(entry.amount))
+                            ? ` · ${Number(entry.amount)} ${entry.currency || item.currency || "USD"}`
+                            : ""}
+                        </div>
+                        {entry.at ? (
+                          <div style={{ fontSize: 10, color: "#9CA3AF" }}>
+                            {new Date(entry.at).toLocaleString("zh-CN")}
+                          </div>
+                        ) : null}
+                        {entry.reason ? (
+                          <div style={{ marginTop: 2, whiteSpace: "pre-wrap" }}>
+                            {entry.reason}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {canApproveReject && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: 8,
+                backgroundColor: "#F9FAFB",
+                borderRadius: 8,
+                border: "1px solid #E5E7EB",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  color: "#6B7280",
+                }}
+              >
+                广告主还价
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  alignItems: "center",
+                }}
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="金额"
+                  value={counterAmount}
+                  onChange={(e) => setCounterAmount(e.target.value)}
+                  style={{
+                    width: 100,
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: "1px solid #D1D5DB",
+                  }}
+                />
+                <input
+                  type="text"
+                  placeholder="币种"
+                  value={counterCurrency}
+                  onChange={(e) =>
+                    setCounterCurrency(e.target.value.toUpperCase().slice(0, 8))
+                  }
+                  style={{
+                    width: 72,
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: "1px solid #D1D5DB",
+                  }}
+                />
+                <input
+                  type="text"
+                  placeholder="原因（可选）"
+                  value={counterReason}
+                  onChange={(e) => setCounterReason(e.target.value.slice(0, 2000))}
+                  style={{
+                    flex: 1,
+                    minWidth: 140,
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: "1px solid #D1D5DB",
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const amt = parseFloat(counterAmount, 10);
+                    if (!Number.isFinite(amt) || amt <= 0) {
+                      window.alert("请输入有效正数金额");
+                      return;
+                    }
+                    patchExecution("submitQuote", username, {
+                      amount: amt,
+                      currency: counterCurrency.trim() || "USD",
+                      reason: counterReason.trim() || undefined,
+                    });
+                    setCounterAmount("");
+                    setCounterReason("");
+                  }}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #4F46E5",
+                    backgroundColor: "#EEF2FF",
+                    color: "#3730A3",
+                    fontSize: 12,
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  提交还价
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+            {canApproveReject && (
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => patchExecution("approveQuote", username, {})}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #10B981",
+                    backgroundColor: "#ECFDF5",
+                    color: "#047857",
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {busy ? "处理中…" : "同意"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const r = window.prompt("拒绝原因（必填，最多 2000 字）");
+                    if (r == null) return;
+                    const t = r.trim();
+                    if (!t) {
+                      window.alert("请填写拒绝原因");
+                      return;
+                    }
+                    if (!window.confirm("确认拒绝与该红人合作？")) return;
+                    patchExecution("rejectQuote", username, {
+                      rejectReason: t.slice(0, 2000),
+                    });
+                  }}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #F87171",
+                    backgroundColor: "#FEF2F2",
+                    color: "#B91C1C",
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  拒绝
+                </button>
+              </>
+            )}
+            {canReopenRejected && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const r = window.prompt("撤销拒绝的原因（必填，最多 2000 字）");
+                  if (r == null) return;
+                  const t = r.trim();
+                  if (!t) {
+                    window.alert("请填写撤销原因");
+                    return;
+                  }
+                  patchExecution("reopenQuote", username, {
+                    reopenReason: t.slice(0, 2000),
+                  });
+                }}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #6366F1",
+                  backgroundColor: "#EEF2FF",
+                  color: "#4338CA",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
+                撤销拒绝
+              </button>
+            )}
+          </div>
+          {item.stage === "quote_rejected" && (
+            <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>
+              当前为已拒绝报价；可点击「撤销拒绝」恢复为待审核价格。
+              {item.quoteRejectedAt ? (
+                <span> 拒绝时间：{String(item.quoteRejectedAt)}</span>
+              ) : null}
+            </div>
+          )}
+        </>
+      )}
+
+      {stageKey === "pendingSample" && needSample && (
+        <>
+          {labelRow("Full Name", shipping.fullName || shipping.name)}
+          {labelRow("Country", shipping.country)}
+          {labelRow("State/Province", shipping.state || shipping.province)}
+          {labelRow("City", shipping.city)}
+          {labelRow(
+            "Address Line",
+            shipping.addressLine || shipping.addressLine1 || shipping.address
+          )}
+          {labelRow("Post/Zip Code", shipping.postalCode || shipping.zip)}
+          {labelRow("Telephone", shipping.phone || shipping.telephone)}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              patchExecution("confirmShip", username, {
+                shippingAddress: shipping,
+              })
+            }
+            style={{
+              alignSelf: "flex-start",
+              marginTop: 4,
+              padding: "4px 12px",
+              borderRadius: 8,
+              border: "1px solid #4F46E5",
+              backgroundColor: "#EEF2FF",
+              color: "#3730A3",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "处理中…" : "确认已寄出样品"}
+          </button>
+        </>
+      )}
+
+      {stageKey === "pendingDraft" && (
+        <>
+          {labelRow(
+            "草稿链接",
+            draftLink ? (
+              <a href={draftLink} target="_blank" rel="noreferrer" style={{ color: "#4F46E5" }}>
+                打开链接
+              </a>
+            ) : (
+              "—"
+            )
+          )}
+          {labelRow("修改建议", item.draftFeedback || item.feedback || "—")}
+          {revisionHistory.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setDraftExpanded(!draftExpanded)}
+                style={{
+                  alignSelf: "flex-start",
+                  fontSize: 11,
+                  color: "#4F46E5",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {draftExpanded ? "收起修订记录" : `展开修订记录 (${revisionHistory.length})`}
+              </button>
+              {draftExpanded &&
+                revisionHistory.map((rev, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      borderLeft: "2px solid #E5E7EB",
+                      paddingLeft: 8,
+                      fontSize: 11,
+                      color: "#4B5563",
+                    }}
+                  >
+                    {labelRow(
+                      "链接",
+                      rev.draftLink ? (
+                        <a href={rev.draftLink} target="_blank" rel="noreferrer">
+                          {rev.draftLink}
+                        </a>
+                      ) : (
+                        "—"
+                      )
+                    )}
+                    {labelRow("建议", rev.feedback || "—")}
+                  </div>
+                ))}
+            </>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                patchExecution("approveDraft", username, {
+                  draftLink,
+                })
+              }
+              style={{
+                padding: "4px 12px",
+                borderRadius: 8,
+                border: "1px solid #10B981",
+                backgroundColor: "#ECFDF5",
+                color: "#047857",
+                cursor: busy ? "not-allowed" : "pointer",
+              }}
+            >
+              同意草稿
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                const feedback = window.prompt("修改建议（可选）") ?? "";
+                patchExecution("rejectDraft", username, {
+                  draftLink,
+                  feedback,
+                });
+              }}
+              style={{
+                padding: "4px 12px",
+                borderRadius: 8,
+                border: "1px solid #F59E0B",
+                backgroundColor: "#FFFBEB",
+                color: "#B45309",
+                cursor: busy ? "not-allowed" : "pointer",
+              }}
+            >
+              不同意并反馈
+            </button>
+          </div>
+        </>
+      )}
+
+      {stageKey === "published" && (
+        <>
+          {labelRow(
+            "视频",
+            publishedLink ? (
+              <a href={publishedLink} target="_blank" rel="noreferrer" style={{ color: "#4F46E5" }}>
+                {publishedLink}
+              </a>
+            ) : (
+              "—"
+            )
+          )}
+          {labelRow(
+            "播放 / 赞 / 评",
+            `${formatInfluencerStat(item.views)} / ${formatInfluencerStat(item.likes)} / ${formatInfluencerStat(item.comments)}`
+          )}
+          {labelRow("CPM", item.cpm != null ? String(item.cpm) : "—")}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function HomePage() {
   // 统一的初始状态（服务端和客户端一致）
   const defaultMessage = cloneWelcomeMessages();
@@ -227,6 +888,7 @@ export default function HomePage() {
   const [executionError, setExecutionError] = useState(null);
   const [executionConfig, setExecutionConfig] = useState(null); // 执行阶段右侧「工作笔记」用到的执行节奏 & 汇报配置
   const [executionConfigError, setExecutionConfigError] = useState(null);
+  const [execPatchingId, setExecPatchingId] = useState(null); // 执行进度 PATCH 中的红人 id
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("pendingPrice"); // 执行进度当前选中的阶段
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
@@ -1054,6 +1716,42 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [context?.campaignId, context?.workflowState, context?.published]);
+
+  const refreshExecutionStatusQuiet = useCallback(async () => {
+    const cid = context?.campaignId;
+    if (!cid) return;
+    try {
+      const res = await fetch(`/api/campaigns/${cid}/execution-status`);
+      const data = await res.json();
+      if (data.success) setExecutionStatus(data);
+    } catch (e) {
+      console.error("[HomePage] 刷新执行进度失败:", e);
+    }
+  }, [context?.campaignId]);
+
+  const patchExecution = useCallback(
+    async (action, influencerId, payload = {}) => {
+      const cid = context?.campaignId;
+      if (!cid) return;
+      setExecPatchingId(influencerId);
+      try {
+        const res = await fetch(`/api/campaigns/${cid}/execution`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ influencerId, action, payload }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "更新失败");
+        await refreshExecutionStatusQuiet();
+      } catch (err) {
+        console.error(err);
+        alert(err.message || "更新失败");
+      } finally {
+        setExecPatchingId(null);
+      }
+    },
+    [context?.campaignId, refreshExecutionStatusQuiet]
+  );
 
   // 智能自动滚动：只在用户发送消息或AI开始新回复时滚动，不在步骤更新时滚动
   useEffect(() => {
@@ -2422,6 +3120,9 @@ export default function HomePage() {
     isVerticalResizingRef.current = false;
     document.removeEventListener('mousemove', handleVerticalMouseMove);
     document.removeEventListener('mouseup', handleVerticalMouseUp);
+    document.querySelectorAll(".vertical-panel-splitter").forEach((el) => {
+      el.style.backgroundColor = "#E5E7EB";
+    });
   };
 
   // 清理事件监听器
@@ -3792,12 +4493,17 @@ export default function HomePage() {
                 // 执行阶段：上「工作笔记」（执行节奏 + 汇报方式）、下「执行进度」（单阶段 Tab）
                 if (isExecutionPhase && binComputerView === "overview") {
                   const cols = executionStatus?.columns || {};
-                  const stageDefs = [
+                  const needSampleFlag = executionStatus?.needSample !== false;
+                  const stageDefsAll = [
+                    { key: "contacted", title: "已联系", items: cols.contacted || [] },
                     { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
                     { key: "pendingSample", title: "待寄样品", items: cols.pendingSample || [] },
                     { key: "pendingDraft", title: "待审核草稿", items: cols.pendingDraft || [] },
                     { key: "published", title: "已发布视频", items: cols.published || [] },
                   ];
+                  const stageDefs = stageDefsAll.filter(
+                    (s) => s.key !== "pendingSample" || needSampleFlag
+                  );
                   const currentStage =
                     stageDefs.find((s) => s.key === activeExecutionStage) || stageDefs[0];
                   const currentItems = currentStage.items;
@@ -3947,16 +4653,26 @@ export default function HomePage() {
                         </div>
                       </div>
 
-                      {/* 上下拖拽分隔条 */}
+                      {/* 上下拖拽分隔条（与聊天区/Bin 电脑间左右分割条同色：悬停与拖拽时 #0F172A） */}
                       <div
+                        className="vertical-panel-splitter"
                         onMouseDown={handleVerticalMouseDown}
                         style={{
                           height: "4px",
                           cursor: "row-resize",
                           margin: "4px 0",
                           flexShrink: 0,
-                          background:
-                            "linear-gradient(to right, transparent 0%, #D1D5DB 20%, #D1D5DB 80%, transparent 100%)"
+                          backgroundColor: "#E5E7EB",
+                          transition: "background-color 0.2s",
+                          zIndex: 10
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "#0F172A";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isVerticalResizingRef.current) {
+                            e.currentTarget.style.backgroundColor = "#E5E7EB";
+                          }
                         }}
                       />
 
@@ -3977,11 +4693,22 @@ export default function HomePage() {
                         fontWeight: 600,
                         color: "#6B7280",
                         backgroundColor: "#F9FAFB",
-                        borderBottom: "1px solid #E5E7EB"
+                        borderBottom: "1px solid #E5E7EB",
+                        flexShrink: 0
                       }}>
                           执行进度
                         </div>
-                        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "12px" }}>
+                        <div
+                          style={{
+                            flex: 1,
+                            minHeight: 0,
+                            overflow: "hidden",
+                            padding: "12px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8
+                          }}
+                        >
                           {executionLoading ? (
                             <div
                               style={{
@@ -4020,7 +4747,7 @@ export default function HomePage() {
                               {/* 阶段 Tab 切换 */}
                               <div
                                 style={{
-                                  marginBottom: 8,
+                                  flexShrink: 0,
                                   display: "flex",
                                   gap: 8,
                                   flexWrap: "wrap"
@@ -4071,53 +4798,14 @@ export default function HomePage() {
                                   </div>
                                 ) : (
                                   currentItems.map((item) => (
-                                    <div
+                                    <ExecutionProgressRow
                                       key={item.id}
-                                      style={{
-                                        padding: "8px 10px",
-                                        borderRadius: 10,
-                                        backgroundColor: "#FFFFFF",
-                                        border: "1px solid #E5E7EB",
-                                        fontSize: 12,
-                                        color: "#374151",
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        gap: 4
-                                      }}
-                                    >
-                                      <div
-                                        style={{
-                                          display: "flex",
-                                          justifyContent: "space-between",
-                                          alignItems: "center",
-                                          gap: 8
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            fontWeight: 600,
-                                            overflow: "hidden",
-                                            textOverflow: "ellipsis",
-                                            whiteSpace: "nowrap"
-                                          }}
-                                        >
-                                          @{item.id || item.name}
-                                        </div>
-                                        {item.name && item.name !== item.id && (
-                                          <div
-                                            style={{
-                                              fontSize: 11,
-                                              color: "#6B7280",
-                                              overflow: "hidden",
-                                              textOverflow: "ellipsis",
-                                              whiteSpace: "nowrap"
-                                            }}
-                                          >
-                                            {item.name}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
+                                      stageKey={currentStage.key}
+                                      item={item}
+                                      needSample={needSampleFlag}
+                                      execPatchingId={execPatchingId}
+                                      patchExecution={patchExecution}
+                                    />
                                   ))
                                 )}
                               </div>
@@ -4373,8 +5061,9 @@ export default function HomePage() {
                       </div>
                     </div>
 
-                    {/* 上下拖拽分隔条 */}
+                    {/* 上下拖拽分隔条（与左右分割条一致） */}
                     <div
+                      className="vertical-panel-splitter"
                       onMouseDown={handleVerticalMouseDown}
                       style={{
                         height: "4px",
@@ -4382,14 +5071,15 @@ export default function HomePage() {
                         margin: "4px 0",
                         flexShrink: 0,
                         backgroundColor: "#E5E7EB",
-                        transition: "background-color 0.2s"
+                        transition: "background-color 0.2s",
+                        zIndex: 10
                       }}
                       onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = "#0F172A";
+                        e.currentTarget.style.backgroundColor = "#0F172A";
                       }}
                       onMouseLeave={(e) => {
                         if (!isVerticalResizingRef.current) {
-                          e.target.style.backgroundColor = "#E5E7EB";
+                          e.currentTarget.style.backgroundColor = "#E5E7EB";
                         }
                       }}
                     />

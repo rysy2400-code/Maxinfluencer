@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign (
   campaign_info JSON COMMENT 'Campaign 信息快照（平台、地区、预算、发布时间等）',
   influencer_profile JSON COMMENT '红人画像快照',
   content_script JSON COMMENT '内容脚本快照',
+  recommended_influencers JSON NULL COMMENT '发布时推荐红人列表（与 influencer_snapshot 同结构，含 analysisSummary/matchAnalysis；不进执行表）',
   keyword_strategy TEXT NULL COMMENT '用户关键词策略（简短文本，供关键词生成参考）',
 
   influencers_per_day INT NOT NULL DEFAULT 5 COMMENT '每天联系红人数量',
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign (
 CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   id INT AUTO_INCREMENT PRIMARY KEY,
   campaign_id VARCHAR(36) NOT NULL COMMENT 'tiktok_campaign.id',
-  influencer_id VARCHAR(128) NOT NULL COMMENT '红人唯一标识（如 TikTok 用户名或内部 ID）',
+  tiktok_username VARCHAR(128) NOT NULL COMMENT 'TikTok handle（无 @），与候选表一致',
+  influencer_id VARCHAR(128) NULL COMMENT 'TikTok userId，与 tiktok_influencer.influencer_id 一致（可空、可回填）',
 
   influencer_snapshot JSON COMMENT '红人快照（画像 + 主页数据 + 评估等）',
 
@@ -48,15 +50,16 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
     'pending_quote',
     'quote_submitted',
     'pending_sample',
-    'sample_sent',
     'pending_draft',
     'draft_submitted',
     'published',
-    'failed'
+    'quote_rejected'
   ) NOT NULL DEFAULT 'pending_quote' COMMENT '执行阶段',
 
   -- 商务/交付信息（可随流程逐步填写）
-  flat_fee DECIMAL(10,2) NULL COMMENT '一次性合作费用（USD）',
+  flat_fee DECIMAL(10,2) NULL COMMENT '当前最新报价金额（数值，币种见 currency）',
+  currency VARCHAR(8) NOT NULL DEFAULT 'USD' COMMENT '报价币种 ISO 4217，如 USD、EUR',
+  quote_negotiation JSON NULL COMMENT '报价/砍价时间线：[{role,amount,currency,reason,at,source}]',
   sku VARCHAR(255) NULL COMMENT 'SKU（用于寄样/对账）',
   shipping_info JSON NULL COMMENT '本次寄样信息快照（地址/收件人/电话/备注等）',
   video_draft JSON NULL COMMENT '草稿与修改建议（建议存数组：[{draftLink, feedback, status, createdAt}]）',
@@ -68,7 +71,8 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-  UNIQUE KEY uk_campaign_influencer (campaign_id, influencer_id),
+  UNIQUE KEY uk_campaign_influencer (campaign_id, tiktok_username),
+  INDEX idx_execution_platform_influencer_id (influencer_id),
   INDEX idx_campaign_stage (campaign_id, stage),
   INDEX idx_stage (stage)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='TikTok Campaign 执行明细（按红人）';

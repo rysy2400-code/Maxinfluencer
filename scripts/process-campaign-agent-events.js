@@ -14,6 +14,10 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import {
+  SQL_EXECUTION_CREATOR_MATCH,
+  paramsExecutionCreatorMatch,
+} from "../lib/db/campaign-execution-keys.js";
 import { appendBinMessageToSession } from "../lib/db/campaign-session-dao.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import {
@@ -36,6 +40,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
+
+/** 邮件 Agent 建议写入的合法 stage（不含已废弃的 failed / sample_sent） */
+const ALLOWED_EXECUTION_STAGES = new Set([
+  "pending_quote",
+  "quote_submitted",
+  "pending_sample",
+  "pending_draft",
+  "draft_submitted",
+  "published",
+  "quote_rejected",
+]);
+
+function normalizeCurrencyCode(v, fallback = "USD") {
+  const s = String(v || "")
+    .trim()
+    .toUpperCase()
+    .slice(0, 8);
+  return s || fallback;
+}
+
+function parseQuoteNegotiationColumn(raw) {
+  const o = parseJsonOrObject(raw);
+  if (Array.isArray(o)) return o.filter((x) => x && typeof x === "object");
+  return [];
+}
 
 async function fetchPendingCampaignAgentEvents(limit = 20) {
   const n = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -74,6 +103,14 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     );
   }
 
+  if (!ALLOWED_EXECUTION_STAGES.has(newStage)) {
+    throw new Error(
+      `无效的 newStage「${newStage}」。允许值：${[...ALLOWED_EXECUTION_STAGES].join(
+        ", "
+      )}。注意：quote_rejected 仅表示「红人已报价后，品牌方拒绝该报价」；不要使用已废弃的 failed。`
+    );
+  }
+
   let flatFee =
     typeof payload.flatFeeUSD === "number"
       ? payload.flatFeeUSD
@@ -93,11 +130,53 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   const emailEvent = payload.emailEvent || {};
 
+  const execRows = await queryTikTok(
+    `
+    SELECT flat_fee, currency, quote_negotiation, last_event
+    FROM tiktok_campaign_execution
+    WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
+  `,
+    [campaignId, ...paramsExecutionCreatorMatch(influencerId)]
+  );
+  if (!execRows || !execRows[0]) {
+    throw new Error(`未找到执行行：${campaignId} / ${influencerId}`);
+  }
+  const cur = execRows[0];
+  let nextCurrency = normalizeCurrencyCode(cur.currency, "USD");
+  let negotiation = parseQuoteNegotiationColumn(cur.quote_negotiation);
+
+  if (flatFee != null && Number.isFinite(Number(flatFee))) {
+    const role =
+      payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
+        ? "advertiser"
+        : "influencer";
+    nextCurrency = normalizeCurrencyCode(payload.currency || cur.currency, nextCurrency);
+    negotiation = [
+      ...negotiation,
+      {
+        role,
+        amount: Number(flatFee),
+        currency: nextCurrency,
+        reason:
+          typeof payload.quoteReason === "string" && payload.quoteReason.trim()
+            ? payload.quoteReason.trim()
+            : typeof payload.note === "string" && payload.note.trim()
+              ? payload.note.trim()
+              : null,
+        at: new Date().toISOString(),
+        source: "advertiser_agent_event",
+        sourceEventId: eventRow.id,
+      },
+    ];
+  }
+
   await queryTikTok(
     `
     UPDATE tiktok_campaign_execution
     SET stage = ?,
         flat_fee = COALESCE(?, flat_fee),
+        currency = ?,
+        quote_negotiation = ?,
         video_link = COALESCE(?, video_link),
         shipping_info = COALESCE(?, shipping_info),
         last_event = JSON_MERGE_PRESERVE(
@@ -118,11 +197,13 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
             )
           )
         )
-    WHERE campaign_id = ? AND influencer_id = ?
+    WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
     [
       newStage,
       flatFee,
+      nextCurrency,
+      JSON.stringify(negotiation),
       videoLink,
       shippingInfo ? JSON.stringify(shippingInfo) : null,
       new Date().toISOString(),
@@ -136,7 +217,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       videoLink,
       shippingInfo ? JSON.stringify(shippingInfo) : null,
       campaignId,
-      influencerId,
+      ...paramsExecutionCreatorMatch(influencerId),
     ]
   );
 }
@@ -181,9 +262,9 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
             ?
           )
         )
-    WHERE campaign_id = ? AND influencer_id = ?
+    WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
-    [JSON.stringify(summary), campaignId, influencerId]
+    [JSON.stringify(summary), campaignId, ...paramsExecutionCreatorMatch(influencerId)]
   );
 
   // 红人同意时，向该 campaign 关联的 session 追加一条 Bin 消息，品牌方在前端聊天框可见

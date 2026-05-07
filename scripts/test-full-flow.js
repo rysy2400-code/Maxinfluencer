@@ -10,6 +10,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { spawnSync } from "child_process";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import {
+  SQL_EXECUTION_CREATOR_MATCH,
+  paramsExecutionCreatorMatch,
+} from "../lib/db/campaign-execution-keys.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -185,8 +189,8 @@ async function main() {
 
   // 验证：执行表 last_event
   const exec = await queryTikTok(
-    `SELECT last_event FROM tiktok_campaign_execution WHERE campaign_id = ? AND influencer_id = ?`,
-    [campaignId, TEST_INFLUENCER_ID]
+    `SELECT last_event FROM tiktok_campaign_execution WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}`,
+    [campaignId, ...paramsExecutionCreatorMatch(TEST_INFLUENCER_ID)]
   );
   const lastEvent = exec?.[0]?.last_event;
   const le = typeof lastEvent === "string" ? JSON.parse(lastEvent || "{}") : lastEvent || {};
