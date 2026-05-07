@@ -1382,11 +1382,11 @@ export default function HomePage() {
         if (!silent) setLoadingSessions(false);
         return { ok: true, drafts, published };
       }
-      // 如果是表不存在的错误，显示更友好的提示
-      if (draftData.code === 'TABLE_NOT_EXISTS') {
-        throw new Error('数据库表未创建，请先执行创建表的 SQL');
-      }
-      throw new Error(draftData.error || '获取草稿列表失败');
+        // 如果是表不存在的错误，显示更友好的提示
+        if (draftData.code === 'TABLE_NOT_EXISTS') {
+          throw new Error('数据库表未创建，请先执行创建表的 SQL');
+        }
+        throw new Error(draftData.error || '获取草稿列表失败');
     } catch (error) {
       console.error('[HomePage] 加载会话列表失败:', error);
       if (!silent) {
@@ -2802,16 +2802,16 @@ export default function HomePage() {
                       </summary>
                       <div
                         style={{
-                          marginTop: 8,
-                          padding: 8,
-                          backgroundColor: "#F9FAFB",
-                          borderRadius: 4,
-                          fontSize: 11,
-                          color: "#4B5563",
+                        marginTop: 8,
+                        padding: 8,
+                        backgroundColor: "#F9FAFB",
+                        borderRadius: 4,
+                        fontSize: 11,
+                        color: "#4B5563",
                         }}
                       >
                         <SafeMarkdown style={{ fontSize: 11, color: "#4B5563", lineHeight: 1.65 }}>
-                          {match.analysis}
+                        {match.analysis}
                         </SafeMarkdown>
                       </div>
                     </details>
@@ -2931,7 +2931,7 @@ export default function HomePage() {
   const handleDeleteSession = async (sessionId, e) => {
     if (e?.stopPropagation) e.stopPropagation();
     setSessionRowMenuId((open) => (open === sessionId ? null : open));
-
+    
     if (!confirm('确定要删除这个草稿吗？')) return;
     
     try {
@@ -2964,10 +2964,10 @@ export default function HomePage() {
         try {
           await createDraftSessionAndActivate();
         } catch (_) {
-          setCurrentSessionId(null);
-          setMessages(defaultMessage);
+        setCurrentSessionId(null);
+        setMessages(defaultMessage);
           setContext({ workflowState: "idle" });
-        }
+      }
       }
     } catch (error) {
       console.error('[HomePage] 删除会话失败:', error);
@@ -3011,10 +3011,10 @@ export default function HomePage() {
         try {
           await createDraftSessionAndActivate();
         } catch (_) {
-          setCurrentSessionId(null);
-          setMessages(defaultMessage);
+        setCurrentSessionId(null);
+        setMessages(defaultMessage);
           setContext({ workflowState: "idle" });
-        }
+      }
       }
     } catch (error) {
       console.error('[HomePage] 删除已发布 campaign 失败:', error);
@@ -3795,35 +3795,35 @@ export default function HomePage() {
                               }}
                             />
                           ) : (
-                            <div
-                              style={{
-                                fontWeight: isActive ? 600 : 500,
-                                marginBottom: 2,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {session.title || "未命名草稿"}
-                            </div>
+                                <div
+                                  style={{
+                            fontWeight: isActive ? 600 : 500,
+                            marginBottom: 2,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                            {session.title || "未命名草稿"}
+                          </div>
                           )}
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: "#9CA3AF",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {session.updatedAt
-                              ? new Date(session.updatedAt).toLocaleString("zh-CN", {
-                                  month: "short",
-                                  day: "numeric",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
-                              : ""}
+                                <div
+                                  style={{
+                            fontSize: 10,
+                            color: "#9CA3AF",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                            {session.updatedAt 
+                                    ? new Date(session.updatedAt).toLocaleString("zh-CN", {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })
+                                    : ""}
                           </div>
                         </div>
                         {renamingSessionId !== session.id ? (
@@ -3965,18 +3965,18 @@ export default function HomePage() {
                               }}
                             />
                           ) : (
-                            <div
-                              style={{
-                                fontWeight: isActive ? 600 : 500,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              {session.title || "已发布 Campaign"}
-                            </div>
+                          <div
+                            style={{
+                              fontWeight: isActive ? 600 : 500,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              flex: 1,
+                              minWidth: 0,
+                            }}
+                          >
+                            {session.title || "已发布 Campaign"}
+                          </div>
                           )}
                           {renamingSessionId !== session.id ? (
                             <CampaignSessionRowMenu
@@ -4272,9 +4272,9 @@ export default function HomePage() {
                 minHeight: 0,
                 display: "flex",
                 flexDirection: "column",
-                overflow: "hidden"
-              }}
-            >
+              overflow: "hidden"
+            }}
+          >
             <div
               ref={chatContainerRef}
               style={{
@@ -5166,12 +5166,12 @@ export default function HomePage() {
                           return (
                             <div
                               style={{
-                                marginTop: influencerMatches.length > 0 ? 16 : 0,
-                                paddingTop: influencerMatches.length > 0 ? 12 : 0,
-                                borderTop: influencerMatches.length > 0 ? "1px solid #E5E7EB" : "none",
-                                fontSize: 12,
-                                color: "#1F2937",
-                                lineHeight: 1.7,
+                              marginTop: influencerMatches.length > 0 ? 16 : 0,
+                              paddingTop: influencerMatches.length > 0 ? 12 : 0,
+                              borderTop: influencerMatches.length > 0 ? "1px solid #E5E7EB" : "none",
+                              fontSize: 12,
+                              color: "#1F2937",
+                              lineHeight: 1.7,
                                 wordBreak: "break-word",
                               }}
                             >
@@ -5181,7 +5181,7 @@ export default function HomePage() {
                                 </div>
                               )}
                               <SafeMarkdown style={{ fontSize: 12, color: "#1F2937", lineHeight: 1.7 }}>
-                                {pendingStep.detail}
+                              {pendingStep.detail}
                               </SafeMarkdown>
                             </div>
                           );
