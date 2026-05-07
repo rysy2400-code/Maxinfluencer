@@ -27,7 +27,11 @@ function Register-MaxinNodeRepeatMinutes {
     [int]$Minutes
   )
   $taskName = "Maxinfluencer-$Name"
-  $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $ScriptRelative -WorkingDirectory $Root
+  # Windows（Node 20+）：含 import 的 .js 在未声明 type:module 时会被当 CJS。
+  # 本仓库 worker 机已验证可用：node --experimental-default-type=module <script.js>
+  # （动态 import 的 node-import.mjs 仍会把子 .js 当 CJS，故不用 loader。）
+  $arg = "--experimental-default-type=module $ScriptRelative"
+  $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $arg -WorkingDirectory $Root
   $start = (Get-Date).AddMinutes(1)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew

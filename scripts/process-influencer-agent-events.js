@@ -13,13 +13,13 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import {
   sendOutreach,
   loadConversationHistoryForInfluencer,
 } from "../lib/agents/influencer-agent.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
-import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
@@ -44,6 +44,24 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+/** 与 tiktok_influencer.influencer_id 一致的平台 userId；Worker 单文件内联，避免未合并的 campaign-dao 依赖 */
+async function getExecutionPlatformInfluencerId(campaignId, tiktokUsername) {
+  if (!campaignId || tiktokUsername == null) return null;
+  const h = String(tiktokUsername).replace(/^@/, "").trim();
+  if (!h) return null;
+  const rows = await queryTikTok(
+    `
+    SELECT influencer_id
+    FROM tiktok_campaign_execution
+    WHERE campaign_id = ? AND tiktok_username = ?
+    LIMIT 1
+  `,
+    [campaignId, h]
+  );
+  const v = rows?.[0]?.influencer_id;
+  return v != null && String(v).trim() !== "" ? String(v).trim() : null;
+}
+
 async function fetchPendingInfluencerAgentEvents(limit = 20) {
   const n = Math.min(50, Math.max(1, Number(limit) || 20));
   const rows = await queryTikTok(
@@ -59,6 +77,43 @@ async function fetchPendingInfluencerAgentEvents(limit = 20) {
   return rows || [];
 }
 
+function looksLikeNumericPlatformId(v) {
+  return v != null && /^\d{10,}$/.test(String(v).trim());
+}
+
+/**
+ * 解析 TikTok 平台 userId（与 tiktok_influencer.influencer_id 一致），不用 username 查主档。
+ */
+async function resolvePlatformInfluencerIdForAgentEvent(campaignId, eventRow, payload) {
+  if (payload?.platformInfluencerId != null && String(payload.platformInfluencerId).trim() !== "") {
+    return String(payload.platformInfluencerId).trim();
+  }
+  const ev = eventRow?.influencer_id;
+  if (ev != null && String(ev).trim() !== "") {
+    const s = String(ev).trim();
+    if (looksLikeNumericPlatformId(s)) return s;
+  }
+  const cand = payload?.influencerId;
+  if (cand != null && looksLikeNumericPlatformId(cand)) return String(cand).trim();
+  const handle = payload?.tiktokUsername || payload?.influencerHandle || cand;
+  if (campaignId && handle) {
+    const fromExec = await getExecutionPlatformInfluencerId(
+      campaignId,
+      String(handle).replace(/^@/, "").trim()
+    );
+    if (fromExec) return fromExec;
+  }
+  if (campaignId && ev != null && String(ev).trim() !== "" && !looksLikeNumericPlatformId(ev)) {
+    return (
+      (await getExecutionPlatformInfluencerId(
+        campaignId,
+        String(ev).replace(/^@/, "").trim()
+      )) || null
+    );
+  }
+  return null;
+}
+
 async function markInfluencerAgentEventStatus(id, status, errorMessage = null) {
   await queryTikTok(
     `
@@ -72,21 +127,58 @@ async function markInfluencerAgentEventStatus(id, status, errorMessage = null) {
 
 async function handleFirstOutreach(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id;
-  const influencerId = payload.influencerId || eventRow.influencer_id;
+  const tiktokUsername = String(
+    payload.tiktokUsername || payload.influencerId || ""
+  )
+    .replace(/^@/, "")
+    .trim();
   const snapshot = payload.snapshot || null;
 
-  if (!campaignId || !influencerId) {
+  if (!campaignId || !tiktokUsername) {
     throw new Error(
-      "first_outreach 缺少必要字段：campaignId / influencerId"
+      "first_outreach 缺少必要字段：campaignId / tiktokUsername（或旧 payload.influencerId=handle）"
     );
   }
 
-  await sendOutreach({ campaignId, influencerId, snapshot });
+  let platformId =
+    payload.platformInfluencerId != null &&
+    String(payload.platformInfluencerId).trim() !== ""
+      ? String(payload.platformInfluencerId).trim()
+      : "";
+
+  if (!platformId) {
+    const fromExec = await getExecutionPlatformInfluencerId(campaignId, tiktokUsername);
+    if (fromExec) platformId = fromExec;
+  }
+
+  if (!platformId && eventRow.influencer_id != null && String(eventRow.influencer_id).trim() !== "") {
+    const ev = String(eventRow.influencer_id).trim();
+    const mainRow = await getInfluencerById(ev);
+    if (mainRow) platformId = ev;
+  }
+
+  if (!platformId) {
+    throw new Error(
+      "first_outreach 缺少平台 influencer_id：请回填 tiktok_campaign_execution.influencer_id，或在 payload 提供 platformInfluencerId（须与 tiktok_influencer.influencer_id 一致）"
+    );
+  }
+
+  await sendOutreach({
+    campaignId,
+    platformInfluencerId: platformId,
+    tiktokUsername,
+    snapshot,
+  });
 }
 
 async function handleOutboundEmail(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id || null;
-  const influencerId = payload.influencerId || eventRow.influencer_id || null;
+  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+    campaignId,
+    eventRow,
+    payload
+  );
+  const influencerId = platformInfluencerId || payload.influencerId || eventRow.influencer_id || null;
 
   const to =
     payload.to ||
@@ -100,16 +192,16 @@ async function handleOutboundEmail(eventRow, payload) {
   }
 
   let influencer = null;
-  if (influencerId) {
+  if (platformInfluencerId) {
     try {
-      influencer = await getInfluencerById(influencerId);
+      influencer = await getInfluencerById(platformInfluencerId);
     } catch {
       influencer = null;
     }
   }
 
   const ctx = await resolveInfluencerThreadMailContext({
-    influencerId,
+    influencerId: platformInfluencerId || influencerId,
     influencer,
     preferredInReplyToMessageId:
       payload.inReplyTo || payload.emailEvent?.messageId || null,
@@ -120,7 +212,7 @@ async function handleOutboundEmail(eventRow, payload) {
     ctx.subjectForSend;
 
   const headers = {
-    "X-Maxin-Influencer-Id": influencerId || "",
+    "X-Maxin-Influencer-Id": platformInfluencerId || "",
     "X-Maxin-Campaign-Id": campaignId || "",
     "X-Maxin-Source": "InfluencerAgent",
   };
@@ -154,7 +246,7 @@ async function handleOutboundEmail(eventRow, payload) {
   // 记录到对话记忆表
   try {
     await logConversationMessage({
-      influencerId,
+      influencerId: platformInfluencerId || influencerId,
       campaignId,
       direction: "bin",
       channel: "email",
@@ -208,20 +300,25 @@ async function handleOutboundEmail(eventRow, payload) {
 
 async function handleAskInfluencerSpecialRequest(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id || null;
-  const influencerId = payload.influencerId || eventRow.influencer_id || null;
   const specialRequestId = payload.specialRequestId || null;
   const specialRequestStatus = payload.specialRequestStatus || "pending_creator";
   const brandMessage = payload.brandMessage || "";
 
-  if (!influencerId) {
-    throw new Error("ask_influencer_special_request 缺少 influencerId");
+  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+    campaignId,
+    eventRow,
+    payload
+  );
+  if (!platformInfluencerId) {
+    throw new Error(
+      "ask_influencer_special_request 无法解析平台 influencer_id（请使用 payload.platformInfluencerId 或执行行已回填）"
+    );
   }
 
-  // 查红人和其邮箱
-  const influencer = influencerId ? await getInfluencerById(influencerId) : null;
+  const influencer = await getInfluencerById(platformInfluencerId);
   if (!influencer) {
     throw new Error(
-      `ask_influencer_special_request 找不到红人 ${influencerId}`
+      `ask_influencer_special_request 主档不存在红人 influencer_id=${platformInfluencerId}`
     );
   }
 
@@ -233,18 +330,18 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
 
   if (!toEmail) {
     throw new Error(
-      `ask_influencer_special_request 红人 ${influencerId} 缺少邮箱联系方式`
+      `ask_influencer_special_request 红人 influencer_id=${platformInfluencerId} 缺少邮箱联系方式`
     );
   }
 
   // 对话历史（红人全局，跨 campaign）
   const conversationHistory = await loadConversationHistoryForInfluencer(
-    influencerId,
+    platformInfluencerId,
     20
   );
 
   const ctx = await resolveInfluencerThreadMailContext({
-    influencerId,
+    influencerId: platformInfluencerId,
     influencer,
     campaignId,
   });
@@ -295,7 +392,7 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
   const subject = ctx.subjectForSend;
 
   const headers = {
-    "X-Maxin-Influencer-Id": influencerId || "",
+    "X-Maxin-Influencer-Id": platformInfluencerId || "",
     "X-Maxin-Campaign-Id": campaignId || "",
     "X-Maxin-Source": "InfluencerAgent",
   };
@@ -327,7 +424,7 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
   // 记录到对话记忆表
   try {
     await logConversationMessage({
-      influencerId,
+      influencerId: platformInfluencerId,
       campaignId,
       direction: "bin",
       channel: "email",
