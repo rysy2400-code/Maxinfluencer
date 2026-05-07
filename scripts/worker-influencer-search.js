@@ -483,19 +483,23 @@ async function sleep(ms) {
 }
 
 async function reclaimStuckProcessingTasks() {
-  // 仅按 last_progress_at 判断（用户确认）：超过 5 分钟无推进则回收
+  const stuckMinutes = Math.min(
+    24 * 60,
+    Math.max(1, Number(process.env.SEARCH_TASK_STUCK_RECLAIM_MINUTES) || 7)
+  );
+  // 仅按 last_progress_at 判断：超过 N 分钟无推进则回收（默认 7 分钟）
   const rows = await queryTikTok(
     `
     UPDATE tiktok_influencer_search_task
     SET status = 'failed',
         finished_at = NOW(),
-        error_message = 'stuck_reclaimed(last_progress_at>5m)',
+        error_message = ?,
         updated_at = NOW()
     WHERE status = 'processing'
       AND last_progress_at IS NOT NULL
-      AND last_progress_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+      AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
-    []
+    [`stuck_reclaimed(last_progress_at>${stuckMinutes}m)`]
   );
   return Number(rows?.affectedRows || 0);
 }

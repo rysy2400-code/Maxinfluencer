@@ -235,6 +235,19 @@ Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, attempts=$($ipRes
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
+# 写入 guard 内嵌环境，使 worker 进程不依赖本机 .env 是否已配置
+$deepseekAnalysisTimeoutMs = if ($env:DEEPSEEK_ANALYSIS_TIMEOUT_MS -and -not [string]::IsNullOrWhiteSpace("$($env:DEEPSEEK_ANALYSIS_TIMEOUT_MS)")) {
+  "$($env:DEEPSEEK_ANALYSIS_TIMEOUT_MS)".Trim()
+} else {
+  "120000"
+}
+$searchTaskStuckReclaimMinutes = if ($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES -and -not [string]::IsNullOrWhiteSpace("$($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES)")) {
+  "$($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES)".Trim()
+} else {
+  "7"
+}
+Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAnalysisTimeoutMs, SEARCH_TASK_STUCK_RECLAIM_MINUTES=$searchTaskStuckReclaimMinutes"
+
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
 $chromeDir9223 = "C:\maxinfluencer\.chrome-cdp-9223"
 if (-not (Test-Path $chromeDir9222)) { New-Item -ItemType Directory -Path $chromeDir9222 | Out-Null }
@@ -297,6 +310,8 @@ $guardCrawlerContent = @"
 `$env:SEARCH_WORKER_LAN_IP = "$($workerLanIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
+`$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
+`$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 while (`$true) {
   `$p = Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-influencer-search\.js" }
   if (-not `$p) {
