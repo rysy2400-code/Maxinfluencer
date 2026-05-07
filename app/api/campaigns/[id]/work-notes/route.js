@@ -25,6 +25,8 @@ export async function GET(req, { params }) {
     const limitRaw = Number(searchParams.get("limit") || 50);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 200);
 
+    // 注意：部分 MySQL/MariaDB + mysql2 预处理下 `LIMIT ?` 会报 ER_WRONG_ARGUMENTS，
+    // 导致接口 500、前端只能依赖 SSE 显示零星几条。此处 limit 已钳制为整数，直接拼接。
     const rows = await queryTikTok(
       `
       SELECT
@@ -45,9 +47,9 @@ export async function GET(req, { params }) {
        AND r2.keyword = t.keyword
       WHERE t.campaign_id = ?
       ORDER BY COALESCE(t.started_at, t.created_at) DESC, t.id DESC
-      LIMIT ?
+      LIMIT ${limit}
     `,
-      [campaignId, limit]
+      [campaignId]
     );
 
     // mysql2 行字段多为小写蛇形（与 AS 大小写无关），勿用 r.taskId 等驼峰否则全为 undefined，

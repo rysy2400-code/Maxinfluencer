@@ -192,6 +192,35 @@ function workNoteMergeKey(note) {
   return `kw:${kw}@${t}`;
 }
 
+/** 工作笔记展示：日期 + 时间（今天/昨天/具体日期 + 24h 时分秒） */
+function formatWorkNoteDateTime(isoTime) {
+  if (!isoTime) return "—";
+  const d = new Date(isoTime);
+  if (Number.isNaN(d.getTime())) return "—";
+  const now = new Date();
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diffDays = Math.floor(
+    (dayStart(now).getTime() - dayStart(d).getTime()) / 86400000
+  );
+  let dayPart;
+  if (diffDays === 0) dayPart = "今天";
+  else if (diffDays === 1) dayPart = "昨天";
+  else {
+    dayPart = d.toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+    });
+  }
+  const timePart = d.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  return `${dayPart} ${timePart}`;
+}
+
 function buildTikTokProfileUrl(handle) {
   const u = String(handle || "")
     .trim()
@@ -1780,7 +1809,7 @@ export default function HomePage() {
 
     const loadWorkNotes = async () => {
       try {
-        const res = await fetch(`/api/campaigns/${campaignId}/work-notes?limit=50`);
+        const res = await fetch(`/api/campaigns/${campaignId}/work-notes?limit=200`);
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -1788,17 +1817,9 @@ export default function HomePage() {
         const data = await res.json();
         if (cancelled || !data?.success) return;
         const incoming = Array.isArray(data.notes) ? data.notes : [];
-        setKeywordWorkNotes((prev) => {
-          const merged = [...(Array.isArray(prev) ? prev : [])];
-          for (const note of incoming) {
-            const key = workNoteMergeKey(note);
-            const idx = merged.findIndex((x) => workNoteMergeKey(x) === key);
-            if (idx >= 0) {
-              merged[idx] = { ...merged[idx], ...note };
-            } else {
-              merged.push(note);
-            }
-          }
+        // 以接口全量为准建立基线（避免此前 API 失败时仅剩几条 SSE 记录与成功响应错误合并）
+        setKeywordWorkNotes(() => {
+          const merged = [...incoming];
           merged.sort(
             (a, b) =>
               new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
@@ -4726,15 +4747,13 @@ export default function HomePage() {
                                 <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
                                   {workNoteItems
                                     .slice()
-                                    .sort((a, b) => new Date(a?.time || 0) - new Date(b?.time || 0))
+                                    .sort(
+                                      (a, b) =>
+                                        new Date(b?.time || 0).getTime() -
+                                        new Date(a?.time || 0).getTime()
+                                    )
                                     .map((item, idx) => {
-                                      const timeLabel = item?.time
-                                        ? new Date(item.time).toLocaleTimeString("zh-CN", {
-                                            hour: "2-digit",
-                                            minute: "2-digit",
-                                            second: "2-digit",
-                                          })
-                                        : "--:--:--";
+                                      const timeLabel = formatWorkNoteDateTime(item?.time);
                                       const keyword = item?.keyword || "（未命名关键词）";
                                       const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
                                       const extracted = item?.extractedCount;
