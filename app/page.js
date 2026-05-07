@@ -2,6 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
+import { SafeMarkdown } from "./components/SafeMarkdown";
+import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -254,6 +256,85 @@ function formatEcpmFromFlatAndViews(flatAmt, viewsNum, currencyCode) {
   return `${v.toFixed(2)} ${currencyCode || "USD"} / 千次播放`;
 }
 
+/** 执行进度卡片：分析类长文默认两行，可展开；展开后可选 Markdown（sanitize） */
+function executionProgressCollapsibleText(raw) {
+  if (raw == null || raw === "") return "—";
+  const base =
+    typeof raw === "string" ? raw : raw != null ? formatAnalysisSnippet(raw) : "—";
+  if (base === "—") return "—";
+  return sanitizeAnalysisMarkdownForDisplay(base);
+}
+
+function ExecutionProgressCollapsibleRow({
+  label,
+  text,
+  expanded,
+  onToggle,
+  showExpandThreshold = 48,
+  useMarkdown = false,
+}) {
+  const display = executionProgressCollapsibleText(text);
+  const isDash = display === "—";
+  const canToggle = !isDash && String(display).trim().length > showExpandThreshold;
+  const showMd = Boolean(expanded && useMarkdown && !isDash);
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>{label}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {showMd ? (
+          <SafeMarkdown
+            style={{
+              fontSize: 12,
+              color: "#374151",
+              lineHeight: 1.65,
+              wordBreak: "break-word",
+            }}
+          >
+            {display}
+          </SafeMarkdown>
+        ) : (
+          <div
+            style={{
+              wordBreak: "break-word",
+              whiteSpace: "pre-wrap",
+              fontSize: 12,
+              color: "#374151",
+              ...(expanded || isDash
+                ? {}
+                : {
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }),
+            }}
+          >
+            {display}
+          </div>
+        )}
+        {canToggle ? (
+          <button
+            type="button"
+            onClick={() => onToggle(!expanded)}
+            style={{
+              marginTop: 2,
+              fontSize: 11,
+              color: "#4F46E5",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            {expanded ? "收起" : "展开全文"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /** 执行进度 Tab 下单条红人卡片（按阶段展示字段） */
 function ExecutionProgressRow({
   stageKey,
@@ -264,6 +345,9 @@ function ExecutionProgressRow({
 }) {
   const [draftExpanded, setDraftExpanded] = React.useState(false);
   const [negExpanded, setNegExpanded] = React.useState(false);
+  const [contactProfileExpanded, setContactProfileExpanded] = React.useState(false);
+  const [contactReasonExpanded, setContactReasonExpanded] = React.useState(true);
+  const [pendingReasonExpanded, setPendingReasonExpanded] = React.useState(true);
   const [counterAmount, setCounterAmount] = React.useState("");
   const [counterCurrency, setCounterCurrency] = React.useState("USD");
   const [counterReason, setCounterReason] = React.useState("");
@@ -408,14 +492,32 @@ function ExecutionProgressRow({
 
       {stageKey === "contacted" && (
         <>
-          {labelRow("画像分析", formatAnalysisSnippet(profileAnalysis))}
-          {labelRow("推荐理由", recommendReason || "—")}
+          <ExecutionProgressCollapsibleRow
+            label="画像分析"
+            text={profileAnalysis}
+            expanded={contactProfileExpanded}
+            onToggle={setContactProfileExpanded}
+            useMarkdown
+          />
+          <ExecutionProgressCollapsibleRow
+            label="推荐理由"
+            text={recommendReason || "—"}
+            expanded={contactReasonExpanded}
+            onToggle={setContactReasonExpanded}
+            useMarkdown
+          />
         </>
       )}
 
       {stageKey === "pendingPrice" && (
         <>
-          {labelRow("推荐理由", recommendReason || "—")}
+          <ExecutionProgressCollapsibleRow
+            label="推荐理由"
+            text={recommendReason || "—"}
+            expanded={pendingReasonExpanded}
+            onToggle={setPendingReasonExpanded}
+            useMarkdown
+          />
           {labelRow(
             `报价 (${item.currency || "USD"})`,
             flatUsd != null && flatUsd !== ""
@@ -890,7 +992,7 @@ export default function HomePage() {
   const [executionConfigError, setExecutionConfigError] = useState(null);
   const [execPatchingId, setExecPatchingId] = useState(null); // 执行进度 PATCH 中的红人 id
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
-  const [activeExecutionStage, setActiveExecutionStage] = useState("pendingPrice"); // 执行进度当前选中的阶段
+  const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
@@ -2677,16 +2779,19 @@ export default function HomePage() {
                       }}>
                         查看详细分析
                       </summary>
-                      <div style={{ 
-                        marginTop: 8,
-                        padding: 8,
-                        backgroundColor: "#F9FAFB",
-                        borderRadius: 4,
-                        fontSize: 11,
-                        color: "#4B5563",
-                        whiteSpace: "pre-wrap"
-                      }}>
-                        {match.analysis}
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: 8,
+                          backgroundColor: "#F9FAFB",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          color: "#4B5563",
+                        }}
+                      >
+                        <SafeMarkdown style={{ fontSize: 11, color: "#4B5563", lineHeight: 1.65 }}>
+                          {match.analysis}
+                        </SafeMarkdown>
                       </div>
                     </details>
                   )}
@@ -4976,16 +5081,16 @@ export default function HomePage() {
                                 </div>
                                 {/* 中段：各个维度的详细分析（来自 LLM 输出的结构化 Markdown 文本） */}
                                 {inf.analysis && (
-                                  <div
+                                  <SafeMarkdown
                                     style={{
                                       fontSize: 12,
                                       color: "#1F2937",
                                       lineHeight: 1.7,
-                                      whiteSpace: "pre-wrap"
+                                      wordBreak: "break-word",
                                     }}
                                   >
                                     {inf.analysis}
-                                  </div>
+                                  </SafeMarkdown>
                                 )}
                                 {/* 底部：基于 isRecommended / score / reason 的结论小结 */}
                                 {(inf.isRecommended != null || inf.score != null || inf.reason) && (
@@ -5040,21 +5145,25 @@ export default function HomePage() {
                           if (alreadyInMatches) return null;
 
                           return (
-                            <div style={{
-                              marginTop: influencerMatches.length > 0 ? 16 : 0,
-                              paddingTop: influencerMatches.length > 0 ? 12 : 0,
-                              borderTop: influencerMatches.length > 0 ? "1px solid #E5E7EB" : "none",
-                              fontSize: 12,
-                              color: "#1F2937",
-                              lineHeight: 1.7,
-                              whiteSpace: "pre-wrap"
-                            }}>
+                            <div
+                              style={{
+                                marginTop: influencerMatches.length > 0 ? 16 : 0,
+                                paddingTop: influencerMatches.length > 0 ? 12 : 0,
+                                borderTop: influencerMatches.length > 0 ? "1px solid #E5E7EB" : "none",
+                                fontSize: 12,
+                                color: "#1F2937",
+                                lineHeight: 1.7,
+                                wordBreak: "break-word",
+                              }}
+                            >
                               {analyzingId && (
                                 <div style={{ fontWeight: 600, marginBottom: 4 }}>
                                   @{analyzingId}（分析中）
                                 </div>
                               )}
-                              {pendingStep.detail}
+                              <SafeMarkdown style={{ fontSize: 12, color: "#1F2937", lineHeight: 1.7 }}>
+                                {pendingStep.detail}
+                              </SafeMarkdown>
                             </div>
                           );
                         })()}
