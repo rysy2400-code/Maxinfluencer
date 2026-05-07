@@ -137,12 +137,18 @@ Stop-MaxinWebForDeploy
 Remove-NodeModulesWithRetry -ProjectRoot $Root
 
 Write-Host "[deploy-web] npm ci..."
+$prevNodeOptsCi = $env:NODE_OPTIONS
+# npm ci 在 Windows 上偶发堆 OOM；显式提高上限。若仍失败，请先关闭浏览器等占内存进程或增大页文件后重跑。
+$env:NODE_OPTIONS = "--max-old-space-size=4096"
 try {
-  Invoke-Npm @("ci")
+  Invoke-Npm @("ci", "--no-audit", "--no-fund")
 } catch {
   Write-Host "[deploy-web] npm ci failed: $($_.Exception.Message)"
   Write-Host "[deploy-web] If EPERM persists: close RDP editors touching the repo, pause antivirus scan on $Root, or reboot then re-run."
+  Write-Host "[deploy-web] If OOM: free RAM (close Chrome, etc.) or reboot, then re-run."
   throw
+} finally {
+  $env:NODE_OPTIONS = $prevNodeOptsCi
 }
 
 Write-Host "[deploy-web] next build (node --max-old-space-size + NODE_OPTIONS for workers)..."
