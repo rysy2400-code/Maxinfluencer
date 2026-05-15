@@ -371,6 +371,7 @@ function ExecutionProgressRow({
   needSample,
   execPatchingId,
   patchExecution,
+  executionUsernameSet,
 }) {
   const [draftExpanded, setDraftExpanded] = React.useState(false);
   const [negExpanded, setNegExpanded] = React.useState(false);
@@ -415,6 +416,133 @@ function ExecutionProgressRow({
     item.analysis ||
     item.profile_analysis ||
     "";
+
+  const cardStyle = {
+    padding: "10px 12px",
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    border: "1px solid #E5E7EB",
+    fontSize: 12,
+    color: "#374151",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  };
+
+  if (stageKey === "analyzed") {
+    const inExecution = executionUsernameSet && executionUsernameSet.has(username);
+    const rec = matchObj && typeof matchObj.isRecommended === "boolean" ? matchObj.isRecommended : null;
+    const profileBlock = profileAnalysis && String(profileAnalysis).trim() !== "" ? profileAnalysis : "—";
+
+    return (
+      <div style={cardStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <a
+            href={profileUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontWeight: 600, color: "#4F46E5", textDecoration: "none" }}
+          >
+            @{username}
+          </a>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+            {inExecution ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  backgroundColor: "#EEF2FF",
+                  color: "#3730A3",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                已进入执行
+              </span>
+            ) : null}
+            {!item.shouldContact ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  backgroundColor: "#F3F4F6",
+                  color: "#4B5563",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                不建议联系
+              </span>
+            ) : null}
+            {rec === true ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  backgroundColor: "#D1FAE5",
+                  color: "#047857",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                推荐
+              </span>
+            ) : null}
+            {rec === false ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  backgroundColor: "#FEF3C7",
+                  color: "#B45309",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                不推荐
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        {item.analyzedAt ? (
+          <div style={{ fontSize: 11, color: "#6B7280" }}>
+            分析时间{" "}
+            {new Date(item.analyzedAt).toLocaleString("zh-CN", {
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </div>
+        ) : null}
+
+        <div style={{ fontSize: 11, color: "#6B7280" }}>
+          粉丝 {followers} · 播放 {views}
+        </div>
+
+        {item.matchScore != null && Number.isFinite(Number(item.matchScore)) ? (
+          <div style={{ fontSize: 11, color: "#6B7280" }}>匹配分 {Number(item.matchScore)}</div>
+        ) : null}
+
+        <ExecutionProgressCollapsibleRow
+          label="画像分析"
+          text={profileBlock}
+          expanded={contactProfileExpanded}
+          onToggle={setContactProfileExpanded}
+          useMarkdown
+        />
+        <ExecutionProgressCollapsibleRow
+          label="推荐理由"
+          text={recommendReason || "—"}
+          expanded={contactReasonExpanded}
+          onToggle={setContactReasonExpanded}
+          useMarkdown
+        />
+      </div>
+    );
+  }
 
   const shippingRaw =
     item.executionShippingInfo ||
@@ -465,18 +593,6 @@ function ExecutionProgressRow({
   const publishedLink =
     item.videoLink || item.executionVideoLink || item.video_link;
 
-  const cardStyle = {
-    padding: "10px 12px",
-    borderRadius: 10,
-    backgroundColor: "#FFFFFF",
-    border: "1px solid #E5E7EB",
-    fontSize: 12,
-    color: "#374151",
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  };
-
   const labelRow = (k, v) => (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
       <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>{k}</span>
@@ -510,6 +626,19 @@ function ExecutionProgressRow({
           </span>
         )}
       </div>
+
+      {stageKey === "contacted" && item.executionCreatedAt && (
+        <div style={{ fontSize: 11, color: "#6B7280" }}>
+          进入执行{" "}
+          {new Date(item.executionCreatedAt).toLocaleString("zh-CN", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </div>
+      )}
 
       {(stageKey === "contacted" ||
         stageKey === "pendingPrice" ||
@@ -1022,6 +1151,14 @@ export default function HomePage() {
   const [execPatchingId, setExecPatchingId] = useState(null); // 执行进度 PATCH 中的红人 id
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
+  /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
+  const [analyzedCandidatesItems, setAnalyzedCandidatesItems] = useState([]);
+  const [analyzedCandidatesNextBeforeId, setAnalyzedCandidatesNextBeforeId] = useState(null);
+  const [analyzedCandidatesLoading, setAnalyzedCandidatesLoading] = useState(false);
+  const [analyzedCandidatesLoadingMore, setAnalyzedCandidatesLoadingMore] = useState(false);
+  const [analyzedCandidatesError, setAnalyzedCandidatesError] = useState(null);
+  /** 已成功拉取首屏的 campaignId；切换 campaign 时置 null */
+  const [analyzedCandidatesReadyCampaignId, setAnalyzedCandidatesReadyCampaignId] = useState(null);
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
@@ -1108,8 +1245,100 @@ export default function HomePage() {
       setKeywordWorkNotes([]);
       workLiveAutoSwitchedRef.current = false;
       workLiveUserPinnedOverviewRef.current = false;
+      setAnalyzedCandidatesItems([]);
+      setAnalyzedCandidatesNextBeforeId(null);
+      setAnalyzedCandidatesError(null);
+      setAnalyzedCandidatesReadyCampaignId(null);
+      setAnalyzedCandidatesLoading(false);
+      setAnalyzedCandidatesLoadingMore(false);
+      setActiveExecutionStage("contacted");
     }
   }, [isExecutionPhaseGlobal]);
+
+  useEffect(() => {
+    setAnalyzedCandidatesItems([]);
+    setAnalyzedCandidatesNextBeforeId(null);
+    setAnalyzedCandidatesError(null);
+    setAnalyzedCandidatesReadyCampaignId(null);
+    setAnalyzedCandidatesLoading(false);
+    setAnalyzedCandidatesLoadingMore(false);
+  }, [context?.campaignId]);
+
+  useEffect(() => {
+    const cid = context?.campaignId;
+    const isExecutionPhase =
+      context?.workflowState === "published" || context?.published === true;
+    if (!cid || !isExecutionPhase || activeExecutionStage !== "analyzed") return;
+    if (analyzedCandidatesReadyCampaignId === cid) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setAnalyzedCandidatesLoading(true);
+        setAnalyzedCandidatesError(null);
+        const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&limit=30`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.success) throw new Error(data.error || "获取已分析候选失败");
+        if (cancelled) return;
+        setAnalyzedCandidatesItems(Array.isArray(data.data) ? data.data : []);
+        setAnalyzedCandidatesNextBeforeId(
+          data.nextBeforeId != null && data.nextBeforeId !== ""
+            ? String(data.nextBeforeId)
+            : null
+        );
+        setAnalyzedCandidatesReadyCampaignId(cid);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[HomePage] 获取已分析候选失败:", e);
+          setAnalyzedCandidatesError(e.message || "获取已分析候选失败");
+          setAnalyzedCandidatesReadyCampaignId(cid);
+        }
+      } finally {
+        if (!cancelled) setAnalyzedCandidatesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    context?.campaignId,
+    context?.workflowState,
+    context?.published,
+    activeExecutionStage,
+    analyzedCandidatesReadyCampaignId,
+  ]);
+
+  const loadMoreAnalyzedCandidates = useCallback(async () => {
+    const cid = context?.campaignId;
+    if (!cid || !analyzedCandidatesNextBeforeId) return;
+    try {
+      setAnalyzedCandidatesLoadingMore(true);
+      setAnalyzedCandidatesError(null);
+      const q = new URLSearchParams({
+        analyzed: "1",
+        limit: "30",
+        beforeId: String(analyzedCandidatesNextBeforeId),
+      });
+      const res = await fetch(`/api/campaigns/${cid}/candidates?${q.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.success) throw new Error(data.error || "加载更多失败");
+      const next = Array.isArray(data.data) ? data.data : [];
+      setAnalyzedCandidatesItems((prev) => [...prev, ...next]);
+      setAnalyzedCandidatesNextBeforeId(
+        data.nextBeforeId != null && data.nextBeforeId !== ""
+          ? String(data.nextBeforeId)
+          : null
+      );
+    } catch (e) {
+      console.error("[HomePage] 加载更多已分析候选失败:", e);
+      setAnalyzedCandidatesError(e.message || "加载更多失败");
+    } finally {
+      setAnalyzedCandidatesLoadingMore(false);
+    }
+  }, [context?.campaignId, analyzedCandidatesNextBeforeId]);
 
   // 已发布 campaign：订阅工作实况 SSE（与红人画像阶段 /api/chat 相同：thinking + screenshot）
   useEffect(() => {
@@ -2155,6 +2384,21 @@ export default function HomePage() {
                     setContext(data.data.context);
                   }
 
+                  const nextCtx = data.data.context;
+                  if (
+                    nextCtx?.campaignId &&
+                    (nextCtx.workflowState === "published" || nextCtx.published)
+                  ) {
+                    fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+                      credentials: "include",
+                    })
+                      .then((r) => r.json())
+                      .then((d) => {
+                        if (d.success) setExecutionConfig(d);
+                      })
+                      .catch(() => {});
+                  }
+
                   // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
                   if (data.data.context?.published) {
                     loadCampaignSessions({ silent: true }).catch(() => {});
@@ -2194,6 +2438,21 @@ export default function HomePage() {
 
           if (data.context) {
             setContext(data.context);
+          }
+
+          const nextCtx = data.context;
+          if (
+            nextCtx?.campaignId &&
+            (nextCtx.workflowState === "published" || nextCtx.published)
+          ) {
+            fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+              credentials: "include",
+            })
+              .then((r) => r.json())
+              .then((d) => {
+                if (d.success) setExecutionConfig(d);
+              })
+              .catch(() => {});
           }
         }
       }
@@ -4620,7 +4879,26 @@ export default function HomePage() {
                 if (isExecutionPhase && binComputerView === "overview") {
                   const cols = executionStatus?.columns || {};
                   const needSampleFlag = executionStatus?.needSample !== false;
+                  const executionUsernameSet = new Set();
+                  if (executionStatus?.columns) {
+                    for (const colKey of [
+                      "contacted",
+                      "pendingPrice",
+                      "pendingSample",
+                      "pendingDraft",
+                      "published",
+                    ]) {
+                      for (const row of executionStatus.columns[colKey] || []) {
+                        if (row?.id) executionUsernameSet.add(row.id);
+                      }
+                    }
+                  }
                   const stageDefsAll = [
+                    {
+                      key: "analyzed",
+                      title: "已分析",
+                      items: analyzedCandidatesItems,
+                    },
                     { key: "contacted", title: "已联系", items: cols.contacted || [] },
                     { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
                     { key: "pendingSample", title: "待寄样品", items: cols.pendingSample || [] },
@@ -4640,6 +4918,11 @@ export default function HomePage() {
                     config?.influencersPerDay ?? executionStatus?.influencersPerDay ?? null;
                   const report = config?.reportConfig || null;
                   const keywordStrategy = config?.keywordStrategy || null;
+                  const ipNote = config?.influencerProfile || {};
+                  const profileFieldLabel = (v) =>
+                    v != null && String(v).trim() !== ""
+                      ? String(v).trim()
+                      : "未设置";
                   const intervalHours = report?.intervalHours ?? null;
                   const reportTime = report?.reportTime || null;
                   const contentPreference = report?.contentPreference || null;
@@ -4736,12 +5019,25 @@ export default function HomePage() {
                                       : "当前日报中未配置额外指标";
                                   })()}
                                 </div>
-                                {keywordStrategy ? (
-                                  <div style={{ marginTop: 4 }}>
-                                    <span style={{ fontWeight: 600 }}>关键词策略：</span>
-                                    {keywordStrategy}
+                                <div style={{ marginTop: 8 }}>
+                                  <div style={{ fontWeight: 600, marginBottom: 4 }}>红人画像要求</div>
+                                  <div>
+                                    <span style={{ fontWeight: 600 }}>粉丝量要求：</span>
+                                    {profileFieldLabel(ipNote.followerRange)}
                                   </div>
-                                ) : null}
+                                  <div>
+                                    <span style={{ fontWeight: 600 }}>播放量要求：</span>
+                                    {profileFieldLabel(ipNote.viewRange)}
+                                  </div>
+                                  <div>
+                                    <span style={{ fontWeight: 600 }}>帐号类型要求：</span>
+                                    {profileFieldLabel(ipNote.accountType)}
+                                  </div>
+                                </div>
+                                <div style={{ marginTop: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>红人搜索关键词策略：</span>
+                                  {keywordStrategy || "暂无"}
+                                </div>
                               </div>
                               {workNoteItems.length > 0 && (
                                 <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -4756,16 +5052,21 @@ export default function HomePage() {
                                       const timeLabel = formatWorkNoteDateTime(item?.time);
                                       const keyword = item?.keyword || "（未命名关键词）";
                                       const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
-                                      const extracted = item?.extractedCount;
+                                      const browsed =
+                                        item?.browsedCount != null && !Number.isNaN(Number(item.browsedCount))
+                                          ? Number(item.browsedCount)
+                                          : item?.extractedCount != null && !Number.isNaN(Number(item.extractedCount))
+                                            ? Number(item.extractedCount)
+                                            : null;
                                       const matched = item?.matchedCount;
                                       const resultText =
-                                        extracted == null || matched == null
+                                        browsed == null || matched == null
                                           ? ""
-                                          : `已提取 ${extracted} 位红人主页，${matched} 位符合红人画像要求。`;
+                                          : `已浏览 ${browsed} 位红人主页，${matched} 位符合红人画像要求。`;
                                       const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
                                       return (
                                         <div key={`work-note-${item?.taskId || idx}`} style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
-                                          {`${timeLabel}，开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
+                                          {`${timeLabel}，在红人库开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
                                           {failedText ? ` ${failedText}` : ""}
                                         </div>
                                       );
@@ -4879,6 +5180,10 @@ export default function HomePage() {
                               >
                                 {stageDefs.map((stage) => {
                                   const isActive = stage.key === currentStage.key;
+                                  const tabCount =
+                                    stage.key === "analyzed" && analyzedCandidatesNextBeforeId
+                                      ? `${stage.items.length}+`
+                                      : String(stage.items.length);
                                   return (
                                     <button
                                       key={stage.key}
@@ -4891,10 +5196,10 @@ export default function HomePage() {
                                         backgroundColor: isActive ? "#EEF2FF" : "#FFFFFF",
                                         color: isActive ? "#3730A3" : "#4B5563",
                                         fontSize: 12,
-                                        cursor: "pointer"
+                                        cursor: "pointer",
                                       }}
                                     >
-                                      {stage.title}（{stage.items.length}）
+                                      {stage.title}（{tabCount}）
                                     </button>
                                   );
                                 })}
@@ -4915,22 +5220,58 @@ export default function HomePage() {
                                   <div
                                     style={{
                                       fontSize: 12,
-                                      color: "#9CA3AF"
+                                      color:
+                                        currentStage.key === "analyzed" && analyzedCandidatesError
+                                          ? "#EF4444"
+                                          : "#9CA3AF",
                                     }}
                                   >
-                                    该阶段暂无红人。
+                                    {currentStage.key === "analyzed" && analyzedCandidatesLoading
+                                      ? "加载已分析列表中…"
+                                      : currentStage.key === "analyzed" && analyzedCandidatesError
+                                      ? analyzedCandidatesError
+                                      : "该阶段暂无红人。"}
                                   </div>
                                 ) : (
-                                  currentItems.map((item) => (
-                                    <ExecutionProgressRow
-                                      key={item.id}
-                                      stageKey={currentStage.key}
-                                      item={item}
-                                      needSample={needSampleFlag}
-                                      execPatchingId={execPatchingId}
-                                      patchExecution={patchExecution}
-                                    />
-                                  ))
+                                  <>
+                                    {currentItems.map((item) => (
+                                      <ExecutionProgressRow
+                                        key={
+                                          currentStage.key === "analyzed" && item.candidateRowId != null
+                                            ? `analyzed-${item.candidateRowId}`
+                                            : item.id
+                                        }
+                                        stageKey={currentStage.key}
+                                        item={item}
+                                        needSample={needSampleFlag}
+                                        execPatchingId={execPatchingId}
+                                        patchExecution={patchExecution}
+                                        executionUsernameSet={executionUsernameSet}
+                                      />
+                                    ))}
+                                    {currentStage.key === "analyzed" &&
+                                    analyzedCandidatesNextBeforeId &&
+                                    !analyzedCandidatesLoading ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => loadMoreAnalyzedCandidates()}
+                                        disabled={analyzedCandidatesLoadingMore}
+                                        style={{
+                                          alignSelf: "center",
+                                          marginTop: 4,
+                                          padding: "6px 14px",
+                                          fontSize: 12,
+                                          borderRadius: 8,
+                                          border: "1px solid #E5E7EB",
+                                          backgroundColor: analyzedCandidatesLoadingMore ? "#F3F4F6" : "#FFFFFF",
+                                          color: "#374151",
+                                          cursor: analyzedCandidatesLoadingMore ? "not-allowed" : "pointer",
+                                        }}
+                                      >
+                                        {analyzedCandidatesLoadingMore ? "加载中…" : "加载更多"}
+                                      </button>
+                                    ) : null}
+                                  </>
                                 )}
                               </div>
                             </>

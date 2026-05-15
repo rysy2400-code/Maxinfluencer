@@ -48,6 +48,7 @@ async function getCampaignById(campaignId) {
       product_info AS productInfo,
       campaign_info AS campaignInfo,
       influencer_profile AS influencerProfile,
+      keyword_strategy AS keywordStrategy,
       influencers_per_day AS influencersPerDay
     FROM tiktok_campaign
     WHERE id = ?
@@ -65,6 +66,14 @@ async function getCampaignById(campaignId) {
     productInfo: parseJsonOrObject(row.productInfo) || {},
     campaignInfo: parseJsonOrObject(row.campaignInfo) || {},
     influencerProfile: parseJsonOrObject(row.influencerProfile) || null,
+    keywordStrategy: (() => {
+      const raw =
+        row.keywordStrategy ??
+        row.keywordstrategy ??
+        row.keyword_strategy ??
+        row.KEYWORD_STRATEGY;
+      return typeof raw === "string" ? raw.trim() : null;
+    })(),
   };
 }
 
@@ -214,6 +223,24 @@ async function markTaskStatus(id, status, errorMessage = null) {
     [status, errorMessage, id]
   );
 }
+
+/** 与任务表 progress_analyzed_count 一致：成功写入 campaign 候选池的次数（INSERT IGNORE 命中） */
+async function fetchTaskCandidateBrowsedCount(taskId) {
+  const rows = await queryTikTok(
+    `
+    SELECT progress_analyzed_count AS pc
+    FROM tiktok_influencer_search_task
+    WHERE id = ?
+    LIMIT 1
+  `,
+    [taskId]
+  );
+  const r = rows?.[0];
+  const raw = r?.pc ?? r?.PC;
+  if (raw == null) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
 async function processTask(task) {
   const campaignId = task.campaign_id;
   const payload = parseJsonOrObject(task.payload) || {};
@@ -230,10 +257,22 @@ async function processTask(task) {
     return;
   }
 
-  const { productInfo, campaignInfo, influencerProfile, influencersPerDay, sessionId } =
-    campaign;
+  const {
+    productInfo,
+    campaignInfo,
+    influencerProfile,
+    influencersPerDay,
+    sessionId,
+    keywordStrategy,
+  } = campaign;
 
-  const publishKeywordNote = async ({ status, extractedCount = null, matchedCount = null, error = null }) => {
+  const publishKeywordNote = async ({
+    status,
+    extractedCount = null,
+    matchedCount = null,
+    browsedCount = null,
+    error = null,
+  }) => {
     if (!sessionId) return;
     try {
       await publishWorkLiveFromWorker(sessionId, {
@@ -243,6 +282,10 @@ async function processTask(task) {
           time: new Date().toISOString(),
           keyword: taskKeyword || payload.keyword || "",
           reasonText: keywordReason || "该关键词更贴近当前 campaign 的目标受众方向。",
+          browsedCount:
+            browsedCount == null || Number.isNaN(Number(browsedCount))
+              ? null
+              : Number(browsedCount),
           extractedCount:
             extractedCount == null || Number.isNaN(Number(extractedCount))
               ? null
@@ -297,6 +340,7 @@ async function processTask(task) {
         campaignInfo,
         influencerProfile,
         userMessage: payload.userMessage || "",
+        keywordStrategy: keywordStrategy || "",
       });
 
   if (
@@ -317,8 +361,10 @@ async function processTask(task) {
       workerIp: CURRENT_WORKER_IP,
       metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
     });
+    const browsedKw = await fetchTaskCandidateBrowsedCount(task.id);
     await publishKeywordNote({
       status: "failed",
+      browsedCount: browsedKw,
       error: "生成搜索关键词失败或为空",
     });
     return;
@@ -383,8 +429,10 @@ async function processTask(task) {
         elapsedMs: Date.now() - taskStartMs,
       },
     });
+    const browsedThrow = await fetchTaskCandidateBrowsedCount(task.id);
     await publishKeywordNote({
       status: "failed",
+      browsedCount: browsedThrow,
       error: String(err?.message || "search_throw"),
     });
     return;
@@ -421,8 +469,10 @@ async function processTask(task) {
         elapsedMs: Date.now() - taskStartMs,
       },
     });
+    const browsedDone = await fetchTaskCandidateBrowsedCount(task.id);
     await publishKeywordNote({
       status: "finished",
+      browsedCount: browsedDone,
       extractedCount: enrichedCount,
       matchedCount: recommendedCount,
     });
@@ -470,8 +520,10 @@ async function processTask(task) {
       elapsedMs: Date.now() - taskStartMs,
     },
   });
+  const browsedFail = await fetchTaskCandidateBrowsedCount(task.id);
   await publishKeywordNote({
     status: "failed",
+    browsedCount: browsedFail,
     extractedCount: Number(result?.influencers?.length || 0),
     matchedCount: Number((result?.influencers || []).filter((x) => x && x.isRecommended).length || 0),
     error: String(result?.error || "search_failed"),

@@ -25,12 +25,19 @@ export async function GET(req, { params }) {
     }
 
     const reportConfig = await getReportConfigByCampaignId(campaignId);
+    const ip = campaign.influencerProfile || {};
 
     return NextResponse.json({
       success: true,
       campaignId,
       influencersPerDay: campaign.influencersPerDay ?? null,
       keywordStrategy: campaign.keywordStrategy || null,
+      /** 与 tiktok_campaign.influencer_profile 对齐，供工作笔记分项展示 */
+      influencerProfile: {
+        followerRange: ip.followerRange ?? null,
+        viewRange: ip.viewRange ?? null,
+        accountType: ip.accountType ?? null,
+      },
       reportConfig: reportConfig || null,
     });
   } catch (error) {

@@ -8,70 +8,14 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useParams, useRouter } from "next/navigation";
-
-function formatTime(v) {
-  if (!v) return "";
-  try {
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return String(v);
-    return d.toLocaleString();
-  } catch {
-    return String(v);
-  }
-}
-
-function Pill({ children, tone = "neutral" }) {
-  const bg =
-    tone === "green"
-      ? "#DCFCE7"
-      : tone === "red"
-        ? "#FEE2E2"
-        : tone === "blue"
-          ? "#DBEAFE"
-          : "#E2E8F0";
-  const fg =
-    tone === "green"
-      ? "#166534"
-      : tone === "red"
-        ? "#991B1B"
-        : tone === "blue"
-          ? "#1D4ED8"
-          : "#0F172A";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "2px 8px",
-        borderRadius: 999,
-        background: bg,
-        color: fg,
-        fontSize: 12,
-        fontWeight: 600,
-        border: "1px solid rgba(15, 23, 42, 0.06)",
-        whiteSpace: "normal",
-        maxWidth: "100%",
-      }}
-    >
-      {children}
-    </span>
-  );
-}
+import { useParams } from "next/navigation";
+import { useInfluencerInbox } from "../influencer-inbox-context";
+import { formatTime, Pill } from "../shared-ui";
 
 export default function InfluencerChatPage() {
   const params = useParams();
-  const router = useRouter();
   const influencerId = params?.influencerId ? String(params.influencerId) : null;
-
-  const [listQ, setListQ] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
-  const [conversations, setConversations] = useState([]);
-  const [listCursor, setListCursor] = useState(null);
-  const [listHasMore, setListHasMore] = useState(false);
-  const [listLoading, setListLoading] = useState(false);
-  const [listError, setListError] = useState(null);
+  const inbox = useInfluencerInbox();
 
   const [mode, setMode] = useState("assist");
   const [modeSaving, setModeSaving] = useState(false);
@@ -94,11 +38,6 @@ export default function InfluencerChatPage() {
   /** 加载更早一页后恢复滚动位置；为 null 时表示滚到最新消息 */
   const prependAdjustRef = useRef(null);
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(listQ.trim()), 300);
-    return () => clearTimeout(t);
-  }, [listQ]);
-
   const latestDraft = useMemo(() => {
     const drafts = timelineItems.filter((x) => x.eventType === "draft_outbound");
     return drafts.length ? drafts[drafts.length - 1] : null;
@@ -108,38 +47,6 @@ export default function InfluencerChatPage() {
     const inb = timelineItems.filter((x) => x.eventType === "email_inbound");
     return inb.length ? inb[inb.length - 1] : null;
   }, [timelineItems]);
-
-  const loadConversations = useCallback(
-    async ({ cursor, reset }) => {
-      setListLoading(true);
-      setListError(null);
-      try {
-        const qs = new URLSearchParams();
-        qs.set("limit", "40");
-        if (debouncedQ) qs.set("q", debouncedQ);
-        if (cursor) qs.set("cursor", cursor);
-        const res = await fetch(`/api/influencers/conversations?` + qs.toString());
-        const data = await res.json();
-        if (!data?.success) throw new Error(data?.error || "加载失败");
-        const items = data.items || [];
-        setListHasMore(!!data.hasMore);
-        setListCursor(data.nextCursor || null);
-        setConversations((prev) => (reset ? items : [...prev, ...items]));
-      } catch (e) {
-        setListError(e?.message || String(e));
-      } finally {
-        setListLoading(false);
-      }
-    },
-    [debouncedQ]
-  );
-
-  useEffect(() => {
-    setConversations([]);
-    setListCursor(null);
-    setListHasMore(false);
-    loadConversations({ cursor: null, reset: true });
-  }, [debouncedQ, loadConversations]);
 
   const loadMode = useCallback(async (id) => {
     if (!id) return;
@@ -165,14 +72,14 @@ export default function InfluencerChatPage() {
         const data = await res.json();
         if (!data?.success) throw new Error(data?.error || "保存失败");
         setMode(data.mode || nextMode);
-        await loadConversations({ cursor: null, reset: true });
+        await inbox?.refreshConversations?.();
       } catch (e) {
         alert(e?.message || String(e));
       } finally {
         setModeSaving(false);
       }
     },
-    [influencerId, loadConversations]
+    [influencerId, inbox]
   );
 
   const loadCampaignCards = useCallback(async (id) => {
@@ -228,9 +135,7 @@ export default function InfluencerChatPage() {
       } else {
         const el = scrollRef.current;
         prependAdjustRef.current =
-          el != null
-            ? { prevHeight: el.scrollHeight, prevTop: el.scrollTop }
-            : null;
+          el != null ? { prevHeight: el.scrollHeight, prevTop: el.scrollTop } : null;
         setTimelineItems((prev) => [...chronological, ...prev]);
       }
     } catch (e) {
@@ -312,7 +217,7 @@ export default function InfluencerChatPage() {
       setComposerFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadTimeline({ id: influencerId, cursor: null, reset: true });
-      await loadConversations({ cursor: null, reset: true });
+      await inbox?.refreshConversations?.({ afterSend: true });
       await loadOutboundFromEmail(influencerId);
     } catch (e) {
       alert(e?.message || String(e));
@@ -326,22 +231,9 @@ export default function InfluencerChatPage() {
     mode,
     latestInbound,
     loadTimeline,
-    loadConversations,
+    inbox,
     loadOutboundFromEmail,
   ]);
-
-  const shellStyle = {
-    height: "100vh",
-    maxHeight: "100dvh",
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    background: "#EDEDED",
-    color: "#111",
-    fontFamily:
-      "system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif",
-    boxSizing: "border-box",
-  };
 
   const renderBubble = (item) => {
     const isInbound = item.eventType === "email_inbound";
@@ -454,372 +346,195 @@ export default function InfluencerChatPage() {
   };
 
   return (
-    <div style={shellStyle}>
+    <>
       <div
         style={{
-          flex: 1,
-          minHeight: 0,
-          display: "grid",
-          gridTemplateColumns: "320px 1fr",
-          gap: 0,
-          overflow: "hidden",
+          flexShrink: 0,
+          padding: "10px 14px",
+          background: "#F7F7F7",
+          borderBottom: "1px solid rgba(0,0,0,0.08)",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
         }}
       >
         <div
           style={{
-            background: "#F3F3F3",
-            borderRight: "1px solid rgba(0,0,0,0.08)",
-            display: "flex",
-            flexDirection: "column",
             minWidth: 0,
-            minHeight: 0,
+            flex: "1 1 auto",
+            fontWeight: 800,
+            fontSize: 15,
             overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
+          title={
+            outboundFromEmail || (outboundEmailLoading ? "加载发件邮箱…" : influencerId || "")
+          }
         >
-          <div
+          {outboundEmailLoading
+            ? "加载发件邮箱…"
+            : outboundFromEmail || influencerId || "未选择"}
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            disabled={modeSaving || !influencerId}
+            onClick={() => saveMode(mode === "auto" ? "assist" : "auto")}
             style={{
-              flexShrink: 0,
-              padding: 10,
-              borderBottom: "1px solid rgba(0,0,0,0.06)",
-              boxSizing: "border-box",
-              minWidth: 0,
+              border: "1px solid rgba(0,0,0,0.12)",
+              background: "#fff",
+              borderRadius: 8,
+              padding: "6px 10px",
+              fontWeight: 700,
+              cursor: "pointer",
             }}
           >
-            <input
-              value={listQ}
-              onChange={(e) => setListQ(e.target.value)}
-              placeholder="搜索 id / 用户名 / 昵称 / 邮箱"
-              style={{
-                display: "block",
-                width: "100%",
-                maxWidth: "100%",
-                boxSizing: "border-box",
-                padding: "8px 10px",
-                borderRadius: 6,
-                border: "1px solid rgba(0,0,0,0.12)",
-                fontSize: 14,
-              }}
-            />
+            模式：{mode === "auto" ? "全托管" : "半托管"}（点击切换）
+          </button>
+          <button
+            type="button"
+            disabled={timelineLoading || !influencerId}
+            onClick={() => {
+              void loadTimeline({ id: influencerId, cursor: null, reset: true });
+              void loadOutboundFromEmail(influencerId);
+            }}
+            style={{
+              border: "1px solid rgba(0,0,0,0.12)",
+              background: "#fff",
+              borderRadius: 8,
+              padding: "6px 10px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            刷新对话
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          flexShrink: 0,
+          maxHeight: 120,
+          overflowY: "auto",
+          padding: "8px 14px",
+          background: "#EFEFEF",
+          borderBottom: "1px solid rgba(0,0,0,0.06)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          fontSize: 12,
+        }}
+      >
+        <span style={{ fontWeight: 800 }}>Active campaigns</span>
+        {campaignCards.map((c) => {
+          const brandProduct = [c.brandName, c.productName].filter(Boolean).join(" · ");
+          const stagePrice = `${c.stage || "—"} · ${c.price == null ? "—" : `$${c.price}`}`;
+          const label = brandProduct ? `${brandProduct} · ${stagePrice}` : stagePrice;
+          return (
+            <Pill key={c.campaignId} tone="blue">
+              {label}
+            </Pill>
+          );
+        })}
+        {!campaignCards.length ? <span style={{ color: "#888" }}>暂无</span> : null}
+      </div>
+
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          WebkitOverflowScrolling: "touch",
+          padding: "8px 0 16px",
+        }}
+      >
+        {timelineError ? (
+          <div style={{ padding: 12, color: "#B91C1C" }}>{timelineError}</div>
+        ) : null}
+        {timelineHasMore ? (
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
             <button
               type="button"
-              onClick={() => loadConversations({ cursor: null, reset: true })}
-              disabled={listLoading}
+              disabled={timelineLoading}
+              onClick={() =>
+                loadTimeline({ id: influencerId, cursor: timelineCursor, reset: false })
+              }
               style={{
-                marginTop: 8,
-                width: "100%",
-                padding: "6px",
-                borderRadius: 6,
                 border: "1px solid rgba(0,0,0,0.12)",
                 background: "#fff",
+                borderRadius: 8,
+                padding: "6px 12px",
                 fontWeight: 700,
                 cursor: "pointer",
-              }}
-            >
-              刷新列表
-            </button>
-          </div>
-
-          {listError ? (
-            <div
-              style={{
-                flexShrink: 0,
-                padding: "0 10px 8px",
-                color: "#B91C1C",
                 fontSize: 13,
               }}
             >
-              {listError}
-            </div>
-          ) : null}
-
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-            {conversations.map((inf) => {
-              const active = inf.influencerId === influencerId;
-              return (
-                <button
-                  key={inf.influencerId}
-                  type="button"
-                  onClick={() => router.push(`/influencers/${encodeURIComponent(inf.influencerId)}`)}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "10px 12px",
-                    border: "none",
-                    borderBottom: "1px solid rgba(0,0,0,0.05)",
-                    background: active ? "#D4D4D4" : "transparent",
-                    cursor: "pointer",
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <div
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 4,
-                        background: "#D1D1D1",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 800,
-                        fontSize: 12,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {(inf.displayName || inf.username || inf.influencerId || "?")
-                        .slice(0, 2)
-                        .toUpperCase()}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>
-                        {inf.displayName || inf.username || inf.influencerId}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {inf.lastEventTime ? formatTime(inf.lastEventTime) : "—"} ·{" "}
-                        {(inf.lastPreview?.bodyText || inf.lastPreview?.subject || "").slice(0, 36) ||
-                          "…"}
-                      </div>
-                    </div>
-                    <Pill tone={inf.handoverMode === "auto" ? "green" : "neutral"}>
-                      {inf.handoverMode === "auto" ? "全托管" : "半托管"}
-                    </Pill>
-                  </div>
-                </button>
-              );
-            })}
-            {!conversations.length && !listLoading ? (
-              <div style={{ padding: 12, color: "#888", fontSize: 13 }}>暂无会话</div>
-            ) : null}
+              更早消息
+            </button>
           </div>
-
-          {listHasMore ? (
-            <div
-              style={{
-                flexShrink: 0,
-                padding: 8,
-                borderTop: "1px solid rgba(0,0,0,0.06)",
-              }}
-            >
-              <button
-                type="button"
-                disabled={listLoading}
-                onClick={() => loadConversations({ cursor: listCursor, reset: false })}
-                style={{
-                  width: "100%",
-                  padding: "8px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  background: "#fff",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                加载更多
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 0,
-            minHeight: 0,
-            overflow: "hidden",
-            background: "#EDEDED",
-          }}
-        >
-          <div
-            style={{
-              flexShrink: 0,
-              padding: "10px 14px",
-              background: "#F7F7F7",
-              borderBottom: "1px solid rgba(0,0,0,0.08)",
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              flexWrap: "wrap",
-            }}
-          >
-            <div
-              style={{
-                minWidth: 0,
-                flex: "1 1 auto",
-                fontWeight: 800,
-                fontSize: 15,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              title={
-                outboundFromEmail ||
-                (outboundEmailLoading ? "加载发件邮箱…" : influencerId || "")
-              }
-            >
-              {outboundEmailLoading
-                ? "加载发件邮箱…"
-                : outboundFromEmail || influencerId || "未选择"}
-            </div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                disabled={modeSaving || !influencerId}
-                onClick={() => saveMode(mode === "auto" ? "assist" : "auto")}
-                style={{
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  background: "#fff",
-                  borderRadius: 8,
-                  padding: "6px 10px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                模式：{mode === "auto" ? "全托管" : "半托管"}（点击切换）
-              </button>
-              <button
-                type="button"
-                disabled={timelineLoading || !influencerId}
-                onClick={() => {
-                  void loadTimeline({ id: influencerId, cursor: null, reset: true });
-                  void loadOutboundFromEmail(influencerId);
-                }}
-                style={{
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  background: "#fff",
-                  borderRadius: 8,
-                  padding: "6px 10px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                刷新对话
-              </button>
-            </div>
-          </div>
-
-          <div
-            style={{
-              flexShrink: 0,
-              maxHeight: 120,
-              overflowY: "auto",
-              padding: "8px 14px",
-              background: "#EFEFEF",
-              borderBottom: "1px solid rgba(0,0,0,0.06)",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              fontSize: 12,
-            }}
-          >
-            <span style={{ fontWeight: 800 }}>Active campaigns</span>
-            {campaignCards.map((c) => {
-              const brandProduct = [c.brandName, c.productName].filter(Boolean).join(" · ");
-              const stagePrice = `${c.stage || "—"} · ${c.price == null ? "—" : `$${c.price}`}`;
-              const label = brandProduct ? `${brandProduct} · ${stagePrice}` : stagePrice;
-              return (
-                <Pill key={c.campaignId} tone="blue">
-                  {label}
-                </Pill>
-              );
-            })}
-            {!campaignCards.length ? <span style={{ color: "#888" }}>暂无</span> : null}
-          </div>
-
-          <div
-            ref={scrollRef}
-            style={{
-              flex: 1,
-              minHeight: 0,
-              overflowY: "auto",
-              WebkitOverflowScrolling: "touch",
-              padding: "8px 0 16px",
-            }}
-          >
-            {timelineError ? (
-              <div style={{ padding: 12, color: "#B91C1C" }}>{timelineError}</div>
-            ) : null}
-            {timelineHasMore ? (
-              <div style={{ textAlign: "center", marginBottom: 8 }}>
-                <button
-                  type="button"
-                  disabled={timelineLoading}
-                  onClick={() =>
-                    loadTimeline({ id: influencerId, cursor: timelineCursor, reset: false })
-                  }
-                  style={{
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    background: "#fff",
-                    borderRadius: 8,
-                    padding: "6px 12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    fontSize: 13,
-                  }}
-                >
-                  更早消息
-                </button>
-              </div>
-            ) : null}
-            {timelineItems.map(renderBubble)}
-            {!timelineItems.length && !timelineLoading ? (
-              <div style={{ padding: 24, textAlign: "center", color: "#888" }}>暂无消息</div>
-            ) : null}
-          </div>
-
-          <div
-            style={{
-              flexShrink: 0,
-              background: "#F7F7F7",
-              borderTop: "1px solid rgba(0,0,0,0.1)",
-              padding: "10px 12px",
-            }}
-          >
-            <textarea
-              value={composerText}
-              onChange={(e) => setComposerText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" || e.shiftKey) return;
-                if (e.nativeEvent.isComposing) return;
-                e.preventDefault();
-                if (sending || !influencerId) return;
-                void onSend();
-              }}
-              placeholder="输入消息…（Enter 发送，Shift+Enter 换行；主题与收件人由服务器按邮件线程自动匹配）"
-              style={{
-                width: "100%",
-                minHeight: 72,
-                maxHeight: 200,
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid rgba(0,0,0,0.12)",
-                resize: "vertical",
-                fontFamily: "inherit",
-                fontSize: 15,
-                boxSizing: "border-box",
-              }}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-              <input ref={fileInputRef} type="file" multiple onChange={onPickFiles} />
-              {sending ? (
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>发送中…</span>
-              ) : null}
-            </div>
-            {composerFiles.length ? (
-              <div style={{ marginTop: 8, fontSize: 12, color: "#444" }}>
-                {composerFiles.map((f, idx) => (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span>{f.name}</span>
-                    <button type="button" onClick={() => removeFileAt(idx)} style={{ fontSize: 12 }}>
-                      移除
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
+        ) : null}
+        {timelineItems.map(renderBubble)}
+        {!timelineItems.length && !timelineLoading ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#888" }}>暂无消息</div>
+        ) : null}
       </div>
-    </div>
+
+      <div
+        style={{
+          flexShrink: 0,
+          background: "#F7F7F7",
+          borderTop: "1px solid rgba(0,0,0,0.1)",
+          padding: "10px 12px",
+        }}
+      >
+        <textarea
+          value={composerText}
+          onChange={(e) => setComposerText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.shiftKey) return;
+            if (e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (sending || !influencerId) return;
+            void onSend();
+          }}
+          placeholder="输入消息…（Enter 发送，Shift+Enter 换行；主题与收件人由服务器按邮件线程自动匹配）"
+          style={{
+            width: "100%",
+            minHeight: 72,
+            maxHeight: 200,
+            padding: "10px 12px",
+            borderRadius: 8,
+            border: "1px solid rgba(0,0,0,0.12)",
+            resize: "vertical",
+            fontFamily: "inherit",
+            fontSize: 15,
+            boxSizing: "border-box",
+          }}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <input ref={fileInputRef} type="file" multiple onChange={onPickFiles} />
+          {sending ? (
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>发送中…</span>
+          ) : null}
+        </div>
+        {composerFiles.length ? (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#444" }}>
+            {composerFiles.map((f, idx) => (
+              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{f.name}</span>
+                <button type="button" onClick={() => removeFileAt(idx)} style={{ fontSize: 12 }}>
+                  移除
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
