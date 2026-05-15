@@ -13,6 +13,37 @@ function parseJson(value) {
 }
 
 /**
+ * 与前端 partitionAnalyzedCandidates 一致：推荐 = isRecommended 为 true，
+ * 或 isRecommended 未置且 should_contact=1；其余为不推荐。
+ */
+const SQL_ANALYZED_BREAKDOWN = `
+  SELECT
+    COUNT(*) AS total,
+    COALESCE(SUM(
+      CASE
+        WHEN JSON_VALUE(match_analysis, '$.isRecommended') = 'true' THEN 1
+        WHEN JSON_VALUE(match_analysis, '$.isRecommended') IS NULL AND COALESCE(should_contact, 0) = 1 THEN 1
+        ELSE 0
+      END
+    ), 0) AS recommended_cnt
+  FROM tiktok_campaign_influencer_candidates
+  WHERE campaign_id = ?
+    AND match_analysis IS NOT NULL
+`;
+
+function parseAnalyzedBreakdownRow(row) {
+  if (!row) return null;
+  const total = Number(row.total ?? 0);
+  const recommended = Number(row.recommended_cnt ?? 0);
+  const notRecommended = Math.max(0, total - recommended);
+  return {
+    totalMatchAnalysisCount: total,
+    analyzedRecommendedDbCount: recommended,
+    analyzedNotRecommendedDbCount: notRecommended,
+  };
+}
+
+/**
  * GET /api/campaigns/[id]/candidates
  *
  * 默认：返回该 campaign 下候选表全部行（原有行为，供「已分析红人」等全量视图）。
@@ -22,6 +53,8 @@ function parseJson(value) {
  *
  * - limit：默认 30，最大 50
  * - beforeId：上一页最后一条的 id，游标分页（与 candidate-analysis-feed 一致）
+ * - countOnly=1：仅返回全库统计（match_analysis IS NOT NULL 总数 + 推荐/不推荐人数，与列表分组规则一致）
+ * - 首屏（无 beforeId）列表响应中带 totalMatchAnalysisCount、analyzedRecommendedDbCount、analyzedNotRecommendedDbCount
  */
 export async function GET(req, { params }) {
   try {
@@ -37,6 +70,27 @@ export async function GET(req, { params }) {
     const { searchParams } = new URL(req.url);
     const analyzedMode =
       searchParams.get("analyzed") === "1" || searchParams.get("analyzed") === "true";
+    const countOnly =
+      searchParams.get("countOnly") === "1" || searchParams.get("countOnly") === "true";
+
+    if (analyzedMode && countOnly) {
+      const countRows = await queryTikTok(SQL_ANALYZED_BREAKDOWN, [campaignId]);
+      const breakdown = parseAnalyzedBreakdownRow(countRows?.[0]);
+      if (!breakdown) {
+        return NextResponse.json({
+          success: true,
+          totalMatchAnalysisCount: 0,
+          analyzedRecommendedDbCount: 0,
+          analyzedNotRecommendedDbCount: 0,
+        });
+      }
+      return NextResponse.json({
+        success: true,
+        totalMatchAnalysisCount: breakdown.totalMatchAnalysisCount,
+        analyzedRecommendedDbCount: breakdown.analyzedRecommendedDbCount,
+        analyzedNotRecommendedDbCount: breakdown.analyzedNotRecommendedDbCount,
+      });
+    }
 
     if (!analyzedMode) {
       const rows = await queryTikTok(
@@ -121,7 +175,26 @@ export async function GET(req, { params }) {
       LIMIT ${limit}
     `;
     const sqlParams = beforeId != null ? [campaignId, beforeId] : [campaignId];
-    const rows = await queryTikTok(sql, sqlParams);
+
+    let totalMatchAnalysisCount = null;
+    let analyzedRecommendedDbCount = null;
+    let analyzedNotRecommendedDbCount = null;
+    const countPromise =
+      beforeId == null ? queryTikTok(SQL_ANALYZED_BREAKDOWN, [campaignId]) : null;
+
+    const [countRows, rows] = await Promise.all([
+      countPromise ?? Promise.resolve(null),
+      queryTikTok(sql, sqlParams),
+    ]);
+
+    if (countRows?.[0]) {
+      const breakdown = parseAnalyzedBreakdownRow(countRows[0]);
+      if (breakdown) {
+        totalMatchAnalysisCount = breakdown.totalMatchAnalysisCount;
+        analyzedRecommendedDbCount = breakdown.analyzedRecommendedDbCount;
+        analyzedNotRecommendedDbCount = breakdown.analyzedNotRecommendedDbCount;
+      }
+    }
 
     const candidates = (rows || []).map((r) => {
       const snapshot =
@@ -149,19 +222,25 @@ export async function GET(req, { params }) {
         matchAnalysis,
       };
 
-      const { matchAnalysis: _snapMa, ...snapshotRest } =
-        snapshot && typeof snapshot === "object" ? snapshot : {};
-      return { ...snapshotRest, ...base };
+      return { ...snapshot, ...base };
     });
 
     const last = (rows || []).length > 0 ? rows[rows.length - 1] : null;
     const nextBeforeId = last?.id != null ? String(last.id) : null;
 
-    return NextResponse.json({
+    const payload = {
       success: true,
       data: candidates,
       nextBeforeId,
-    });
+    };
+    if (totalMatchAnalysisCount != null) {
+      payload.totalMatchAnalysisCount = totalMatchAnalysisCount;
+    }
+    if (analyzedRecommendedDbCount != null && analyzedNotRecommendedDbCount != null) {
+      payload.analyzedRecommendedDbCount = analyzedRecommendedDbCount;
+      payload.analyzedNotRecommendedDbCount = analyzedNotRecommendedDbCount;
+    }
+    return NextResponse.json(payload);
   } catch (error) {
     console.error("[Campaign Candidates API] 获取候选红人失败:", error);
     return NextResponse.json(

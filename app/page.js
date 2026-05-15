@@ -285,6 +285,19 @@ function formatEcpmFromFlatAndViews(flatAmt, viewsNum, currencyCode) {
   return `${v.toFixed(2)} ${currencyCode || "USD"} / 千次播放`;
 }
 
+/** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
+function partitionAnalyzedCandidates(items) {
+  const recommendedItems = [];
+  const notRecommendedItems = [];
+  for (const item of items || []) {
+    const ir = item?.matchAnalysis?.isRecommended;
+    const inRecommended =
+      ir === true || ((ir == null || ir === undefined) && item?.shouldContact);
+    (inRecommended ? recommendedItems : notRecommendedItems).push(item);
+  }
+  return { recommendedItems, notRecommendedItems };
+}
+
 /** 执行进度卡片：分析类长文默认两行，可展开；展开后可选 Markdown（sanitize） */
 function executionProgressCollapsibleText(raw) {
   if (raw == null || raw === "") return "—";
@@ -1159,6 +1172,14 @@ export default function HomePage() {
   const [analyzedCandidatesError, setAnalyzedCandidatesError] = useState(null);
   /** 已成功拉取首屏的 campaignId；切换 campaign 时置 null */
   const [analyzedCandidatesReadyCampaignId, setAnalyzedCandidatesReadyCampaignId] = useState(null);
+  /** 候选表 match_analysis IS NOT NULL 的总条数（与 Tab「已分析」数字一致） */
+  const [analyzedCandidatesTotal, setAnalyzedCandidatesTotal] = useState(null);
+  /** 与 partitionAnalyzedCandidates 规则一致的全库统计（来自 candidates 聚合接口） */
+  const [analyzedDbRecommendedCount, setAnalyzedDbRecommendedCount] = useState(null);
+  const [analyzedDbNotRecommendedCount, setAnalyzedDbNotRecommendedCount] = useState(null);
+  const analyzedPagingInFlightRef = useRef(false);
+  const executionProgressListRef = useRef(null);
+  const analyzedInfiniteSentinelRef = useRef(null);
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
@@ -1249,6 +1270,9 @@ export default function HomePage() {
       setAnalyzedCandidatesNextBeforeId(null);
       setAnalyzedCandidatesError(null);
       setAnalyzedCandidatesReadyCampaignId(null);
+      setAnalyzedCandidatesTotal(null);
+      setAnalyzedDbRecommendedCount(null);
+      setAnalyzedDbNotRecommendedCount(null);
       setAnalyzedCandidatesLoading(false);
       setAnalyzedCandidatesLoadingMore(false);
       setActiveExecutionStage("contacted");
@@ -1260,9 +1284,45 @@ export default function HomePage() {
     setAnalyzedCandidatesNextBeforeId(null);
     setAnalyzedCandidatesError(null);
     setAnalyzedCandidatesReadyCampaignId(null);
+    setAnalyzedCandidatesTotal(null);
+    setAnalyzedDbRecommendedCount(null);
+    setAnalyzedDbNotRecommendedCount(null);
     setAnalyzedCandidatesLoading(false);
     setAnalyzedCandidatesLoadingMore(false);
   }, [context?.campaignId]);
+
+  // 执行阶段：预取「已分析」总人数（Tab 数字与数据库一致，无需先点开 Tab）
+  useEffect(() => {
+    const cid = context?.campaignId;
+    const isExecutionPhase =
+      context?.workflowState === "published" || context?.published === true;
+    if (!cid || !isExecutionPhase) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&countOnly=1`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !data.success) return;
+        if (data.totalMatchAnalysisCount != null) {
+          setAnalyzedCandidatesTotal(Number(data.totalMatchAnalysisCount));
+        }
+        if (
+          data.analyzedRecommendedDbCount != null &&
+          data.analyzedNotRecommendedDbCount != null
+        ) {
+          setAnalyzedDbRecommendedCount(Number(data.analyzedRecommendedDbCount));
+          setAnalyzedDbNotRecommendedCount(Number(data.analyzedNotRecommendedDbCount));
+        }
+      } catch {
+        /* 静默失败，进入已分析 Tab 后由列表首屏再带 total */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context?.campaignId, context?.workflowState, context?.published]);
 
   useEffect(() => {
     const cid = context?.campaignId;
@@ -1287,6 +1347,16 @@ export default function HomePage() {
             ? String(data.nextBeforeId)
             : null
         );
+        if (data.totalMatchAnalysisCount != null) {
+          setAnalyzedCandidatesTotal(Number(data.totalMatchAnalysisCount));
+        }
+        if (
+          data.analyzedRecommendedDbCount != null &&
+          data.analyzedNotRecommendedDbCount != null
+        ) {
+          setAnalyzedDbRecommendedCount(Number(data.analyzedRecommendedDbCount));
+          setAnalyzedDbNotRecommendedCount(Number(data.analyzedNotRecommendedDbCount));
+        }
         setAnalyzedCandidatesReadyCampaignId(cid);
       } catch (e) {
         if (!cancelled) {
@@ -1313,6 +1383,8 @@ export default function HomePage() {
   const loadMoreAnalyzedCandidates = useCallback(async () => {
     const cid = context?.campaignId;
     if (!cid || !analyzedCandidatesNextBeforeId) return;
+    if (analyzedPagingInFlightRef.current) return;
+    analyzedPagingInFlightRef.current = true;
     try {
       setAnalyzedCandidatesLoadingMore(true);
       setAnalyzedCandidatesError(null);
@@ -1337,8 +1409,35 @@ export default function HomePage() {
       setAnalyzedCandidatesError(e.message || "加载更多失败");
     } finally {
       setAnalyzedCandidatesLoadingMore(false);
+      analyzedPagingInFlightRef.current = false;
     }
   }, [context?.campaignId, analyzedCandidatesNextBeforeId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
+    if (activeExecutionStage !== "analyzed") return;
+    if (!analyzedCandidatesNextBeforeId) return;
+    const root = executionProgressListRef.current;
+    const target = analyzedInfiniteSentinelRef.current;
+    if (!root || !target) return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.some((en) => en.isIntersecting);
+        if (!hit) return;
+        if (analyzedPagingInFlightRef.current) return;
+        void loadMoreAnalyzedCandidates();
+      },
+      { root, rootMargin: "160px 0px 0px 0px", threshold: 0 }
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [
+    activeExecutionStage,
+    analyzedCandidatesNextBeforeId,
+    loadMoreAnalyzedCandidates,
+    analyzedCandidatesItems.length,
+  ]);
 
   // 已发布 campaign：订阅工作实况 SSE（与红人画像阶段 /api/chat 相同：thinking + screenshot）
   useEffect(() => {
@@ -4909,8 +5008,14 @@ export default function HomePage() {
                     (s) => s.key !== "pendingSample" || needSampleFlag
                   );
                   const currentStage =
-                    stageDefs.find((s) => s.key === activeExecutionStage) || stageDefs[0];
+                    stageDefs.find((s) => s.key === activeExecutionStage) ||
+                    stageDefs.find((s) => s.key === "contacted") ||
+                    stageDefs[0];
                   const currentItems = currentStage.items;
+                  const { recommendedItems, notRecommendedItems } =
+                    currentStage.key === "analyzed"
+                      ? partitionAnalyzedCandidates(currentItems)
+                      : { recommendedItems: [], notRecommendedItems: [] };
 
                   // 工作笔记：来自执行节奏 + 汇报配置
                   const config = executionConfig;
@@ -5169,20 +5274,24 @@ export default function HomePage() {
                             </div>
                           ) : (
                             <>
-                              {/* 阶段 Tab 切换 */}
+                              {/* 阶段 Tab 切换 + 已分析全库推荐/不推荐统计 */}
                               <div
                                 style={{
                                   flexShrink: 0,
                                   display: "flex",
+                                  flexWrap: "wrap",
+                                  alignItems: "center",
                                   gap: 8,
-                                  flexWrap: "wrap"
+                                  rowGap: 6,
                                 }}
                               >
                                 {stageDefs.map((stage) => {
                                   const isActive = stage.key === currentStage.key;
                                   const tabCount =
-                                    stage.key === "analyzed" && analyzedCandidatesNextBeforeId
-                                      ? `${stage.items.length}+`
+                                    stage.key === "analyzed"
+                                      ? analyzedCandidatesTotal != null
+                                        ? String(analyzedCandidatesTotal)
+                                        : "…"
                                       : String(stage.items.length);
                                   return (
                                     <button
@@ -5203,17 +5312,31 @@ export default function HomePage() {
                                     </button>
                                   );
                                 })}
+                                {analyzedDbRecommendedCount != null &&
+                                analyzedDbNotRecommendedCount != null ? (
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      color: "#6B7280",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    全库推荐 {analyzedDbRecommendedCount} · 全库不推荐{" "}
+                                    {analyzedDbNotRecommendedCount}
+                                  </span>
+                                ) : null}
                               </div>
 
                               {/* 当前阶段的红人卡片列表 */}
                               <div
+                                ref={executionProgressListRef}
                                 style={{
                                   flex: 1,
                                   minHeight: 0,
                                   overflowY: "auto",
                                   display: "flex",
                                   flexDirection: "column",
-                                  gap: 8
+                                  gap: 8,
                                 }}
                               >
                                 {currentItems.length === 0 ? (
@@ -5224,54 +5347,138 @@ export default function HomePage() {
                                         currentStage.key === "analyzed" && analyzedCandidatesError
                                           ? "#EF4444"
                                           : "#9CA3AF",
+                                      display: "flex",
+                                      flexDirection: "column",
+                                      gap: 8,
+                                      alignItems: "flex-start",
                                     }}
                                   >
-                                    {currentStage.key === "analyzed" && analyzedCandidatesLoading
-                                      ? "加载已分析列表中…"
-                                      : currentStage.key === "analyzed" && analyzedCandidatesError
-                                      ? analyzedCandidatesError
-                                      : "该阶段暂无红人。"}
-                                  </div>
-                                ) : (
-                                  <>
-                                    {currentItems.map((item) => (
-                                      <ExecutionProgressRow
-                                        key={
-                                          currentStage.key === "analyzed" && item.candidateRowId != null
-                                            ? `analyzed-${item.candidateRowId}`
-                                            : item.id
-                                        }
-                                        stageKey={currentStage.key}
-                                        item={item}
-                                        needSample={needSampleFlag}
-                                        execPatchingId={execPatchingId}
-                                        patchExecution={patchExecution}
-                                        executionUsernameSet={executionUsernameSet}
-                                      />
-                                    ))}
-                                    {currentStage.key === "analyzed" &&
-                                    analyzedCandidatesNextBeforeId &&
-                                    !analyzedCandidatesLoading ? (
+                                    <span>
+                                      {currentStage.key === "analyzed" && analyzedCandidatesLoading
+                                        ? "加载已分析列表中…"
+                                        : currentStage.key === "analyzed" && analyzedCandidatesError
+                                        ? analyzedCandidatesError
+                                        : "该阶段暂无红人。"}
+                                    </span>
+                                    {currentStage.key === "analyzed" && analyzedCandidatesError ? (
                                       <button
                                         type="button"
-                                        onClick={() => loadMoreAnalyzedCandidates()}
-                                        disabled={analyzedCandidatesLoadingMore}
+                                        onClick={() => {
+                                          setAnalyzedCandidatesReadyCampaignId(null);
+                                          setAnalyzedCandidatesError(null);
+                                        }}
                                         style={{
-                                          alignSelf: "center",
-                                          marginTop: 4,
-                                          padding: "6px 14px",
+                                          padding: "4px 12px",
                                           fontSize: 12,
                                           borderRadius: 8,
                                           border: "1px solid #E5E7EB",
-                                          backgroundColor: analyzedCandidatesLoadingMore ? "#F3F4F6" : "#FFFFFF",
+                                          backgroundColor: "#FFFFFF",
                                           color: "#374151",
-                                          cursor: analyzedCandidatesLoadingMore ? "not-allowed" : "pointer",
+                                          cursor: "pointer",
                                         }}
                                       >
-                                        {analyzedCandidatesLoadingMore ? "加载中…" : "加载更多"}
+                                        重试
                                       </button>
                                     ) : null}
+                                  </div>
+                                ) : currentStage.key === "analyzed" ? (
+                                  <>
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        color: "#6B7280",
+                                        padding: "4px 2px 2px",
+                                        letterSpacing: 0.02,
+                                      }}
+                                    >
+                                      推荐（{recommendedItems.length}）
+                                    </div>
+                                    {recommendedItems.length === 0 ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        暂无
+                                      </div>
+                                    ) : (
+                                      recommendedItems.map((item) => (
+                                        <ExecutionProgressRow
+                                          key={
+                                            item.candidateRowId != null
+                                              ? `analyzed-${item.candidateRowId}`
+                                              : item.id
+                                          }
+                                          stageKey="analyzed"
+                                          item={item}
+                                          needSample={needSampleFlag}
+                                          execPatchingId={execPatchingId}
+                                          patchExecution={patchExecution}
+                                          executionUsernameSet={executionUsernameSet}
+                                        />
+                                      ))
+                                    )}
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        color: "#6B7280",
+                                        padding: "10px 2px 2px",
+                                        letterSpacing: 0.02,
+                                      }}
+                                    >
+                                      不推荐（{notRecommendedItems.length}）
+                                    </div>
+                                    {notRecommendedItems.length === 0 ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        暂无
+                                      </div>
+                                    ) : (
+                                      notRecommendedItems.map((item) => (
+                                        <ExecutionProgressRow
+                                          key={
+                                            item.candidateRowId != null
+                                              ? `analyzed-${item.candidateRowId}`
+                                              : item.id
+                                          }
+                                          stageKey="analyzed"
+                                          item={item}
+                                          needSample={needSampleFlag}
+                                          execPatchingId={execPatchingId}
+                                          patchExecution={patchExecution}
+                                          executionUsernameSet={executionUsernameSet}
+                                        />
+                                      ))
+                                    )}
+                                    {analyzedCandidatesNextBeforeId ? (
+                                      <div
+                                        ref={analyzedInfiniteSentinelRef}
+                                        style={{ height: 1, flexShrink: 0, width: "100%" }}
+                                        aria-hidden
+                                      />
+                                    ) : null}
+                                    {analyzedCandidatesLoadingMore ? (
+                                      <div
+                                        style={{
+                                          textAlign: "center",
+                                          fontSize: 11,
+                                          color: "#9CA3AF",
+                                          padding: "6px 0 4px",
+                                        }}
+                                      >
+                                        加载更多中…
+                                      </div>
+                                    ) : null}
                                   </>
+                                ) : (
+                                  currentItems.map((item) => (
+                                    <ExecutionProgressRow
+                                      key={item.id}
+                                      stageKey={currentStage.key}
+                                      item={item}
+                                      needSample={needSampleFlag}
+                                      execPatchingId={execPatchingId}
+                                      patchExecution={patchExecution}
+                                      executionUsernameSet={executionUsernameSet}
+                                    />
+                                  ))
                                 )}
                               </div>
                             </>
