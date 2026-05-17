@@ -2499,7 +2499,11 @@ export default function HomePage() {
                   }
 
                   // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
-                  if (data.data.context?.published) {
+                  const ctxAfter = data.data.context;
+                  if (
+                    ctxAfter?.published ||
+                    ctxAfter?.workflowState === "published"
+                  ) {
                     loadCampaignSessions({ silent: true }).catch(() => {});
                   }
 
