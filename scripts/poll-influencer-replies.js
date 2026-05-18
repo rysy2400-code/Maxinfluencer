@@ -101,13 +101,13 @@ function hasImapConfig(account) {
 
 async function pollOnce() {
   const allAccounts = await getAllOpContacts();
-  // 临时：与随机发件同一批 7 个邮箱；须在白名单内且 op_contacts 已配置 IMAP
+  // 临时：与随机发件同一批 20 个邮箱；须在白名单内且 op_contacts 已配置 IMAP
   const accounts = allAccounts.filter(
     (a) => accountMatchesTemporaryOutboundPool(a) && hasImapConfig(a)
   );
   if (!accounts.length) {
     console.warn(
-      "[PollInfluencerReplies] 白名单内无可用 IMAP 账号（检查 op_contacts 是否含这 7 个邮箱的 imap/imap_port/auth_code），退出。"
+      "[PollInfluencerReplies] 白名单内无可用 IMAP 账号（检查 op_contacts 是否含白名单邮箱的 imap/imap_port/auth_code），退出。"
     );
     return;
   }
