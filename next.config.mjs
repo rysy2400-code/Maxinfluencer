@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // xlsx 由 Node 直接加载，避免 webpack 打包后 default 为 undefined（XLSX.utils 报错）
+  serverExternalPackages: ["xlsx"],
   // 小内存 Windows 构建：避免额外 webpack worker 占满堆（见 deploy-web / next memory）
   experimental: {
     webpackBuildWorker: false,

@@ -4,6 +4,10 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
+import {
+  avgViewsFromSnapshot,
+  formatEcpmFromFlatAndViews,
+} from "../lib/influencer/avg-views.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -254,36 +258,14 @@ function formatInfluencerStat(v) {
   return String(v);
 }
 
-/** eCPM 用数值播放量：优先 views.count */
-function getNumericViewsForEcpm(item) {
-  const v = item.avg_views ?? item.avgViews ?? item.views;
-  if (
-    v != null &&
-    typeof v === "object" &&
-    !Array.isArray(v) &&
-    typeof v.count === "number" &&
-    Number.isFinite(v.count) &&
-    v.count > 0
-  ) {
-    return v.count;
-  }
-  const n = Number(v);
-  if (Number.isFinite(n) && n > 0) return n;
-  return null;
-}
-
-function formatEcpmFromFlatAndViews(flatAmt, viewsNum, currencyCode) {
-  if (
-    flatAmt == null ||
-    !Number.isFinite(Number(flatAmt)) ||
-    viewsNum == null ||
-    viewsNum <= 0
-  ) {
-    return "—";
-  }
-  const v = Number(flatAmt) / (viewsNum / 1000);
-  return `${v.toFixed(2)} ${currencyCode || "USD"} / 千次播放`;
-}
+/** 执行进度 Tab：支持导出 Excel 的阶段（不含「已分析」） */
+const EXECUTION_EXPORTABLE_STAGES = new Set([
+  "contacted",
+  "pendingPrice",
+  "pendingSample",
+  "pendingDraft",
+  "published",
+]);
 
 /** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
 function partitionAnalyzedCandidates(items) {
@@ -573,7 +555,7 @@ function ExecutionProgressRow({
     item.flatFeeUSD ??
     item.campaignAgentDecision?.flatFeeUSD ??
     null;
-  const viewsNumForEcpm = getNumericViewsForEcpm(item);
+  const viewsNumForEcpm = avgViewsFromSnapshot(item);
   const ecpmDisplay =
     item.ecpm != null && item.ecpm !== ""
       ? String(item.ecpm)
@@ -1162,6 +1144,7 @@ export default function HomePage() {
   const [executionConfig, setExecutionConfig] = useState(null); // 执行阶段右侧「工作笔记」用到的执行节奏 & 汇报配置
   const [executionConfigError, setExecutionConfigError] = useState(null);
   const [execPatchingId, setExecPatchingId] = useState(null); // 执行进度 PATCH 中的红人 id
+  const [executionExportingStage, setExecutionExportingStage] = useState(null); // 正在导出的执行阶段 key
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
@@ -2202,6 +2185,49 @@ export default function HomePage() {
       }
     },
     [context?.campaignId, refreshExecutionStatusQuiet]
+  );
+
+  const exportExecutionStage = useCallback(
+    async (stageKey) => {
+      const cid = context?.campaignId;
+      if (!cid || !EXECUTION_EXPORTABLE_STAGES.has(stageKey)) return;
+      setExecutionExportingStage(stageKey);
+      try {
+        const res = await fetch(
+          `/api/campaigns/${encodeURIComponent(cid)}/execution-export?stage=${encodeURIComponent(stageKey)}`
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `导出失败 (HTTP ${res.status})`);
+        }
+        const blob = await res.blob();
+        const cd = res.headers.get("Content-Disposition") || "";
+        let filename = "execution-export.xlsx";
+        const utf8Match = cd.match(/filename\*=UTF-8''([^;\s]+)/i);
+        if (utf8Match) {
+          try {
+            filename = decodeURIComponent(utf8Match[1]);
+          } catch {
+            filename = utf8Match[1];
+          }
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error("[HomePage] 导出执行进度失败:", err);
+        alert(err.message || "导出失败");
+      } finally {
+        setExecutionExportingStage(null);
+      }
+    },
+    [context?.campaignId]
   );
 
   // 智能自动滚动：只在用户发送消息或AI开始新回复时滚动，不在步骤更新时滚动
@@ -5328,6 +5354,40 @@ export default function HomePage() {
                                     全库推荐 {analyzedDbRecommendedCount} · 全库不推荐{" "}
                                     {analyzedDbNotRecommendedCount}
                                   </span>
+                                ) : null}
+                                {EXECUTION_EXPORTABLE_STAGES.has(currentStage.key) ? (
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      executionExportingStage === currentStage.key ||
+                                      executionLoading
+                                    }
+                                    onClick={() => exportExecutionStage(currentStage.key)}
+                                    style={{
+                                      marginLeft: "auto",
+                                      padding: "4px 12px",
+                                      borderRadius: 8,
+                                      border: "1px solid #D1D5DB",
+                                      backgroundColor: "#FFFFFF",
+                                      color: "#374151",
+                                      fontSize: 12,
+                                      cursor:
+                                        executionExportingStage === currentStage.key ||
+                                        executionLoading
+                                          ? "not-allowed"
+                                          : "pointer",
+                                      opacity:
+                                        executionExportingStage === currentStage.key ||
+                                        executionLoading
+                                          ? 0.6
+                                          : 1,
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {executionExportingStage === currentStage.key
+                                      ? "导出中…"
+                                      : "导出 Excel"}
+                                  </button>
                                 ) : null}
                               </div>
 
