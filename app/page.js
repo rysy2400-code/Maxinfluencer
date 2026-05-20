@@ -183,6 +183,34 @@ function clearChatPersistenceKeys() {
   }
 }
 
+/** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
+const SESSION_MESSAGES_POLL_MS = 60_000;
+
+function sessionMessageMergeKey(msg) {
+  if (!msg || typeof msg !== "object") return "";
+  const role = msg.role || "";
+  const name = msg.name || "";
+  const content = String(msg.content || "").slice(0, 500);
+  return `${role}|${name}|${content}`;
+}
+
+/** 仅追加服务端新增的 assistant 消息，不覆盖本地流式/未保存状态 */
+function mergeIncomingAssistantMessages(local, remote) {
+  if (!Array.isArray(remote) || remote.length === 0) return local;
+  const base = Array.isArray(local) ? local : [];
+  const seen = new Set(base.map(sessionMessageMergeKey));
+  const appended = [];
+  for (const m of remote) {
+    if (!m || m.role !== "assistant") continue;
+    const key = sessionMessageMergeKey(m);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    appended.push(m);
+  }
+  if (appended.length === 0) return base;
+  return [...base, ...appended];
+}
+
 /** 工作笔记条目去重键：优先 taskId；缺失时勿仅用 keyword（多轮同词会误合并） */
 function workNoteMergeKey(note) {
   if (!note || typeof note !== "object") return "";
@@ -1173,6 +1201,7 @@ export default function HomePage() {
   const workLiveAutoSwitchedRef = useRef(false); // 本轮是否已自动切到工作实况
   const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
   const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
+  const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
@@ -1689,6 +1718,70 @@ export default function HomePage() {
       }
     };
   }, [isExecutionPhaseGlobal, currentSessionId]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  // 已发布会话：60s 轮询服务端消息（页面隐藏 / 流式对话时暂停）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!mounted || !isExecutionPhaseGlobal || !currentSessionId || loading) return;
+
+    const sessionId = currentSessionId;
+    let cancelled = false;
+    let intervalId = null;
+
+    const pollSessionMessages = async () => {
+      if (cancelled || loadingRef.current) return;
+      if (document.visibilityState !== "visible") return;
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok || !data.success) return;
+        const remote = data.session?.messages;
+        if (!Array.isArray(remote)) return;
+        setMessages((prev) => mergeIncomingAssistantMessages(prev, remote));
+      } catch (e) {
+        console.warn("[HomePage] 轮询会话消息失败:", e);
+      }
+    };
+
+    const stopPolling = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const startPolling = () => {
+      stopPolling();
+      pollSessionMessages();
+      intervalId = setInterval(pollSessionMessages, SESSION_MESSAGES_POLL_MS);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    if (document.visibilityState === "visible") {
+      startPolling();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      stopPolling();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [mounted, isExecutionPhaseGlobal, currentSessionId, loading]);
 
   const handleBinComputerViewChange = (nextView, manual = true) => {
     setBinComputerView(nextView);
