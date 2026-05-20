@@ -1138,6 +1138,10 @@ export default function HomePage() {
   const isVerticalResizingRef = useRef(false); // 是否正在上下拖拽
   const verticalResizeStartYRef = useRef(0); // 上下拖拽开始的 Y 坐标
   const verticalResizeStartSplitRef = useRef(50); // 上下拖拽开始时的百分比
+  /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
+  const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
+  const resolveCampaignRequestRef = useRef(0);
+  const resolveCampaignSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState(null);
@@ -1237,6 +1241,73 @@ export default function HomePage() {
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
   const isExecutionPhaseGlobal =
     context?.workflowState === "published" || context?.published === true;
+  /** 已发布但尚未从 session 解析出 campaignId（避免短暂展示上一份执行数据） */
+  const isResolvingCampaign =
+    isExecutionPhaseGlobal && !!currentSessionId && resolvedCampaignId == null;
+
+  // 执行阶段：按 session_id 从 DB 解析 campaignId，并在与 context 不一致时写回会话
+  useEffect(() => {
+    if (!isExecutionPhaseGlobal || !currentSessionId) {
+      setResolvedCampaignId(null);
+      resolveCampaignSessionRef.current = null;
+      return;
+    }
+
+    const sessionId = currentSessionId;
+    const reqId = ++resolveCampaignRequestRef.current;
+    const sessionChanged = resolveCampaignSessionRef.current !== sessionId;
+    resolveCampaignSessionRef.current = sessionId;
+    if (sessionChanged) {
+      setResolvedCampaignId(null);
+      setExecutionStatus(null);
+      setExecutionConfig(null);
+      setExecutionError(null);
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/campaign`,
+          { credentials: "include" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || reqId !== resolveCampaignRequestRef.current) return;
+
+        if (!res.ok || !data.success || !data.campaignId) {
+          setResolvedCampaignId(null);
+          return;
+        }
+
+        const dbCampaignId = String(data.campaignId);
+        setResolvedCampaignId(dbCampaignId);
+
+        setContext((prev) => {
+          if (!prev || prev.campaignId === dbCampaignId) return prev;
+          const next = { ...prev, campaignId: dbCampaignId };
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+            method: "PUT",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ context: next }),
+          }).catch((err) => {
+            console.warn("[HomePage] 同步 context.campaignId 失败:", err);
+          });
+          return next;
+        });
+      } catch (e) {
+        if (!cancelled && reqId === resolveCampaignRequestRef.current) {
+          console.error("[HomePage] 解析 session campaign 失败:", e);
+          setResolvedCampaignId(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSessionId, isExecutionPhaseGlobal]);
 
   useEffect(() => {
     binComputerViewRef.current = binComputerView;
@@ -1272,14 +1343,12 @@ export default function HomePage() {
     setAnalyzedDbNotRecommendedCount(null);
     setAnalyzedCandidatesLoading(false);
     setAnalyzedCandidatesLoadingMore(false);
-  }, [context?.campaignId]);
+  }, [resolvedCampaignId]);
 
   // 执行阶段：预取「已分析」总人数（Tab 数字与数据库一致，无需先点开 Tab）
   useEffect(() => {
-    const cid = context?.campaignId;
-    const isExecutionPhase =
-      context?.workflowState === "published" || context?.published === true;
-    if (!cid || !isExecutionPhase) return;
+    const cid = resolvedCampaignId;
+    if (!cid || !isExecutionPhaseGlobal) return;
 
     let cancelled = false;
     (async () => {
@@ -1305,13 +1374,11 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [context?.campaignId, context?.workflowState, context?.published]);
+  }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   useEffect(() => {
-    const cid = context?.campaignId;
-    const isExecutionPhase =
-      context?.workflowState === "published" || context?.published === true;
-    if (!cid || !isExecutionPhase || activeExecutionStage !== "analyzed") return;
+    const cid = resolvedCampaignId;
+    if (!cid || !isExecutionPhaseGlobal || activeExecutionStage !== "analyzed") return;
     if (analyzedCandidatesReadyCampaignId === cid) return;
 
     let cancelled = false;
@@ -1356,15 +1423,14 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [
-    context?.campaignId,
-    context?.workflowState,
-    context?.published,
+    resolvedCampaignId,
+    isExecutionPhaseGlobal,
     activeExecutionStage,
     analyzedCandidatesReadyCampaignId,
   ]);
 
   const loadMoreAnalyzedCandidates = useCallback(async () => {
-    const cid = context?.campaignId;
+    const cid = resolvedCampaignId;
     if (!cid || !analyzedCandidatesNextBeforeId) return;
     if (analyzedPagingInFlightRef.current) return;
     analyzedPagingInFlightRef.current = true;
@@ -1394,7 +1460,7 @@ export default function HomePage() {
       setAnalyzedCandidatesLoadingMore(false);
       analyzedPagingInFlightRef.current = false;
     }
-  }, [context?.campaignId, analyzedCandidatesNextBeforeId]);
+  }, [resolvedCampaignId, analyzedCandidatesNextBeforeId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
@@ -2008,14 +2074,11 @@ export default function HomePage() {
     }
   }, [context, mounted]);
 
-  // 在「执行阶段」（已发布）加载执行进度数据
+  // 在「执行阶段」（已发布）加载执行进度数据（campaignId 来自 session 解析，非 context）
   useEffect(() => {
-    const campaignId = context?.campaignId;
-    const isExecutionPhase =
-      context?.workflowState === "published" || context?.published === true;
+    const campaignId = resolvedCampaignId;
 
-    if (!campaignId || !isExecutionPhase) {
-      // 非执行阶段或没有 campaignId 时，清空执行进度状态
+    if (!campaignId || !isExecutionPhaseGlobal) {
       setExecutionStatus(null);
       setExecutionError(null);
       setExecutionLoading(false);
@@ -2058,15 +2121,13 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [context?.campaignId, context?.workflowState, context?.published]);
+  }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   // 在「执行阶段」加载执行节奏 & 汇报配置（用于工作笔记）
   useEffect(() => {
-    const campaignId = context?.campaignId;
-    const isExecutionPhase =
-      context?.workflowState === "published" || context?.published === true;
+    const campaignId = resolvedCampaignId;
 
-    if (!campaignId || !isExecutionPhase) {
+    if (!campaignId || !isExecutionPhaseGlobal) {
       setExecutionConfig(null);
       setExecutionConfigError(null);
       return;
@@ -2103,15 +2164,13 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [context?.campaignId, context?.workflowState, context?.published]);
+  }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   // 在「执行阶段」预加载工作笔记历史（先历史后实时）
   useEffect(() => {
-    const campaignId = context?.campaignId;
-    const isExecutionPhase =
-      context?.workflowState === "published" || context?.published === true;
+    const campaignId = resolvedCampaignId;
 
-    if (!campaignId || !isExecutionPhase) {
+    if (!campaignId || !isExecutionPhaseGlobal) {
       setKeywordWorkNotes([]);
       return;
     }
@@ -2149,10 +2208,10 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [context?.campaignId, context?.workflowState, context?.published]);
+  }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   const refreshExecutionStatusQuiet = useCallback(async () => {
-    const cid = context?.campaignId;
+    const cid = resolvedCampaignId;
     if (!cid) return;
     try {
       const res = await fetch(`/api/campaigns/${cid}/execution-status`);
@@ -2161,11 +2220,11 @@ export default function HomePage() {
     } catch (e) {
       console.error("[HomePage] 刷新执行进度失败:", e);
     }
-  }, [context?.campaignId]);
+  }, [resolvedCampaignId]);
 
   const patchExecution = useCallback(
     async (action, influencerId, payload = {}) => {
-      const cid = context?.campaignId;
+      const cid = resolvedCampaignId;
       if (!cid) return;
       setExecPatchingId(influencerId);
       try {
@@ -2184,12 +2243,12 @@ export default function HomePage() {
         setExecPatchingId(null);
       }
     },
-    [context?.campaignId, refreshExecutionStatusQuiet]
+    [resolvedCampaignId, refreshExecutionStatusQuiet]
   );
 
   const exportExecutionStage = useCallback(
     async (stageKey) => {
-      const cid = context?.campaignId;
+      const cid = resolvedCampaignId;
       if (!cid || !EXECUTION_EXPORTABLE_STAGES.has(stageKey)) return;
       setExecutionExportingStage(stageKey);
       try {
@@ -2227,7 +2286,7 @@ export default function HomePage() {
         setExecutionExportingStage(null);
       }
     },
-    [context?.campaignId]
+    [resolvedCampaignId]
   );
 
   // 智能自动滚动：只在用户发送消息或AI开始新回复时滚动，不在步骤更新时滚动
@@ -2514,6 +2573,7 @@ export default function HomePage() {
                     nextCtx?.campaignId &&
                     (nextCtx.workflowState === "published" || nextCtx.published)
                   ) {
+                    setResolvedCampaignId(String(nextCtx.campaignId));
                     fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
                       credentials: "include",
                     })
@@ -2574,6 +2634,7 @@ export default function HomePage() {
             nextCtx?.campaignId &&
             (nextCtx.workflowState === "published" || nextCtx.published)
           ) {
+            setResolvedCampaignId(String(nextCtx.campaignId));
             fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
               credentials: "include",
             })
@@ -4984,28 +5045,12 @@ export default function HomePage() {
             }}>
               {/* 显示右侧 Agent 工作区域：根据 workflowState 在「发布阶段」和「执行阶段」之间切换布局 */}
               {(() => {
-                const lastMessage = messages[messages.length - 1];
-                if (!lastMessage || lastMessage.role !== "assistant" || !lastMessage.thinking) {
-                  return (
-                    <div style={{
-                      padding: "40px 20px",
-                      textAlign: "center",
-                      color: "#9CA3AF",
-                      fontSize: 14
-                    }}>
-                      等待 Agent 开始工作...
-                    </div>
-                  );
-                }
-
                 const isExecutionPhase =
                   context?.workflowState === "published" || context?.published === true;
 
-                const { browserSteps, screenshots, influencerAnalyses, source } =
-                  lastMessage.thinking || {};
-
-                // 执行阶段：上「工作笔记」（执行节奏 + 汇报方式）、下「执行进度」（单阶段 Tab）
+                // 执行总览数据来自 report-config / work-notes / execution-status，不依赖 lastMessage.thinking
                 if (isExecutionPhase && binComputerView === "overview") {
+                  const lastMessage = messages[messages.length - 1];
                   const cols = executionStatus?.columns || {};
                   const needSampleFlag = executionStatus?.needSample !== false;
                   const executionUsernameSet = new Set();
@@ -5269,7 +5314,7 @@ export default function HomePage() {
                             gap: 8
                           }}
                         >
-                          {executionLoading ? (
+                          {executionLoading || isResolvingCampaign ? (
                             <div
                               style={{
                                 fontSize: 12,
@@ -5552,6 +5597,27 @@ export default function HomePage() {
                     </div>
                   );
                 }
+
+                const lastMessage = messages[messages.length - 1];
+                if (!lastMessage || lastMessage.role !== "assistant" || !lastMessage.thinking) {
+                  const waitLabel =
+                    isExecutionPhase && binComputerView === "live"
+                      ? "暂无工作实况（等待 Agent 开始浏览与分析）…"
+                      : "等待 Agent 开始工作...";
+                  return (
+                    <div style={{
+                      padding: "40px 20px",
+                      textAlign: "center",
+                      color: "#9CA3AF",
+                      fontSize: 14
+                    }}>
+                      {waitLabel}
+                    </div>
+                  );
+                }
+
+                const { browserSteps, screenshots, influencerAnalyses, source } =
+                  lastMessage.thinking || {};
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
                 
