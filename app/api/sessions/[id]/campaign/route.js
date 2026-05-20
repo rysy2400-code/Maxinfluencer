@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCampaignBySessionId } from "../../../../../lib/db/campaign-dao.js";
+import { promoteSessionToPublished } from "../../../../../lib/db/campaign-session-dao.js";
 import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
 import { assertUserCanAccessSession } from "../../../../../lib/auth/session-access.js";
 
@@ -41,6 +42,12 @@ export async function GET(req, { params }) {
         { success: false, error: "该会话尚未关联已发布的 Campaign" },
         { status: 404 }
       );
+    }
+
+    // 修复：tiktok_campaign 已存在但会话 status 仍为 draft（侧栏仍显示在草稿区）
+    const session = access.session;
+    if (session?.status === "draft") {
+      await promoteSessionToPublished(sessionId, { campaignId: campaign.id });
     }
 
     return NextResponse.json({

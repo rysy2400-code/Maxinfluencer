@@ -1282,6 +1282,7 @@ export default function HomePage() {
 
         const dbCampaignId = String(data.campaignId);
         setResolvedCampaignId(dbCampaignId);
+        loadCampaignSessions({ silent: true }).catch(() => {});
 
         setContext((prev) => {
           if (!prev || prev.campaignId === dbCampaignId) return prev;
