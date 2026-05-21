@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AgentRouter } from "../../../lib/utils/agent-router.js";
 import { getAuthenticatedAdvertiserUser } from "../../../lib/auth/advertiser-auth-http.js";
 import { assertUserCanAccessSession } from "../../../lib/auth/session-access.js";
+import { getCampaignBySessionId } from "../../../lib/db/campaign-dao.js";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,19 @@ export async function POST(req) {
       }
     }
     const context = sessionId ? { ...rawContext, sessionId } : { ...rawContext };
+
+    // 执行阶段以 session 关联的 tiktok_campaign 为准，避免 context.campaignId 陈旧导致改错行
+    if (sessionId) {
+      try {
+        const row = await getCampaignBySessionId(sessionId);
+        if (row?.id) {
+          context.campaignId = row.id;
+        }
+      } catch (e) {
+        console.warn("[Chat API] 解析 session campaignId 失败:", e?.message || e);
+      }
+    }
+
     const stream = body.stream !== false; // 默认启用流式传输
 
     if (!messages.length) {

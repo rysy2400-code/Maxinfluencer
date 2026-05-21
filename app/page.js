@@ -1168,6 +1168,7 @@ export default function HomePage() {
   const verticalResizeStartSplitRef = useRef(50); // 上下拖拽开始时的百分比
   /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
+  const resolvedCampaignIdRef = useRef(null);
   const resolveCampaignRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
@@ -1284,6 +1285,10 @@ export default function HomePage() {
   /** 已发布但尚未从 session 解析出 campaignId（避免短暂展示上一份执行数据） */
   const isResolvingCampaign =
     isExecutionPhaseGlobal && !!currentSessionId && resolvedCampaignId == null;
+
+  useEffect(() => {
+    resolvedCampaignIdRef.current = resolvedCampaignId;
+  }, [resolvedCampaignId]);
 
   // 执行阶段：按 session_id 从 DB 解析 campaignId，并在与 context 不一致时写回会话
   useEffect(() => {
@@ -1880,6 +1885,24 @@ export default function HomePage() {
       return fail;
     }
   };
+
+  const refreshExecutionUiAfterChat = useCallback((campaignId) => {
+    const cid =
+      campaignId != null && String(campaignId).trim()
+        ? String(campaignId).trim()
+        : resolvedCampaignIdRef.current;
+    if (cid) {
+      fetch(`/api/campaigns/${encodeURIComponent(cid)}/report-config`, {
+        credentials: "include",
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.success) setExecutionConfig(d);
+        })
+        .catch(() => {});
+    }
+    loadCampaignSessions({ silent: true }).catch(() => {});
+  }, []);
 
   // 登录态（HttpOnly Cookie）
   useEffect(() => {
@@ -2526,6 +2549,16 @@ export default function HomePage() {
         return;
       }
 
+      const chatContext = {
+        ...context,
+        ...(sessionIdForChat ? { sessionId: sessionIdForChat } : {}),
+        ...(resolvedCampaignIdRef.current
+          ? { campaignId: resolvedCampaignIdRef.current }
+          : context.campaignId
+            ? { campaignId: context.campaignId }
+            : {}),
+      };
+
       const res = await fetch("/api/chat", {
         method: "POST",
         credentials: "include",
@@ -2534,7 +2567,7 @@ export default function HomePage() {
         },
         body: JSON.stringify({
           messages: nextMessages,
-          context,
+          context: chatContext,
           sessionId: sessionIdForChat,
           stream: true // 启用流式传输
         })
@@ -2679,23 +2712,24 @@ export default function HomePage() {
                     (nextCtx.workflowState === "published" || nextCtx.published)
                   ) {
                     setResolvedCampaignId(String(nextCtx.campaignId));
-                    fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
-                      credentials: "include",
-                    })
-                      .then((r) => r.json())
-                      .then((d) => {
-                        if (d.success) setExecutionConfig(d);
-                      })
-                      .catch(() => {});
                   }
 
-                  // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
                   const ctxAfter = data.data.context;
+                  const subAction = data.data.thinking?.subAgentResult?.action;
+                  const statusToolUsed =
+                    subAction === "set_campaign_status" &&
+                    data.data.thinking?.subAgentResult?.success;
                   if (
                     ctxAfter?.published ||
                     ctxAfter?.workflowState === "published"
                   ) {
-                    loadCampaignSessions({ silent: true }).catch(() => {});
+                    refreshExecutionUiAfterChat(
+                      nextCtx?.campaignId || resolvedCampaignIdRef.current
+                    );
+                  } else if (statusToolUsed) {
+                    refreshExecutionUiAfterChat(
+                      nextCtx?.campaignId || resolvedCampaignIdRef.current
+                    );
                   }
 
                   // 消息发送完成后，更新会话（延迟保存，避免频繁请求）
@@ -2740,14 +2774,16 @@ export default function HomePage() {
             (nextCtx.workflowState === "published" || nextCtx.published)
           ) {
             setResolvedCampaignId(String(nextCtx.campaignId));
-            fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
-              credentials: "include",
-            })
-              .then((r) => r.json())
-              .then((d) => {
-                if (d.success) setExecutionConfig(d);
-              })
-              .catch(() => {});
+          }
+          if (
+            nextCtx?.published ||
+            nextCtx?.workflowState === "published" ||
+            (data.thinking?.subAgentResult?.action === "set_campaign_status" &&
+              data.thinking?.subAgentResult?.success)
+          ) {
+            refreshExecutionUiAfterChat(
+              nextCtx?.campaignId || resolvedCampaignIdRef.current
+            );
           }
         }
       }
