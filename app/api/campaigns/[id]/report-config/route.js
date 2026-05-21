@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "../../../../../lib/db/campaign-dao.js";
 import { getReportConfigByCampaignId } from "../../../../../lib/db/campaign-report-config-dao.js";
+import { CAMPAIGN_STATUS_UI_LABEL } from "../../../../../lib/tools/campaign-execution/campaign-execution-tools.js";
 
 /**
  * GET /api/campaigns/[id]/report-config
@@ -27,9 +28,14 @@ export async function GET(req, { params }) {
     const reportConfig = await getReportConfigByCampaignId(campaignId);
     const ip = campaign.influencerProfile || {};
 
+    const status = campaign.status || "running";
+    const statusLabel = CAMPAIGN_STATUS_UI_LABEL[status] || status;
+
     return NextResponse.json({
       success: true,
       campaignId,
+      status,
+      statusLabel,
       influencersPerDay: campaign.influencersPerDay ?? null,
       keywordStrategy: campaign.keywordStrategy || null,
       /** 与 tiktok_campaign.influencer_profile 对齐，供工作笔记分项展示 */

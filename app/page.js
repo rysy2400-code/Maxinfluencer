@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
@@ -1204,6 +1204,17 @@ export default function HomePage() {
   const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
+  const publishedSessionGroups = useMemo(() => {
+    const running = [];
+    const paused = [];
+    const completed = [];
+    for (const s of publishedSessions) {
+      if (s.campaignStatus === "paused") paused.push(s);
+      else if (s.campaignStatus === "completed") completed.push(s);
+      else running.push(s);
+    }
+    return { running, paused, completed };
+  }, [publishedSessions]);
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
   const [loadingSessions, setLoadingSessions] = useState(false); // 加载草稿列表状态
   const [sessionsError, setSessionsError] = useState(null); // 加载草稿列表的错误信息
@@ -4432,10 +4443,34 @@ export default function HomePage() {
                         style={{
                           display: "flex",
                           flexDirection: "column",
-                          gap: 4,
+                          gap: 12,
                         }}
                       >
-                  {publishedSessions.map((session) => {
+                  {[
+                    { key: "running", label: "进行中", items: publishedSessionGroups.running },
+                    { key: "paused", label: "已暂停", items: publishedSessionGroups.paused },
+                    { key: "completed", label: "已完成", items: publishedSessionGroups.completed },
+                  ].map((group) =>
+                    group.items.length === 0 ? null : (
+                      <div key={group.key}>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "#6B7280",
+                            marginBottom: 6,
+                          }}
+                        >
+                          {group.label}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 4,
+                          }}
+                        >
+                  {group.items.map((session) => {
                     const isActive = session.id === currentSessionId;
                     return (
                       <div
@@ -4561,6 +4596,10 @@ export default function HomePage() {
                       </div>
                     );
                   })}
+                        </div>
+                      </div>
+                    )
+                  )}
                 </div>
               )}
             </div>
@@ -5258,6 +5297,17 @@ export default function HomePage() {
                                   {influencersPerDay
                                     ? `每天联系 ${influencersPerDay} 位红人`
                                     : "尚未设置每天联系的红人数量"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>Campaign 状态：</span>
+                                  {config?.statusLabel ||
+                                    (config?.status === "paused"
+                                      ? "已暂停"
+                                      : config?.status === "completed"
+                                        ? "已完成"
+                                        : config?.status === "running"
+                                          ? "进行中"
+                                          : "尚未获取")}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>汇报频率：</span>
