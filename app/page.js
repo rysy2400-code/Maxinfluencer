@@ -286,6 +286,39 @@ function formatInfluencerStat(v) {
   return String(v);
 }
 
+function resolveVideoPublishCountry(item) {
+  const v = item?.videoPublishCountry ?? item?.video_publish_country;
+  if (v == null || v === "") return null;
+  return String(v).trim();
+}
+
+function formatGmvStat(item) {
+  const raw = item?.gmv;
+  if (raw == null || raw === "") return "—";
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+/** 执行进度卡片：国家 · 粉丝 · 播放 · GMV（6 个 Tab 统一） */
+function ExecutionProgressMetricsLine({ item }) {
+  const country = resolveVideoPublishCountry(item) || "—";
+  const followers = formatInfluencerStat(
+    item?.followers ?? item?.followerCount ?? item?.follower_count
+  );
+  const views = formatInfluencerStat(
+    item?.avg_views ?? item?.avgViews ?? item?.views
+  );
+  const gmv = formatGmvStat(item);
+  return (
+    <div style={{ fontSize: 11, color: "#6B7280" }}>
+      国家 {country} · 粉丝 {followers} · 播放 {views} · GMV {gmv}
+    </div>
+  );
+}
+
 /** 执行进度 Tab：支持导出 Excel 的阶段（不含「已分析」） */
 const EXECUTION_EXPORTABLE_STAGES = new Set([
   "contacted",
@@ -412,12 +445,6 @@ function ExecutionProgressRow({
   const profileUrl = buildTikTokProfileUrl(username);
   const busy = execPatchingId === username;
 
-  const followers = formatInfluencerStat(
-    item.followers ?? item.followerCount ?? item.follower_count
-  );
-  const views = formatInfluencerStat(
-    item.avg_views ?? item.avgViews ?? item.views
-  );
   const recommendReasonRaw =
     item.analysisSummary ||
     item.reason ||
@@ -541,9 +568,7 @@ function ExecutionProgressRow({
           </div>
         ) : null}
 
-        <div style={{ fontSize: 11, color: "#6B7280" }}>
-          粉丝 {followers} · 播放 {views}
-        </div>
+        <ExecutionProgressMetricsLine item={item} />
 
         {item.matchScore != null && Number.isFinite(Number(item.matchScore)) ? (
           <div style={{ fontSize: 11, color: "#6B7280" }}>匹配分 {Number(item.matchScore)}</div>
@@ -663,13 +688,7 @@ function ExecutionProgressRow({
         </div>
       )}
 
-      {(stageKey === "contacted" ||
-        stageKey === "pendingPrice" ||
-        stageKey === "published") && (
-        <div style={{ fontSize: 11, color: "#6B7280" }}>
-          粉丝 {followers} · 播放 {views}
-        </div>
-      )}
+      <ExecutionProgressMetricsLine item={item} />
 
       {stageKey === "contacted" && (
         <>
