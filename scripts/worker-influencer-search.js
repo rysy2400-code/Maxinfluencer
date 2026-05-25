@@ -10,6 +10,7 @@ import { createWorkLiveStepBridge } from "../lib/utils/work-live-step-bridge.js"
 import { publishWorkLiveFromWorker } from "../lib/realtime/work-live-worker-publisher.js";
 import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.js";
 import { detectPrimaryIpv4 } from "../lib/utils/net-ip.js";
+import { resolveAllowedCountriesFromCampaign } from "../lib/influencer/campaign-country-codes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -382,9 +383,7 @@ async function processTask(task) {
       {
         keywords: { search_queries: kwResult.search_queries },
         platforms: campaignInfo.platforms || ["TikTok"],
-        countries:
-          campaignInfo.countries ||
-          (campaignInfo.region ? [campaignInfo.region] : []),
+        countries: resolveAllowedCountriesFromCampaign(campaignInfo),
         productInfo,
         campaignInfo,
         influencerProfile,
