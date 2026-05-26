@@ -9,6 +9,7 @@ on:
       - "scripts/tiktok-*.js"
       - "scripts/enrich-*.js"
       - "lib/tools/influencer-functions/**"
+      - "lib/influencer/**"
       - "lib/agents/**"
       - "lib/db/**"
       - "lib/utils/work-live-step-bridge.js"

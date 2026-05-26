@@ -11,6 +11,10 @@ import { publishWorkLiveFromWorker } from "../lib/realtime/work-live-worker-publ
 import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.js";
 import { detectPrimaryIpv4 } from "../lib/utils/net-ip.js";
 import { resolveAllowedCountriesFromCampaign } from "../lib/influencer/campaign-country-codes.js";
+import {
+  platformPayloadSlug,
+  resolveCampaignPlatforms,
+} from "../lib/influencer/resolve-campaign-platforms.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -379,10 +383,17 @@ async function processTask(task) {
       taskKeyword ||
       (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
       null;
+
+    const campaignPlatforms = resolveCampaignPlatforms(campaignInfo);
+    const taskPlatformSlug =
+      payload.platform && String(payload.platform).trim()
+        ? String(payload.platform).trim().toLowerCase()
+        : platformPayloadSlug(campaignPlatforms[0]);
     result = await searchAndExtractInfluencers(
       {
         keywords: { search_queries: kwResult.search_queries },
-        platforms: campaignInfo.platforms || ["TikTok"],
+        platform: taskPlatformSlug,
+        platforms: campaignPlatforms,
         countries: resolveAllowedCountriesFromCampaign(campaignInfo),
         productInfo,
         campaignInfo,
@@ -393,6 +404,7 @@ async function processTask(task) {
         maxResults: target,
         maxEnrichCount: target,
         enrichProfileData: true,
+        platform: taskPlatformSlug,
         taskId: task.id,
         runId: runId || null,
         searchKeyword: primaryKeyword,
