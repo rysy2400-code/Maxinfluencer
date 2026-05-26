@@ -313,8 +313,15 @@ $guardCrawlerContent = @"
 `$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 while (`$true) {
-  `$p = Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-influencer-search\.js" }
-  if (-not `$p) {
+  `$all = @(Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-influencer-search\.js" })
+  if (`$all.Count -gt 1) {
+    `$keep = `$all | Sort-Object CreationDate -Descending | Select-Object -First 1
+    foreach (`$proc in `$all) {
+      if (`$proc.ProcessId -ne `$keep.ProcessId) {
+        try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+      }
+    }
+  } elseif (`$all.Count -eq 0) {
     Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory "$($Root.Replace("\", "\\"))" -WindowStyle Hidden | Out-Null
   }
   Start-Sleep -Seconds 8
@@ -369,6 +376,9 @@ $crawlerProcess = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "no
 Write-Host "[deploy-crawler] CDP 9222: $ok9222"
 Write-Host "[deploy-crawler] CDP 9223: $ok9223"
 Write-Host "[deploy-crawler] Crawler process count: $($crawlerProcess.Count)"
+if ($crawlerProcess.Count -gt 1) {
+  Write-Warning "Multiple search workers detected; guard will trim to one on next cycle."
+}
 if (-not $ok9222 -or -not $ok9223) {
   Write-Warning "CDP health check failed (9222=$ok9222, 9223=$ok9223). Guard tasks will keep trying; you may need to login/verify Chrome profile or switch CHROME_VISIBLE=1 for troubleshooting."
 }

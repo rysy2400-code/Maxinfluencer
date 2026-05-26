@@ -261,6 +261,56 @@ function buildTikTokProfileUrl(handle) {
   return `https://www.tiktok.com/@${encodeURIComponent(u)}`;
 }
 
+function buildInstagramProfileUrl(handle) {
+  const u = String(handle || "")
+    .trim()
+    .replace(/^@/, "");
+  if (!u) return "#";
+  return `https://www.instagram.com/${encodeURIComponent(u)}/`;
+}
+
+/** @returns {'Instagram'|'TikTok'} */
+function resolveInfluencerPlatform(item) {
+  const raw = item?.platform ?? item?.Platform ?? "";
+  const s = String(raw).trim().toLowerCase();
+  if (s.includes("instagram") || s === "ig" || s === "ins") return "Instagram";
+  const url = String(item?.profileUrl || item?.profile_url || "").toLowerCase();
+  if (url.includes("instagram.com")) return "Instagram";
+  return "TikTok";
+}
+
+function buildInfluencerProfileUrl(item) {
+  const direct = item?.profileUrl || item?.profile_url;
+  if (typeof direct === "string" && direct.trim().startsWith("http")) {
+    return direct.trim();
+  }
+  const handle = item?.id || item?.username || item?.tiktok_username || "";
+  return resolveInfluencerPlatform(item) === "Instagram"
+    ? buildInstagramProfileUrl(handle)
+    : buildTikTokProfileUrl(handle);
+}
+
+function ExecutionProgressPlatformBadge({ platform }) {
+  const isIg = platform === "Instagram";
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 600,
+        padding: "2px 7px",
+        borderRadius: 999,
+        backgroundColor: isIg ? "#FDF2F8" : "#F3F4F6",
+        color: isIg ? "#BE185D" : "#374151",
+        border: `1px solid ${isIg ? "#F9A8D4" : "#D1D5DB"}`,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      {isIg ? "Instagram" : "TikTok"}
+    </span>
+  );
+}
+
 function formatAnalysisSnippet(v) {
   if (v == null || v === "") return "—";
   if (typeof v === "string") return v.length > 900 ? `${v.slice(0, 900)}…` : v;
@@ -302,8 +352,10 @@ function formatGmvStat(item) {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
-/** 执行进度卡片：国家 · 粉丝 · 播放 · GMV（6 个 Tab 统一） */
+/** 执行进度卡片：国家 · 粉丝 · 播放 · GMV（Instagram 不展示 GMV） */
 function ExecutionProgressMetricsLine({ item }) {
+  const platform = resolveInfluencerPlatform(item);
+  const isIg = platform === "Instagram";
   const country = resolveVideoPublishCountry(item) || "—";
   const followers = formatInfluencerStat(
     item?.followers ?? item?.followerCount ?? item?.follower_count
@@ -311,10 +363,11 @@ function ExecutionProgressMetricsLine({ item }) {
   const views = formatInfluencerStat(
     item?.avg_views ?? item?.avgViews ?? item?.views
   );
-  const gmv = formatGmvStat(item);
+  const gmv = isIg ? null : formatGmvStat(item);
   return (
     <div style={{ fontSize: 11, color: "#6B7280" }}>
-      国家 {country} · 粉丝 {followers} · 播放 {views} · GMV {gmv}
+      国家 {country} · 粉丝 {followers} · 播放 {views}
+      {gmv != null ? ` · GMV ${gmv}` : ""}
     </div>
   );
 }
@@ -442,7 +495,8 @@ function ExecutionProgressRow({
   React.useEffect(() => {
     setCounterCurrency((item.currency || "USD").toString().toUpperCase().slice(0, 8) || "USD");
   }, [item.id, item.currency]);
-  const profileUrl = buildTikTokProfileUrl(username);
+  const platform = resolveInfluencerPlatform(item);
+  const profileUrl = buildInfluencerProfileUrl(item);
   const busy = execPatchingId === username;
 
   const recommendReasonRaw =
@@ -472,12 +526,25 @@ function ExecutionProgressRow({
     borderRadius: 10,
     backgroundColor: "#FFFFFF",
     border: "1px solid #E5E7EB",
+    borderLeft:
+      platform === "Instagram" ? "3px solid #E1306C" : "3px solid #111827",
     fontSize: 12,
     color: "#374151",
     display: "flex",
     flexDirection: "column",
     gap: 6,
   };
+
+  const usernameLink = (
+    <a
+      href={profileUrl}
+      target="_blank"
+      rel="noreferrer"
+      style={{ fontWeight: 600, color: "#4F46E5", textDecoration: "none" }}
+    >
+      @{username}
+    </a>
+  );
 
   if (stageKey === "analyzed") {
     const inExecution = executionUsernameSet && executionUsernameSet.has(username);
@@ -487,14 +554,10 @@ function ExecutionProgressRow({
     return (
       <div style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <a
-            href={profileUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontWeight: 600, color: "#4F46E5", textDecoration: "none" }}
-          >
-            @{username}
-          </a>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {usernameLink}
+            <ExecutionProgressPlatformBadge platform={platform} />
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
             {inExecution ? (
               <span
@@ -650,15 +713,11 @@ function ExecutionProgressRow({
 
   return (
     <div style={cardStyle}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-        <a
-          href={profileUrl}
-          target="_blank"
-          rel="noreferrer"
-          style={{ fontWeight: 600, color: "#4F46E5", textDecoration: "none" }}
-        >
-          @{username}
-        </a>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {usernameLink}
+          <ExecutionProgressPlatformBadge platform={platform} />
+        </div>
         {item.stage === "quote_rejected" && (
           <span
             style={{
