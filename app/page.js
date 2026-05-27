@@ -5355,11 +5355,14 @@ export default function HomePage() {
                     config?.influencersPerDay ?? executionStatus?.influencersPerDay ?? null;
                   const report = config?.reportConfig || null;
                   const keywordStrategy = config?.keywordStrategy || null;
-                  const ipNote = config?.influencerProfile || {};
-                  const profileFieldLabel = (v) =>
-                    v != null && String(v).trim() !== ""
-                      ? String(v).trim()
-                      : "未设置";
+                  const campaignSummary = config?.campaignSummary || null;
+                  const influencerProfile = config?.influencerProfile || null;
+                  const profileFollower =
+                    campaignSummary?.followerRange ?? influencerProfile?.followerRange ?? null;
+                  const profileView =
+                    campaignSummary?.viewRange ?? influencerProfile?.viewRange ?? null;
+                  const profileAccountType =
+                    campaignSummary?.accountType ?? influencerProfile?.accountType ?? null;
                   const intervalHours = report?.intervalHours ?? null;
                   const reportTime = report?.reportTime || null;
                   const contentPreference = report?.contentPreference || null;
@@ -5416,6 +5419,53 @@ export default function HomePage() {
                           ) : (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               <div style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
+                                <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
+                                  1、Campaign信息
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>品牌：</span>
+                                  {campaignSummary?.brand ?? "未知"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>产品：</span>
+                                  {campaignSummary?.product ?? "未知"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>投放平台：</span>
+                                  {campaignSummary?.platform ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>投放地区：</span>
+                                  {campaignSummary?.region ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>发布时间段：</span>
+                                  {campaignSummary?.publishTimeRange ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>预算：</span>
+                                  {campaignSummary?.budget ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>佣金：</span>
+                                  {campaignSummary?.commission ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
+                                  {profileFollower || "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>红人播放量要求：</span>
+                                  {profileView || "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 12 }}>
+                                  <span style={{ fontWeight: 600 }}>红人帐号类型要求：</span>
+                                  {profileAccountType || "未设置"}
+                                </div>
+
+                                <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
+                                  2、Campaign执行要求
+                                </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>执行节奏：</span>
                                   {influencersPerDay
@@ -5453,7 +5503,7 @@ export default function HomePage() {
                                     ? "仅汇总数字"
                                     : "尚未设置汇报形式"}
                                 </div>
-                                <div>
+                                <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>重点指标：</span>
                                   {(() => {
                                     const metricLabelMap = {
@@ -5467,22 +5517,7 @@ export default function HomePage() {
                                       : "当前日报中未配置额外指标";
                                   })()}
                                 </div>
-                                <div style={{ marginTop: 8 }}>
-                                  <div style={{ fontWeight: 600, marginBottom: 4 }}>红人画像要求</div>
-                                  <div>
-                                    <span style={{ fontWeight: 600 }}>粉丝量要求：</span>
-                                    {profileFieldLabel(ipNote.followerRange)}
-                                  </div>
-                                  <div>
-                                    <span style={{ fontWeight: 600 }}>播放量要求：</span>
-                                    {profileFieldLabel(ipNote.viewRange)}
-                                  </div>
-                                  <div>
-                                    <span style={{ fontWeight: 600 }}>帐号类型要求：</span>
-                                    {profileFieldLabel(ipNote.accountType)}
-                                  </div>
-                                </div>
-                                <div style={{ marginTop: 4 }}>
+                                <div style={{ marginBottom: 8 }}>
                                   <span style={{ fontWeight: 600 }}>红人搜索关键词策略：</span>
                                   {keywordStrategy || "暂无"}
                                 </div>

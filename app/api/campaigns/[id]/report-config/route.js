@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "../../../../../lib/db/campaign-dao.js";
 import { getReportConfigByCampaignId } from "../../../../../lib/db/campaign-report-config-dao.js";
+import { buildCampaignWorkNotesSummary } from "../../../../../lib/campaign/format-work-notes-summary.js";
 import { CAMPAIGN_STATUS_UI_LABEL } from "../../../../../lib/tools/campaign-execution/campaign-execution-tools.js";
 
 /**
@@ -36,6 +37,8 @@ export async function GET(req, { params }) {
       campaignId,
       status,
       statusLabel,
+      /** 发布阶段 Campaign / 产品快照，供执行阶段工作笔记「1、Campaign信息」 */
+      campaignSummary: buildCampaignWorkNotesSummary(campaign),
       influencersPerDay: campaign.influencersPerDay ?? null,
       keywordStrategy: campaign.keywordStrategy || null,
       /** 与 tiktok_campaign.influencer_profile 对齐，供工作笔记分项展示 */
