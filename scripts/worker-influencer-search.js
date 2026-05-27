@@ -271,6 +271,12 @@ async function processTask(task) {
     keywordStrategy,
   } = campaign;
 
+  const campaignPlatforms = resolveCampaignPlatforms(campaignInfo);
+  const taskPlatformSlug =
+    payload.platform && String(payload.platform).trim()
+      ? String(payload.platform).trim().toLowerCase()
+      : platformPayloadSlug(campaignPlatforms[0]);
+
   const publishKeywordNote = async ({
     status,
     extractedCount = null,
@@ -286,6 +292,7 @@ async function processTask(task) {
           taskId: task.id,
           time: new Date().toISOString(),
           keyword: taskKeyword || payload.keyword || "",
+          platform: taskPlatformSlug,
           reasonText: keywordReason || "该关键词更贴近当前 campaign 的目标受众方向。",
           browsedCount:
             browsedCount == null || Number.isNaN(Number(browsedCount))
@@ -384,11 +391,6 @@ async function processTask(task) {
       (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
       null;
 
-    const campaignPlatforms = resolveCampaignPlatforms(campaignInfo);
-    const taskPlatformSlug =
-      payload.platform && String(payload.platform).trim()
-        ? String(payload.platform).trim().toLowerCase()
-        : platformPayloadSlug(campaignPlatforms[0]);
     result = await searchAndExtractInfluencers(
       {
         keywords: { search_queries: kwResult.search_queries },

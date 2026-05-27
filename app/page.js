@@ -8,6 +8,7 @@ import {
   avgViewsFromSnapshot,
   formatEcpmFromFlatAndViews,
 } from "../lib/influencer/avg-views.js";
+import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -5547,9 +5548,12 @@ export default function HomePage() {
                                           ? ""
                                           : `已浏览 ${browsed} 位红人主页，${matched} 位符合红人画像要求。`;
                                       const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
+                                      const libraryLabel =
+                                        item?.libraryLabel ||
+                                        workNoteInfluencerLibraryLabel(item?.platform);
                                       return (
                                         <div key={`work-note-${item?.taskId || idx}`} style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
-                                          {`${timeLabel}，在红人库开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
+                                          {`${timeLabel}，在${libraryLabel}开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
                                           {failedText ? ` ${failedText}` : ""}
                                         </div>
                                       );

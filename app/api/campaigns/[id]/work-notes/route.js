@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { queryTikTok } from "../../../../../lib/db/mysql-tiktok.js";
+import {
+  platformFromPayloadSlug,
+  workNoteInfluencerLibraryLabel,
+} from "../../../../../lib/influencer/resolve-campaign-platforms.js";
 
 function mapTaskStatusToNoteStatus(taskStatus) {
   if (taskStatus === "failed" || taskStatus === "cancelled") return "failed";
@@ -35,6 +39,7 @@ export async function GET(req, { params }) {
         COALESCE(t.started_at, t.created_at) AS noteTime,
         t.status AS taskStatus,
         JSON_UNQUOTE(JSON_EXTRACT(t.payload, '$.keywordReason')) AS keywordReason,
+        JSON_UNQUOTE(JSON_EXTRACT(t.payload, '$.platform')) AS taskPlatform,
         t.progress_analyzed_count AS browsedCount,
         COALESCE(r1.enrich_success_count, r2.enrich_success_count) AS extractedCount,
         COALESCE(r1.analyze_recommended_count, r2.analyze_recommended_count) AS matchedCount
@@ -62,13 +67,21 @@ export async function GET(req, { params }) {
         const noteTimeRaw = r.noteTime ?? r.notetime ?? r.NOTE_TIME;
         const taskStatusRaw = r.taskStatus ?? r.taskstatus ?? r.TASK_STATUS;
         const keywordReasonRaw = r.keywordReason ?? r.keywordreason ?? r.KEYWORD_REASON;
+        const taskPlatformRaw = r.taskPlatform ?? r.taskplatform ?? r.TASK_PLATFORM;
         const browsedRaw = r.browsedCount ?? r.browsedcount ?? r.BROWSED_COUNT;
         const extractedRaw = r.extractedCount ?? r.extractedcount ?? r.EXTRACTED_COUNT;
         const matchedRaw = r.matchedCount ?? r.matchedcount ?? r.MATCHED_COUNT;
+        const platformSlug =
+          typeof taskPlatformRaw === "string" && taskPlatformRaw.trim()
+            ? taskPlatformRaw.trim().toLowerCase()
+            : null;
         return {
           taskId: taskIdRaw != null ? Number(taskIdRaw) : null,
           time: noteTimeRaw ? new Date(noteTimeRaw).toISOString() : null,
           keyword: String(keywordRaw || ""),
+          platform: platformSlug,
+          platformLabel: platformSlug ? platformFromPayloadSlug(platformSlug) : null,
+          libraryLabel: workNoteInfluencerLibraryLabel(platformSlug),
           reasonText:
             (typeof keywordReasonRaw === "string" && keywordReasonRaw.trim()) ||
             "该关键词与当前 campaign 的目标受众方向更贴合。",
