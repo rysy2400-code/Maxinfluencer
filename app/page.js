@@ -212,6 +212,63 @@ function mergeIncomingAssistantMessages(local, remote) {
   return [...base, ...appended];
 }
 
+const EMPTY_WORK_LIVE_THINKING = Object.freeze({
+  browserSteps: [],
+  screenshots: [],
+  influencerAnalyses: [],
+  workNotes: [],
+});
+
+/** 工作实况 SSE 写入目标：最后一条 assistant（与展示一致） */
+function findWorkLiveAssistantIndex(messages) {
+  if (!Array.isArray(messages)) return -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") return i;
+  }
+  return -1;
+}
+
+function getWorkLiveThinking(messages) {
+  const idx = findWorkLiveAssistantIndex(messages);
+  if (idx < 0) return null;
+  return messages[idx]?.thinking ?? null;
+}
+
+function workLiveHasRenderableContent(thinking) {
+  if (!thinking || typeof thinking !== "object") return false;
+  return (
+    (Array.isArray(thinking.browserSteps) && thinking.browserSteps.length > 0) ||
+    (Array.isArray(thinking.screenshots) && thinking.screenshots.length > 0) ||
+    (Array.isArray(thinking.influencerAnalyses) &&
+      thinking.influencerAnalyses.length > 0) ||
+    (Array.isArray(thinking.workNotes) && thinking.workNotes.length > 0)
+  );
+}
+
+function patchWorkLiveAssistantThinking(prev, updater) {
+  const updated = [...(Array.isArray(prev) ? prev : [])];
+  let idx = findWorkLiveAssistantIndex(updated);
+  if (idx < 0) {
+    updated.push({
+      role: "assistant",
+      name: "Bin",
+      content: "",
+      thinking: { ...EMPTY_WORK_LIVE_THINKING },
+    });
+    idx = updated.length - 1;
+  }
+  const msg = updated[idx];
+  const base =
+    msg.thinking && typeof msg.thinking === "object"
+      ? msg.thinking
+      : { ...EMPTY_WORK_LIVE_THINKING };
+  updated[idx] = {
+    ...msg,
+    thinking: updater(base),
+  };
+  return updated;
+}
+
 /** 工作笔记条目去重键：优先 taskId；缺失时勿仅用 keyword（多轮同词会误合并） */
 function workNoteMergeKey(note) {
   if (!note || typeof note !== "object") return "";
@@ -1669,20 +1726,8 @@ export default function HomePage() {
     let flushTimer = null;
 
     const applyThinking = (d) => {
-      setMessages((prev) => {
-        const updated = [...prev];
-        let idx = updated.length - 1;
-        if (idx < 0 || updated[idx].role !== "assistant") {
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === "assistant") {
-              idx = i;
-              break;
-            }
-          }
-        }
-        if (idx < 0 || updated[idx].role !== "assistant") return prev;
-        const currentThinking = updated[idx].thinking || {};
-        const newThinking = {
+      setMessages((prev) =>
+        patchWorkLiveAssistantThinking(prev, (currentThinking) => ({
           ...currentThinking,
           ...d,
           browserSteps:
@@ -1695,20 +1740,18 @@ export default function HomePage() {
               : currentThinking.screenshots || [],
           influencerAnalyses:
             d.influencerAnalyses !== undefined
-              ? (Array.isArray(d.influencerAnalyses)
-                  ? d.influencerAnalyses.slice(-1)
-                  : d.influencerAnalyses)
-              : (Array.isArray(currentThinking.influencerAnalyses)
-                  ? currentThinking.influencerAnalyses.slice(-1)
-                  : currentThinking.influencerAnalyses || []),
+              ? Array.isArray(d.influencerAnalyses)
+                ? d.influencerAnalyses.slice(-1)
+                : d.influencerAnalyses
+              : Array.isArray(currentThinking.influencerAnalyses)
+                ? currentThinking.influencerAnalyses.slice(-1)
+                : currentThinking.influencerAnalyses || [],
           workNotes:
             d.workNotes !== undefined
               ? d.workNotes
               : currentThinking.workNotes || [],
-        };
-        updated[idx] = { ...updated[idx], thinking: newThinking };
-        return updated;
-      });
+        }))
+      );
 
       if (binComputerViewRef.current !== "live") {
         setWorkLiveUnreadCount((c) => Math.min(c + 1, 99));
@@ -1760,62 +1803,43 @@ export default function HomePage() {
             );
             return merged.slice(-60);
           });
-          setMessages((prev) => {
-            const updated = [...prev];
-            let idx = updated.length - 1;
-            if (idx < 0 || updated[idx].role !== "assistant") {
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if (updated[i].role === "assistant") {
-                  idx = i;
-                  break;
-                }
+          setMessages((prev) =>
+            patchWorkLiveAssistantThinking(prev, (currentThinking) => {
+              const existing = Array.isArray(currentThinking.workNotes)
+                ? currentThinking.workNotes
+                : [];
+              const merged = [...existing];
+              const key = workNoteMergeKey(note);
+              const foundIdx = merged.findIndex((x) => workNoteMergeKey(x) === key);
+              if (foundIdx >= 0) {
+                merged[foundIdx] = { ...merged[foundIdx], ...note };
+              } else {
+                merged.push(note);
               }
-            }
-            if (idx < 0 || updated[idx].role !== "assistant") return prev;
-            const currentThinking = updated[idx].thinking || {};
-            const existing = Array.isArray(currentThinking.workNotes) ? currentThinking.workNotes : [];
-            const merged = [...existing];
-            const key = workNoteMergeKey(note);
-            const foundIdx = merged.findIndex((x) => workNoteMergeKey(x) === key);
-            if (foundIdx >= 0) {
-              merged[foundIdx] = { ...merged[foundIdx], ...note };
-            } else {
-              merged.push(note);
-            }
-            merged.sort((a, b) => new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime());
-            updated[idx] = {
-              ...updated[idx],
-              thinking: {
+              merged.sort(
+                (a, b) =>
+                  new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
+              );
+              return {
                 ...currentThinking,
                 workNotes: merged.slice(-60),
-              },
-            };
-            return updated;
-          });
+              };
+            })
+          );
         } else if (data.type === "screenshot" && data.data) {
           const newShot = data.data;
-          setMessages((prev) => {
-            const updated = [...prev];
-            let idx = updated.length - 1;
-            if (idx < 0 || updated[idx].role !== "assistant") {
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if (updated[i].role === "assistant") {
-                  idx = i;
-                  break;
-                }
-              }
-            }
-            if (idx < 0 || updated[idx].role !== "assistant") return prev;
-            const currentThinking = updated[idx].thinking || {};
-            updated[idx] = {
-              ...updated[idx],
-              thinking: {
+          setMessages((prev) =>
+            patchWorkLiveAssistantThinking(prev, (currentThinking) => {
+              const existing = Array.isArray(currentThinking.screenshots)
+                ? currentThinking.screenshots
+                : [];
+              return {
                 ...currentThinking,
-                screenshots: [newShot],
-              },
-            };
-            return updated;
-          });
+                screenshots: [...existing, newShot].slice(-60),
+              };
+            })
+          );
+          applyThinking({});
         }
       } catch {
         // ignore malformed SSE payloads
@@ -1847,6 +1871,21 @@ export default function HomePage() {
         workLiveEventSourceRef.current = null;
       }
     };
+  }, [isExecutionPhaseGlobal, currentSessionId]);
+
+  // 执行阶段：预置 assistant.thinking，避免 SSE 写入与展示读的不是同一条消息
+  useEffect(() => {
+    if (!isExecutionPhaseGlobal || !currentSessionId) return;
+    setMessages((prev) =>
+      patchWorkLiveAssistantThinking(prev, (t) => ({
+        ...EMPTY_WORK_LIVE_THINKING,
+        ...t,
+        browserSteps: t.browserSteps || [],
+        screenshots: t.screenshots || [],
+        influencerAnalyses: t.influencerAnalyses || [],
+        workNotes: t.workNotes || [],
+      }))
+    );
   }, [isExecutionPhaseGlobal, currentSessionId]);
 
   useEffect(() => {
@@ -5905,8 +5944,8 @@ export default function HomePage() {
                   );
                 }
 
-                const lastMessage = messages[messages.length - 1];
-                if (!lastMessage || lastMessage.role !== "assistant" || !lastMessage.thinking) {
+                const workLiveThinking = getWorkLiveThinking(messages);
+                if (!workLiveHasRenderableContent(workLiveThinking)) {
                   const waitLabel =
                     isExecutionPhase && binComputerView === "live"
                       ? "暂无工作实况（等待 Agent 开始浏览与分析）…"
@@ -5924,7 +5963,7 @@ export default function HomePage() {
                 }
 
                 const { browserSteps, screenshots, influencerAnalyses, source } =
-                  lastMessage.thinking || {};
+                  workLiveThinking || {};
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
                 
