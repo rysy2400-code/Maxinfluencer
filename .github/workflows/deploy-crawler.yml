@@ -8,6 +8,7 @@ on:
       - "scripts/*search*.js"
       - "scripts/tiktok-*.js"
       - "scripts/enrich-*.js"
+      - "lib/cdp/**"
       - "lib/tools/influencer-functions/**"
       - "lib/influencer/**"
       - "lib/agents/**"
