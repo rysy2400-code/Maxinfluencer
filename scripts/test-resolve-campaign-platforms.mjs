@@ -3,6 +3,7 @@ import {
   parseCampaignPlatforms,
   normalizeCampaignInfoPlatforms,
   pickNextDispatchPlatform,
+  normalizePlatformSlug,
   platformPayloadSlug,
   isYouTubePlatform,
 } from "../lib/influencer/resolve-campaign-platforms.js";
@@ -59,4 +60,6 @@ for (let i = 0; i < 6; i++) {
 
 console.log("slug IG", platformPayloadSlug("Instagram"));
 console.log("slug YT", platformPayloadSlug("YouTube"));
+console.log("norm ytb", normalizePlatformSlug("ytb"));
+console.log("norm tk", normalizePlatformSlug("tk"));
 console.log("isYT", isYouTubePlatform("ytb"));

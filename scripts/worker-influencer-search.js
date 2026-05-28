@@ -12,9 +12,11 @@ import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.
 import { detectPrimaryIpv4 } from "../lib/utils/net-ip.js";
 import { resolveAllowedCountriesFromCampaign } from "../lib/influencer/campaign-country-codes.js";
 import {
-  platformPayloadSlug,
+  normalizePlatformSlug,
   resolveCampaignPlatforms,
 } from "../lib/influencer/resolve-campaign-platforms.js";
+import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
+import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -27,11 +29,35 @@ function detectWorkerIp() {
   return detectPrimaryIpv4({ preferEnvKey: "SEARCH_WORKER_IP" });
 }
 
-const CURRENT_WORKER_ID =
-  process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`;
 const CURRENT_WORKER_HOST =
   process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null;
 const CURRENT_WORKER_IP = detectWorkerIp();
+
+function workerIpToken() {
+  return String(CURRENT_WORKER_IP || "unknown").replace(/\./g, "-");
+}
+
+/** @param {'tiktok'|'instagram'|'youtube'} platformSlug */
+function workerIdForPlatform(platformSlug) {
+  return `search-worker-${workerIpToken()}-${platformSlug}`;
+}
+
+function resolveSearchWorkerSlots() {
+  return Math.min(3, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+}
+
+function resolveWorkerPlatforms() {
+  const raw = process.env.SEARCH_WORKER_PLATFORMS || "tiktok,instagram,youtube";
+  return raw
+    .split(",")
+    .map((s) => normalizePlatformSlug(s.trim()))
+    .filter(Boolean);
+}
+
+function taskPlatformFromPayload(payload) {
+  if (!payload || payload.platform == null || payload.platform === "") return null;
+  return normalizePlatformSlug(payload.platform);
+}
 
 function parseJsonOrObject(v) {
   if (v == null) return null;
@@ -161,24 +187,45 @@ async function upsertKeywordRunResult({
   );
 }
 
-async function claimOnePendingTask(workerId) {
-  const workerHost = CURRENT_WORKER_HOST;
-  const workerIp = CURRENT_WORKER_IP;
-  const inflightRows = await queryTikTok(
+async function countProcessingOnWorkerIp() {
+  const rows = await queryTikTok(
+    `
+    SELECT COUNT(*) AS c
+    FROM tiktok_influencer_search_task
+    WHERE status = 'processing'
+      AND worker_ip IS NOT NULL
+      AND worker_ip = ?
+  `,
+    [CURRENT_WORKER_IP]
+  );
+  return Number(rows?.[0]?.c ?? rows?.[0]?.C ?? 0) || 0;
+}
+
+async function hasInflightForPlatform(platformSlug, platformWorkerId) {
+  const rows = await queryTikTok(
     `
     SELECT id
     FROM tiktok_influencer_search_task
     WHERE status = 'processing'
-      AND (
-        (worker_id IS NOT NULL AND worker_id = ?)
-        OR (worker_host IS NOT NULL AND worker_host = ?)
-        OR (worker_ip IS NOT NULL AND worker_ip = ?)
-      )
+      AND worker_id = ?
+      AND worker_ip = ?
     LIMIT 1
   `,
-    [workerId, workerHost, workerIp]
+    [platformWorkerId, CURRENT_WORKER_IP]
   );
-  if (inflightRows && inflightRows[0]) return null;
+  return Boolean(rows?.[0]);
+}
+
+const PENDING_CLAIM_SCAN_LIMIT = 40;
+
+/**
+ * @param {'tiktok'|'instagram'|'youtube'} platformSlug
+ * @param {string} platformWorkerId
+ */
+async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
+  const slots = resolveSearchWorkerSlots();
+  if (await hasInflightForPlatform(platformSlug, platformWorkerId)) return null;
+  if ((await countProcessingOnWorkerIp()) >= slots) return null;
 
   const rows = await queryTikTok(
     `
@@ -186,33 +233,43 @@ async function claimOnePendingTask(workerId) {
     FROM tiktok_influencer_search_task
     WHERE status = 'pending'
     ORDER BY priority DESC, id ASC
-    LIMIT 1
+    LIMIT ?
   `,
-    []
+    [PENDING_CLAIM_SCAN_LIMIT]
   );
-  if (!rows || !rows[0]) return null;
-  const task = rows[0];
+  if (!rows?.length) return null;
 
-  const updateResult = await queryTikTok(
-    `
-    UPDATE tiktok_influencer_search_task
-    SET status = 'processing',
-        worker_id = ?,
-        worker_host = ?,
-        worker_ip = ?,
-        last_progress_at = NOW(),
-        progress_analyzed_count = 0,
-        started_at = NOW(),
-        attempt_count = attempt_count + 1,
-        updated_at = NOW()
-    WHERE id = ?
-      AND status = 'pending'
-  `,
-    [workerId, workerHost, workerIp, task.id]
-  );
+  for (const row of rows) {
+    const payload = parseJsonOrObject(row.payload) || {};
+    const taskPlatform = taskPlatformFromPayload(payload);
+    if (!taskPlatform) {
+      await markTaskStatus(row.id, "failed", "missing payload.platform");
+      continue;
+    }
+    if (taskPlatform !== platformSlug) continue;
 
-  if (!updateResult || Number(updateResult.affectedRows || 0) === 0) return null;
-  return task;
+    const updateResult = await queryTikTok(
+      `
+      UPDATE tiktok_influencer_search_task
+      SET status = 'processing',
+          worker_id = ?,
+          worker_host = ?,
+          worker_ip = ?,
+          last_progress_at = NOW(),
+          progress_analyzed_count = 0,
+          started_at = NOW(),
+          attempt_count = attempt_count + 1,
+          updated_at = NOW()
+      WHERE id = ?
+        AND status = 'pending'
+    `,
+      [platformWorkerId, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, row.id]
+    );
+    if (updateResult && Number(updateResult.affectedRows || 0) > 0) {
+      return row;
+    }
+  }
+  return null;
 }
 
 async function markTaskStatus(id, status, errorMessage = null) {
@@ -246,7 +303,8 @@ async function fetchTaskCandidateBrowsedCount(taskId) {
   const n = Number(raw);
   return Number.isFinite(n) ? n : 0;
 }
-async function processTask(task) {
+async function processTask(task, platformSlug) {
+  const platformWorkerId = workerIdForPlatform(platformSlug);
   const campaignId = task.campaign_id;
   const payload = parseJsonOrObject(task.payload) || {};
   const requestedBatch = Number(payload.targetBatchSize || 0) || 0;
@@ -272,10 +330,19 @@ async function processTask(task) {
   } = campaign;
 
   const campaignPlatforms = resolveCampaignPlatforms(campaignInfo);
-  const taskPlatformSlug =
-    payload.platform && String(payload.platform).trim()
-      ? String(payload.platform).trim().toLowerCase()
-      : platformPayloadSlug(campaignPlatforms[0]);
+  const taskPlatformSlug = taskPlatformFromPayload(payload);
+  if (!taskPlatformSlug) {
+    await markTaskStatus(task.id, "failed", "missing payload.platform");
+    return;
+  }
+  if (taskPlatformSlug !== platformSlug) {
+    await markTaskStatus(
+      task.id,
+      "failed",
+      `platform mismatch: payload=${taskPlatformSlug} loop=${platformSlug}`
+    );
+    return;
+  }
 
   const publishKeywordNote = async ({
     status,
@@ -320,7 +387,7 @@ async function processTask(task) {
   let onStepUpdate = null;
   if (sessionId) {
     const source = {
-      workerId: process.env.SEARCH_WORKER_ID || `search-worker-${process.pid}`,
+      workerId: platformWorkerId,
       workerHost: process.env.SEARCH_WORKER_HOST || process.env.HOSTNAME || null,
     };
     const bridge = createWorkLiveStepBridge((ev) => {
@@ -368,7 +435,7 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || "(llm_empty)",
       keywordType: taskKeywordType,
-      workerId: CURRENT_WORKER_ID,
+      workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
       metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
@@ -433,7 +500,7 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
-      workerId: CURRENT_WORKER_ID,
+      workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
       metrics: {
@@ -470,7 +537,7 @@ async function processTask(task) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
-      workerId: CURRENT_WORKER_ID,
+      workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
       metrics: {
@@ -520,7 +587,7 @@ async function processTask(task) {
     taskId: task.id,
     keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
     keywordType: taskKeywordType,
-    workerId: CURRENT_WORKER_ID,
+    workerId: platformWorkerId,
     workerHost: CURRENT_WORKER_HOST,
     workerIp: CURRENT_WORKER_IP,
     metrics: {
@@ -569,54 +636,86 @@ async function reclaimStuckProcessingTasks() {
   return Number(rows?.affectedRows || 0);
 }
 
-async function main() {
-  const workerId = CURRENT_WORKER_ID;
+async function platformLoop(platformSlug) {
+  const platformWorkerId = workerIdForPlatform(platformSlug);
   const idleSleepMs = Math.max(
     Number(process.env.SEARCH_WORKER_IDLE_SLEEP_MS || 3000) || 3000,
     500
   );
-  const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
   let lastReclaimMs = 0;
 
   console.log(
-    `[worker-influencer-search] 启动 workerId=${workerId}, host=${CURRENT_WORKER_HOST || "unknown"}, ip=${CURRENT_WORKER_IP || "unknown"}, loop=${loopMode}, idleSleepMs=${idleSleepMs}`
+    `[worker-influencer-search][${platformSlug}] loop workerId=${platformWorkerId} ip=${CURRENT_WORKER_IP || "unknown"}`
   );
 
-  do {
-    let processed = false;
+  for (;;) {
     try {
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingTasks();
         if (n > 0) {
-          console.warn(`[worker-influencer-search] reclaimed stuck processing tasks: ${n}`);
+          console.warn(
+            `[worker-influencer-search] reclaimed stuck processing tasks: ${n}`
+          );
         }
       }
 
-      const task = await claimOnePendingTask(workerId);
-      if (task) {
-        processed = true;
-        await processTask(task);
+      const task = await claimOnePendingTaskForPlatform(
+        platformSlug,
+        platformWorkerId
+      );
+      if (!task) {
+        await sleep(idleSleepMs);
+        continue;
+      }
 
-        // 滚动补位：任一任务完成后，立即触发一次调度心跳（不等 15 分钟）
-        if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
-          try {
-            await runExecutionHeartbeatTick(new Date());
-          } catch (hbErr) {
-            console.warn(
-              "[worker-influencer-search] 任务后触发 execution heartbeat 失败：",
-              hbErr?.message || hbErr
-            );
-          }
+      await runInCdpLoop(
+        { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
+        () => processTask(task, platformSlug)
+      );
+
+      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
+        try {
+          await runExecutionHeartbeatTick(new Date());
+        } catch (hbErr) {
+          console.warn(
+            `[worker-influencer-search][${platformSlug}] 任务后 heartbeat 失败：`,
+            hbErr?.message || hbErr
+          );
         }
       }
     } catch (err) {
-      console.error("[worker-influencer-search] 处理任务时出错：", err?.message || err);
+      console.error(
+        `[worker-influencer-search][${platformSlug}] 处理任务时出错：`,
+        err?.message || err
+      );
+      await sleep(idleSleepMs);
     }
+  }
+}
 
-    if (!loopMode) break;
-    if (!processed) await sleep(idleSleepMs);
-  } while (true);
+async function main() {
+  const slots = resolveSearchWorkerSlots();
+  const platforms = resolveWorkerPlatforms();
+  const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
+
+  console.log(
+    `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} platforms=${platforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}`
+  );
+
+  if (!loopMode) {
+    const p = platforms[0] || "tiktok";
+    const task = await claimOnePendingTaskForPlatform(p, workerIdForPlatform(p));
+    if (task) {
+      await runInCdpLoop(
+        { platform: p, taskId: task.id, workerId: workerIdForPlatform(p) },
+        () => processTask(task, p)
+      );
+    }
+    return;
+  }
+
+  await Promise.all(platforms.map((platformSlug) => platformLoop(platformSlug)));
 }
 
 main()

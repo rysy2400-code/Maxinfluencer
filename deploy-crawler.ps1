@@ -233,7 +233,18 @@ if ([string]::IsNullOrWhiteSpace($workerIp)) {
 }
 Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, attempts=$($ipRes.Attempts), lan=$workerLanIp) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
-$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
+$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { $searchCdpEndpoint }
+
+$parallelCrawlerIps = @("152.32.192.65")
+if ($parallelCrawlerIps -contains $workerIp) {
+  $searchWorkerSlots = "3"
+  $cdp9222Mode = "parallel"
+} else {
+  $searchWorkerSlots = if ($env:SEARCH_WORKER_SLOTS) { "$($env:SEARCH_WORKER_SLOTS)".Trim() } else { "1" }
+  $cdp9222Mode = if ($env:CDP_9222_MODE) { "$($env:CDP_9222_MODE)".Trim() } else { "serial" }
+}
+$cdp9222LockTimeoutMs = if ($env:CDP_9222_LOCK_TIMEOUT_MS) { "$($env:CDP_9222_LOCK_TIMEOUT_MS)".Trim() } else { "300000" }
+Write-Host "[deploy-crawler] worker parallel: slots=$searchWorkerSlots cdp9222=$cdp9222Mode (ip=$workerIp)"
 
 # 写入 guard 内嵌环境，使 worker 进程不依赖本机 .env 是否已配置
 $deepseekAnalysisTimeoutMs = if ($env:DEEPSEEK_ANALYSIS_TIMEOUT_MS -and -not [string]::IsNullOrWhiteSpace("$($env:DEEPSEEK_ANALYSIS_TIMEOUT_MS)")) {
@@ -310,6 +321,9 @@ $guardCrawlerContent = @"
 `$env:SEARCH_WORKER_LAN_IP = "$($workerLanIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
+`$env:SEARCH_WORKER_SLOTS = "$searchWorkerSlots"
+`$env:CDP_9222_MODE = "$cdp9222Mode"
+`$env:CDP_9222_LOCK_TIMEOUT_MS = "$cdp9222LockTimeoutMs"
 `$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 while (`$true) {
