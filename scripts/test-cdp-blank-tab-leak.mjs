@@ -3,8 +3,13 @@
  * 用法: CDP_ENDPOINT=http://127.0.0.1:9222 node scripts/test-cdp-blank-tab-leak.mjs
  */
 import { chromium } from "playwright";
-import { searchInstagramByKeyword } from "../lib/tools/influencer-functions/instagram/search-instagram-by-keyword.js";
-import { searchYoutubeByKeyword } from "../lib/tools/influencer-functions/youtube/search-youtube-by-keyword.js";
+
+const { searchInstagramByKeyword } = await import(
+  "../lib/tools/influencer-functions/instagram/search-instagram-by-keyword.js"
+);
+const { searchYoutubeByKeyword } = await import(
+  "../lib/tools/influencer-functions/youtube/search-youtube-by-keyword.js"
+);
 
 const endpoint = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
 
