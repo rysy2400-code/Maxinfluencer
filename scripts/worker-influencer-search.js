@@ -227,15 +227,16 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
   if (await hasInflightForPlatform(platformSlug, platformWorkerId)) return null;
   if ((await countProcessingOnWorkerIp()) >= slots) return null;
 
+  // mysql2 预处理不支持 LIMIT ?（ER_WRONG_ARGUMENTS），limit 为常量整数
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
     FROM tiktok_influencer_search_task
     WHERE status = 'pending'
     ORDER BY priority DESC, id ASC
-    LIMIT ?
+    LIMIT ${PENDING_CLAIM_SCAN_LIMIT}
   `,
-    [PENDING_CLAIM_SCAN_LIMIT]
+    []
   );
   if (!rows?.length) return null;
 
