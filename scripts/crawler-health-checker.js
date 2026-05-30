@@ -6,7 +6,7 @@
  *
  * 触发规则（默认）：
  * A last_seen_at 超时 > 120s
- * B cdp_9222_ok 或 cdp_9223_ok 连续失败 >= 3（fail_streak）
+ * B cdp_9222_ok 连续失败 >= 3（fail_streak；9223 已下线）
  * C 同机 10 分钟内 failed 任务 >= 3
  * D 有 processing 超时 > 60min
  *
@@ -155,10 +155,9 @@ async function sshRedeploy({ workerIp }) {
     "$proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'worker-influencer-search.js' } | Select-Object -First 1",
     "if ($proc) { $workerOk = $true }",
     "$cdp9222 = Test-NetConnection -ComputerName 127.0.0.1 -Port 9222 -WarningAction SilentlyContinue",
-    "$cdp9223 = Test-NetConnection -ComputerName 127.0.0.1 -Port 9223 -WarningAction SilentlyContinue",
-    "$health = [PSCustomObject]@{ worker_ok = $workerOk; cdp_9222_ok = [bool]$cdp9222.TcpTestSucceeded; cdp_9223_ok = [bool]$cdp9223.TcpTestSucceeded }",
+    "$health = [PSCustomObject]@{ worker_ok = $workerOk; cdp_9222_ok = [bool]$cdp9222.TcpTestSucceeded; cdp_9223_ok = $true }",
     "Write-Output ('[maxin-health-json]' + ($health | ConvertTo-Json -Compress))",
-    "if ($health.worker_ok -and $health.cdp_9222_ok -and $health.cdp_9223_ok) { exit 0 }",
+    "if ($health.worker_ok -and $health.cdp_9222_ok) { exit 0 }",
     "exit 2",
   ].join("; ");
 
@@ -245,7 +244,7 @@ async function waitForRecovery({ workerHost, workerIp }) {
     if (r) {
       const last = new Date(r.last_seen_at).getTime();
       const fresh = Date.now() - last <= 60_000;
-      const ok = Number(r.worker_alive || 0) === 1 && Number(r.cdp_9222_ok || 0) === 1 && Number(r.cdp_9223_ok || 0) === 1 && fresh;
+      const ok = Number(r.worker_alive || 0) === 1 && Number(r.cdp_9222_ok || 0) === 1 && fresh;
       if (ok) return { ok: true };
     }
     await new Promise((x) => setTimeout(x, 5000));
@@ -281,13 +280,10 @@ async function computeTriggers({ workerHost, workerIp }) {
     if (Date.now() - lastSeenMs > A_SEEN_TIMEOUT_SEC * 1000) {
       triggers.push({ code: "A", reason: `health_timeout>${A_SEEN_TIMEOUT_SEC}s` });
     }
-    if (
-      Number(h.cdp_9222_fail_streak || 0) >= B_CDP_FAIL_STREAK ||
-      Number(h.cdp_9223_fail_streak || 0) >= B_CDP_FAIL_STREAK
-    ) {
+    if (Number(h.cdp_9222_fail_streak || 0) >= B_CDP_FAIL_STREAK) {
       triggers.push({
         code: "B",
-        reason: `cdp_fail_streak(9222=${h.cdp_9222_fail_streak},9223=${h.cdp_9223_fail_streak})`,
+        reason: `cdp_fail_streak(9222=${h.cdp_9222_fail_streak})`,
       });
     }
   }
@@ -368,7 +364,7 @@ async function main() {
       const out = await sshRedeploy({ workerIp });
       detail = `stdout:\n${out.stdout || ""}\n\nstderr:\n${out.stderr || ""}`;
       if (out.remoteHealth) {
-        ok = Boolean(out.remoteHealth.worker_ok && out.remoteHealth.cdp_9222_ok && out.remoteHealth.cdp_9223_ok);
+        ok = Boolean(out.remoteHealth.worker_ok && out.remoteHealth.cdp_9222_ok);
         if (!ok) {
           detail += `\n\nremote_health_failed: ${JSON.stringify(out.remoteHealth)}`;
         }

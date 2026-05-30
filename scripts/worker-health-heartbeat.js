@@ -3,7 +3,7 @@
  * 每 30-60s 上报一次到 tiktok_crawler_worker_health：
  * - worker_host/worker_ip/worker_id
  * - worker_alive
- * - cdp_9222_ok/cdp_9223_ok + fail streak
+ * - cdp_9222_ok + fail streak（9223 已下线，DB 字段保留并固定上报 ok）
  * - last_seen_at
  */
 import dotenv from "dotenv";
@@ -102,15 +102,13 @@ async function main() {
 
   const url9222 =
     String(process.env.CDP_HEALTH_9222_URL || "http://127.0.0.1:9222/json/version").trim();
-  const url9223 =
-    String(process.env.CDP_HEALTH_9223_URL || "http://127.0.0.1:9223/json/version").trim();
 
   do {
     let lastError = null;
     const ok9222 = await probe(url9222);
-    const ok9223 = await probe(url9223);
-    if (!ok9222 || !ok9223) {
-      lastError = `cdp_probe_failed(9222=${ok9222 ? "ok" : "bad"},9223=${ok9223 ? "ok" : "bad"})`;
+    const ok9223 = true;
+    if (!ok9222) {
+      lastError = `cdp_probe_failed(9222=${ok9222 ? "ok" : "bad"})`;
     }
 
     try {

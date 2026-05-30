@@ -68,19 +68,14 @@ jobs:
               powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path `$root 'deploy-crawler.ps1')
 
               `$ok9222 = `$false
-              `$ok9223 = `$false
               try {
                 `$r9222 = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 8
                 `$ok9222 = (`$r9222.StatusCode -ge 200 -and `$r9222.StatusCode -lt 400)
               } catch {}
-              try {
-                `$r9223 = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9223/json/version' -TimeoutSec 8
-                `$ok9223 = (`$r9223.StatusCode -ge 200 -and `$r9223.StatusCode -lt 400)
-              } catch {}
 
               `$workerCount = (Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq 'node.exe' -and `$_.CommandLine -match 'worker-influencer-search\.js' } | Measure-Object).Count
-              Write-Host ('[deploy-crawler] health => cdp9222=' + `$ok9222 + ', cdp9223=' + `$ok9223 + ', workerCount=' + `$workerCount)
+              Write-Host ('[deploy-crawler] health => cdp9222=' + `$ok9222 + ', workerCount=' + `$workerCount)
 
-              if (-not `$ok9222 -or -not `$ok9223) { throw 'CDP health check failed' }
+              if (-not `$ok9222) { throw 'CDP health check failed' }
               if (`$workerCount -lt 1) { throw 'Worker process not detected' }
             "

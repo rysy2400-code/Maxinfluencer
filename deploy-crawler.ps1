@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 # Search crawler deploy script (Windows VM).
 # Goals:
 # 1) git pull + npm ci（与仅 SSH 执行本脚本的 CI 一致，无需在 Action 里单独 pull）
-# 2) Start and guard two CDP browser instances (9222 / 9223).
+# 2) Start and guard CDP browser on 9222 (9223 decommissioned; enrich uses 9222).
 # 3) Start and guard search worker + worker-health-heartbeat（计划任务守护）。
 #
 # 若本脚本自身在 pull 后被更新，会子进程重新执行一遍（避免 PowerShell 仍跑内存里的旧脚本体）。
@@ -70,14 +70,28 @@ function Test-Cdp {
 }
 
 function Stop-StaleCdpBrowsers {
-  # Clear stale 9222/9223 browser processes to avoid port conflicts.
+  # Clear stale 9222 browser processes to avoid port conflicts.
   $stale = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -match "chrome|msedge") -and
-    ($_.CommandLine -match "remote-debugging-port=9222" -or $_.CommandLine -match "remote-debugging-port=9223")
+    ($_.CommandLine -match "remote-debugging-port=9222")
   }
   foreach ($p in $stale) {
     try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
   }
+}
+
+function Disable-Cdp9223Guard {
+  # 9223 已下线：停止守护计划任务并清理残留 Chrome（避免空占内存）。
+  $taskName = "maxin-guard-chrome-9223"
+  try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$taskName`"" -NoNewWindow -Wait | Out-Null } catch {}
+  try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/Delete /F /TN `"$taskName`"" -NoNewWindow -Wait | Out-Null } catch {}
+  $stale9223 = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -match "chrome|msedge") -and ($_.CommandLine -match "remote-debugging-port=9223")
+  }
+  foreach ($p in $stale9223) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+  Write-Host "[deploy-crawler] CDP 9223 decommissioned (guard removed, stale processes stopped)."
 }
 
 function Ensure-Schtask {
@@ -237,7 +251,7 @@ $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP
 
 $parallelCrawlerIps = @("152.32.192.65")
 if ($parallelCrawlerIps -contains $workerIp) {
-  $searchWorkerSlots = "3"
+  $searchWorkerSlots = "2"
   $cdp9222Mode = "parallel"
 } else {
   $searchWorkerSlots = if ($env:SEARCH_WORKER_SLOTS) { "$($env:SEARCH_WORKER_SLOTS)".Trim() } else { "1" }
@@ -260,9 +274,7 @@ $searchTaskStuckReclaimMinutes = if ($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES -and
 Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAnalysisTimeoutMs, SEARCH_TASK_STUCK_RECLAIM_MINUTES=$searchTaskStuckReclaimMinutes"
 
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
-$chromeDir9223 = "C:\maxinfluencer\.chrome-cdp-9223"
 if (-not (Test-Path $chromeDir9222)) { New-Item -ItemType Directory -Path $chromeDir9222 | Out-Null }
-if (-not (Test-Path $chromeDir9223)) { New-Item -ItemType Directory -Path $chromeDir9223 | Out-Null }
 
 $isVisible = $true
 if ($env:CHROME_VISIBLE) {
@@ -270,37 +282,20 @@ if ($env:CHROME_VISIBLE) {
   $isVisible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
 }
 $chromeModeArgs = if ($isVisible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
-$launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "https://accounts.google.com/signin/v2/identifier?service=mail" }
-$launchUrl9222Secondary = if ($env:CHROME_9222_URL_2) { "$($env:CHROME_9222_URL_2)" } else { "https://www.tiktok.com" }
-$launchUrl9223 = if ($env:CHROME_9223_URL) { "$($env:CHROME_9223_URL)" } else { "https://www.tiktok.com" }
+$launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "about:blank" }
 
 $guard9222 = Join-Path $scriptsDir "guard-chrome-9222.ps1"
-$guard9223 = Join-Path $scriptsDir "guard-chrome-9223.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$chrome = "$($chromeExe.Replace("\", "\\"))"
-`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222 $launchUrl9222Secondary"
+`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222"
 while (`$true) {
   `$mine = Get-CimInstance Win32_Process | Where-Object {
     (`$_.Name -match "chrome|msedge") -and
     (`$_.CommandLine -match "remote-debugging-port=9222")
-  }
-  if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
-  Start-Sleep -Seconds 8
-}
-"@
-
-$guard9223Content = @"
-`$ErrorActionPreference = "SilentlyContinue"
-`$chrome = "$($chromeExe.Replace("\", "\\"))"
-`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --user-data-dir=$($chromeDir9223.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9223"
-while (`$true) {
-  `$mine = Get-CimInstance Win32_Process | Where-Object {
-    (`$_.Name -match "chrome|msedge") -and
-    (`$_.CommandLine -match "remote-debugging-port=9223")
   }
   if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
   Start-Sleep -Seconds 8
@@ -361,7 +356,6 @@ while (`$true) {
 "@
 
 Set-Content -Path $guard9222 -Value $guard9222Content -Encoding ASCII
-Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
@@ -377,24 +371,22 @@ try {
 } catch {}
 
 Stop-StaleCdpBrowsers
+Disable-Cdp9223Guard
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
-Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
 
 Start-Sleep -Seconds 4
 $ok9222 = Test-Cdp -Port 9222
-$ok9223 = Test-Cdp -Port 9223
 $crawlerProcess = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search\.js" }
 
 Write-Host "[deploy-crawler] CDP 9222: $ok9222"
-Write-Host "[deploy-crawler] CDP 9223: $ok9223"
 Write-Host "[deploy-crawler] Crawler process count: $($crawlerProcess.Count)"
 if ($crawlerProcess.Count -gt 1) {
   Write-Warning "Multiple search workers detected; guard will trim to one on next cycle."
 }
-if (-not $ok9222 -or -not $ok9223) {
-  Write-Warning "CDP health check failed (9222=$ok9222, 9223=$ok9223). Guard tasks will keep trying; you may need to login/verify Chrome profile or switch CHROME_VISIBLE=1 for troubleshooting."
+if (-not $ok9222) {
+  Write-Warning "CDP health check failed (9222=$ok9222). Guard tasks will keep trying; you may need to login/verify Chrome profile or switch CHROME_VISIBLE=1 for troubleshooting."
 }
 if (-not $crawlerProcess) {
   Write-Warning "Crawler process not detected yet. Guard task will keep trying to start it."
