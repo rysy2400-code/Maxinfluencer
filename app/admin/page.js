@@ -47,9 +47,12 @@ export default function AdminSessionsPage() {
     return (
       <div style={{ padding: 24, fontFamily: "system-ui", color: "#b91c1c" }}>
         {err}
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 12, display: "flex", gap: 12 }}>
           <a href="/" style={{ color: "#2563eb" }}>
             返回首页
+          </a>
+          <a href="/ops" style={{ color: "#2563eb" }}>
+            爬虫运维台
           </a>
         </div>
       </div>
@@ -97,9 +100,12 @@ export default function AdminSessionsPage() {
           <div style={{ padding: 16, color: "#94a3b8", fontSize: 13 }}>暂无会话</div>
         ) : null}
       </div>
-      <p style={{ marginTop: 16 }}>
-        <a href="/" style={{ color: "#2563eb", fontSize: 13 }}>
+      <p style={{ marginTop: 16, display: "flex", gap: 16, fontSize: 13 }}>
+        <a href="/" style={{ color: "#2563eb" }}>
           ← 返回首页
+        </a>
+        <a href="/ops" style={{ color: "#2563eb" }}>
+          爬虫运维台 →
         </a>
       </p>
     </div>

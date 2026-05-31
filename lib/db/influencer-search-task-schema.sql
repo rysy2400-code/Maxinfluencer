@@ -65,3 +65,23 @@ CREATE TABLE IF NOT EXISTS tiktok_keyword_run_result (
   INDEX idx_worker_ip_time (assigned_worker_host, assigned_worker_ip, created_at),
   INDEX idx_created_at (created_at DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='关键词任务执行效果评分';
+
+-- 爬虫自愈事件：超时/重试/建议重启等
+CREATE TABLE IF NOT EXISTS tiktok_crawler_self_heal_event (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  campaign_id VARCHAR(36) NULL COMMENT '关联 tiktok_campaign.id（可空，表示全局事件）',
+  task_id BIGINT NULL COMMENT '关联 tiktok_influencer_search_task.id',
+  run_id VARCHAR(64) NULL,
+  platform VARCHAR(24) NULL COMMENT 'tiktok|instagram|youtube',
+  worker_host VARCHAR(128) NULL,
+  worker_ip VARCHAR(64) NULL,
+  event_type VARCHAR(64) NOT NULL COMMENT 'navigation_retry/navigation_timeout/self_heal_restart...',
+  severity ENUM('info','warn','error') NOT NULL DEFAULT 'warn',
+  reason VARCHAR(255) NULL,
+  details JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_campaign_created (campaign_id, created_at DESC),
+  INDEX idx_task_created (task_id, created_at DESC),
+  INDEX idx_event_created (event_type, created_at DESC),
+  INDEX idx_worker_created (worker_ip, created_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫自愈事件日志';

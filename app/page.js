@@ -195,6 +195,82 @@ function sessionMessageMergeKey(msg) {
   return `${role}|${name}|${content}`;
 }
 
+/** 微信式灰条：相邻有时间的消息间隔 ≥5 分钟或跨自然日 */
+const CHAT_TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
+
+function parseMessageTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isSameCalendarDay(a, b) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function formatChatSeparatorTime(date) {
+  const now = new Date();
+  const d = date instanceof Date ? date : new Date(date);
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const timeStr = `${hours}:${minutes}`;
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const targetStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((todayStart - targetStart) / 86400000);
+
+  if (diffDays === 0) return `今天 ${timeStr}`;
+  if (diffDays === 1) return `昨天 ${timeStr}`;
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+  }
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+}
+
+function shouldShowChatTimeSeparator(prevTime, nextTime) {
+  if (!nextTime) return false;
+  if (!prevTime) return true;
+  if (!isSameCalendarDay(prevTime, nextTime)) return true;
+  return nextTime.getTime() - prevTime.getTime() >= CHAT_TIME_SEPARATOR_GAP_MS;
+}
+
+function findPreviousTimestampedTime(messages, fromIndex) {
+  for (let j = fromIndex - 1; j >= 0; j--) {
+    const t = parseMessageTime(messages[j]?.createdAt);
+    if (t) return t;
+  }
+  return null;
+}
+
+function buildChatRenderableItems(messages) {
+  const items = [];
+  if (!Array.isArray(messages)) return items;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const msgTime = parseMessageTime(m?.createdAt);
+    if (msgTime) {
+      const prevTime = findPreviousTimestampedTime(messages, i);
+      if (shouldShowChatTimeSeparator(prevTime, msgTime)) {
+        items.push({
+          type: "separator",
+          key: `sep-${i}-${msgTime.getTime()}`,
+          label: formatChatSeparatorTime(msgTime),
+        });
+      }
+    }
+    items.push({ type: "message", key: `msg-${i}`, message: m, index: i });
+  }
+  return items;
+}
+
+function chatMessageCompletedAt() {
+  return new Date().toISOString();
+}
+
 /** 仅追加服务端新增的 assistant 消息，不覆盖本地流式/未保存状态 */
 function mergeIncomingAssistantMessages(local, remote) {
   if (!Array.isArray(remote) || remote.length === 0) return local;
@@ -206,10 +282,37 @@ function mergeIncomingAssistantMessages(local, remote) {
     const key = sessionMessageMergeKey(m);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    appended.push(m);
+    appended.push({
+      ...m,
+      createdAt: m.createdAt || chatMessageCompletedAt(),
+    });
   }
   if (appended.length === 0) return base;
   return [...base, ...appended];
+}
+
+function ChatTimeSeparator({ label }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        margin: "8px 0 16px",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 12,
+          color: "#9CA3AF",
+          lineHeight: 1.4,
+          userSelect: "none",
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
 }
 
 const EMPTY_WORK_LIVE_THINKING = Object.freeze({
@@ -1391,6 +1494,10 @@ export default function HomePage() {
     }
     return { running, paused, completed };
   }, [publishedSessions]);
+  const chatRenderableItems = useMemo(
+    () => buildChatRenderableItems(messages),
+    [messages]
+  );
   const [currentSessionId, setCurrentSessionId] = useState(null); // 当前会话 ID
   const [loadingSessions, setLoadingSessions] = useState(false); // 加载草稿列表状态
   const [sessionsError, setSessionsError] = useState(null); // 加载草稿列表的错误信息
@@ -2593,7 +2700,8 @@ export default function HomePage() {
 
     const userMessage = {
       role: "user",
-      content: trimmedContent
+      content: trimmedContent,
+      createdAt: chatMessageCompletedAt(),
     };
 
     const nextMessages = [...messages, userMessage];
@@ -2677,6 +2785,7 @@ export default function HomePage() {
             updated[assistantMessageIndex] = {
               ...updated[assistantMessageIndex],
               content: '无法发起对话：缺少会话 ID。请刷新后重试。',
+              createdAt: chatMessageCompletedAt(),
             };
           }
           return updated;
@@ -2811,6 +2920,7 @@ export default function HomePage() {
                       updated[assistantMessageIndex] = {
                         ...updated[assistantMessageIndex],
                         content: data.data.reply,
+                        createdAt: chatMessageCompletedAt(),
                         thinking: {
                           ...currentThinking,
                           ...finalThinking,
@@ -2882,6 +2992,7 @@ export default function HomePage() {
               updated[assistantMessageIndex] = {
                 ...updated[assistantMessageIndex],
                 content: data.reply,
+                createdAt: chatMessageCompletedAt(),
                 thinking: data.thinking
               };
             }
@@ -2941,7 +3052,8 @@ export default function HomePage() {
             // 只有完全没有内容时才显示错误
             updated[assistantMessageIndex] = {
               ...updated[assistantMessageIndex],
-              content: `抱歉，服务暂时出现问题：${err.message}。请稍后再试。`
+              content: `抱歉，服务暂时出现问题：${err.message}。请稍后再试。`,
+              createdAt: chatMessageCompletedAt(),
             };
           }
         }
@@ -4800,17 +4912,32 @@ export default function HomePage() {
               退出登录
             </button>
             {authUser.isAdmin ? (
-              <a
-                href="/admin"
-                style={{
-                  fontSize: 11,
-                  color: "#3B82F6",
-                  textAlign: "center",
-                  textDecoration: "none",
-                }}
-              >
-                会话管理（管理员）
-              </a>
+              <>
+                <a
+                  href="/admin"
+                  style={{
+                    fontSize: 11,
+                    color: "#3B82F6",
+                    textAlign: "center",
+                    textDecoration: "none",
+                  }}
+                >
+                  会话管理（管理员）
+                </a>
+                <a
+                  href="/ops"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: 11,
+                    color: "#3B82F6",
+                    textAlign: "center",
+                    textDecoration: "none",
+                  }}
+                >
+                  爬虫运维台
+                </a>
+              </>
             ) : null}
           </div>
         )}
@@ -5041,9 +5168,14 @@ export default function HomePage() {
                 }
               }}
             >
-              {messages.map((m, idx) => (
+              {chatRenderableItems.map((item) => {
+                if (item.type === "separator") {
+                  return <ChatTimeSeparator key={item.key} label={item.label} />;
+                }
+                const m = item.message;
+                return (
                 <div
-                  key={idx}
+                  key={item.key}
                   style={{
                     display: "flex",
                     justifyContent:
@@ -5127,7 +5259,8 @@ export default function HomePage() {
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
               <div ref={messagesEndRef} />
             </div>
             
@@ -5344,10 +5477,10 @@ export default function HomePage() {
               {(() => {
                 const isExecutionPhase =
                   context?.workflowState === "published" || context?.published === true;
+                const lastMessage = messages[messages.length - 1];
 
                 // 执行总览数据来自 report-config / work-notes / execution-status，不依赖 lastMessage.thinking
                 if (isExecutionPhase && binComputerView === "overview") {
-                  const lastMessage = messages[messages.length - 1];
                   const cols = executionStatus?.columns || {};
                   const needSampleFlag = executionStatus?.needSample !== false;
                   const executionUsernameSet = new Set();
@@ -5992,7 +6125,7 @@ export default function HomePage() {
                       analysis: inf.analysis || '',
                       score: inf.score
                     }));
-                } else if (lastMessage.content) {
+                } else if (lastMessage?.content) {
                   const influencerRegex = /\[INFLUENCER:([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^\]]*?)\]/g;
                   let match;
                   while ((match = influencerRegex.exec(lastMessage.content)) !== null) {
