@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
+import { normalizeAdvertiserBalance } from "../../../../lib/utils/advertiser-balance.js";
+import { getAdvertiserUserById } from "../../../../lib/db/tiktok-advertiser-dao.js";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +11,8 @@ export async function GET(req) {
     if (!user) {
       return NextResponse.json({ success: false, authenticated: false }, { status: 401 });
     }
+    const row = await getAdvertiserUserById(user.advertiserUserId);
+    const balance = normalizeAdvertiserBalance(row?.balance_amount, row?.balance_currency);
     return NextResponse.json({
       success: true,
       authenticated: true,
@@ -16,6 +20,7 @@ export async function GET(req) {
         companyName: user.companyName,
         username: user.username,
         isAdmin: user.isAdmin,
+        balance,
       },
     });
   } catch (error) {

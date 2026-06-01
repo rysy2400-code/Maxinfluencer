@@ -9,6 +9,7 @@ import {
   formatEcpmFromFlatAndViews,
 } from "../lib/influencer/avg-views.js";
 import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
+import { formatAdvertiserBalance } from "../lib/utils/advertiser-balance.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -148,6 +149,200 @@ function CampaignSessionRowMenu({ sessionId, showTrigger, menuOpen, onToggleMenu
             }}
           >
             删除
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function usernameInitials(username) {
+  const s = typeof username === "string" ? username.trim() : "";
+  if (!s) return "?";
+  if (/[\u4e00-\u9fff]/.test(s)) return s.slice(0, 1);
+  const parts = s.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return s.slice(0, 2).toUpperCase();
+}
+
+/** 侧栏底部账户条 + 余额/充值/退出菜单 */
+function SidebarAccountMenu({
+  user,
+  menuOpen,
+  onToggleMenu,
+  onRecharge,
+  onLogout,
+}) {
+  const balanceLabel = formatAdvertiserBalance(user?.balance?.amount, user?.balance?.currency);
+  const initials = usernameInitials(user?.username);
+
+  return (
+    <div data-account-menu-root style={{ position: "relative" }}>
+      <button
+        type="button"
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        onClick={onToggleMenu}
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "none",
+          background: menuOpen ? "#F3F4F6" : "transparent",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          textAlign: "left",
+          transition: "background 0.15s ease",
+        }}
+        onMouseEnter={(e) => {
+          if (!menuOpen) e.currentTarget.style.backgroundColor = "#F3F4F6";
+        }}
+        onMouseLeave={(e) => {
+          if (!menuOpen) e.currentTarget.style.backgroundColor = "transparent";
+        }}
+      >
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: "50%",
+            backgroundColor: "#E5E7EB",
+            color: "#374151",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 11,
+            fontWeight: 600,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          {initials}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "#1F2937",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              lineHeight: 1.3,
+            }}
+          >
+            {user?.username || "—"}
+          </div>
+          <div
+            title={user?.companyName || ""}
+            style={{
+              fontSize: 10,
+              color: "#9CA3AF",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              lineHeight: 1.3,
+              marginTop: 2,
+            }}
+          >
+            {user?.companyName || "—"}
+          </div>
+        </div>
+        <div
+          style={{
+            flexShrink: 0,
+            color: "#9CA3AF",
+            fontSize: 10,
+            lineHeight: 1,
+            transform: menuOpen ? "rotate(180deg)" : "none",
+            transition: "transform 0.15s ease",
+          }}
+          aria-hidden
+        >
+          ▾
+        </div>
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: "100%",
+            marginBottom: 4,
+            background: "#FFFFFF",
+            border: "1px solid #E5E7EB",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+            zIndex: 90,
+            padding: "4px 0",
+            fontSize: 13,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "8px 12px",
+              color: "#6B7280",
+              fontSize: 12,
+            }}
+          >
+            <span>账户余额</span>
+            <span style={{ color: "#111827", fontWeight: 600, fontSize: 13 }}>{balanceLabel}</span>
+          </div>
+          <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRecharge();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#111827",
+              fontSize: 13,
+            }}
+          >
+            充值
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLogout();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#DC2626",
+              fontSize: 13,
+            }}
+          >
+            退出登录
           </button>
         </div>
       ) : null}
@@ -1511,8 +1706,10 @@ export default function HomePage() {
   const renamingSessionIdRef = useRef(null);
   const ignoreRenameBlurRef = useRef(false);
 
-  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin } | null
+  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin, balance } | null
   const [authChecked, setAuthChecked] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginCompany, setLoginCompany] = useState("");
   const [loginUser, setLoginUser] = useState("");
@@ -1543,6 +1740,18 @@ export default function HomePage() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [sessionRowMenuId]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    const onDown = (e) => {
+      const root = document.querySelector("[data-account-menu-root]");
+      if (root && !root.contains(e.target)) {
+        setAccountMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [accountMenuOpen]);
 
   useEffect(() => {
     renamingSessionIdRef.current = renamingSessionId;
@@ -3943,6 +4152,8 @@ export default function HomePage() {
     }
     cancelRenameSession();
     setSessionRowMenuId(null);
+    setAccountMenuOpen(false);
+    setRechargeModalOpen(false);
     setAuthUser(null);
     setCurrentSessionId(null);
     clearChatPersistenceKeys();
@@ -4895,22 +5106,19 @@ export default function HomePage() {
               gap: 8,
             }}
           >
-            <button
-              type="button"
-              onClick={handleLogout}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                fontSize: 12,
-                color: "#6B7280",
-                background: "#FFFFFF",
-                border: "1px solid #E5E7EB",
-                borderRadius: 8,
-                cursor: "pointer",
+            <SidebarAccountMenu
+              user={authUser}
+              menuOpen={accountMenuOpen}
+              onToggleMenu={() => setAccountMenuOpen((open) => !open)}
+              onRecharge={() => {
+                setAccountMenuOpen(false);
+                setRechargeModalOpen(true);
               }}
-            >
-              退出登录
-            </button>
+              onLogout={() => {
+                setAccountMenuOpen(false);
+                void handleLogout();
+              }}
+            />
             {authUser.isAdmin ? (
               <>
                 <a
@@ -6431,6 +6639,82 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {rechargeModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(255, 255, 255, 0.65)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+          onClick={() => setRechargeModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-labelledby="recharge-modal-title"
+            style={{
+              width: "100%",
+              maxWidth: 380,
+              background: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+              borderRadius: 14,
+              padding: "28px 24px",
+              boxShadow:
+                "0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 40px rgba(15, 23, 42, 0.08)",
+              boxSizing: "border-box",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              id="recharge-modal-title"
+              style={{
+                color: "#111827",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 6,
+                letterSpacing: "-0.02em",
+              }}
+            >
+              充值请联系 Maxin AI 销售
+            </div>
+            <div
+              style={{
+                color: "#6B7280",
+                fontSize: 13,
+                marginBottom: 22,
+                lineHeight: 1.55,
+              }}
+            >
+              当前支持线下签约与对公转账。如需充值或开具发票，请联系您的 Maxin AI 客户经理。
+            </div>
+            <button
+              type="button"
+              onClick={() => setRechargeModalOpen(false)}
+              style={{
+                width: "100%",
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FFFFFF",
+                color: "#111827",
+                fontSize: 14,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
 
       {loginOpen && (
         <div

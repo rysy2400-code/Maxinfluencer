@@ -10,6 +10,7 @@ import {
   MAX_AGE_SEC,
   cookieIsSecure,
 } from "../../../../lib/auth/advertiser-jwt.js";
+import { normalizeAdvertiserBalance } from "../../../../lib/utils/advertiser-balance.js";
 
 export const dynamic = "force-dynamic";
 
@@ -63,12 +64,15 @@ export async function POST(req) {
       isAdmin: !!userRow.is_admin,
     });
 
+    const balance = normalizeAdvertiserBalance(advertiser.balance_amount, advertiser.balance_currency);
+
     const res = NextResponse.json({
       success: true,
       user: {
         companyName: advertiser.name,
         username: userRow.username,
         isAdmin: !!userRow.is_admin,
+        balance,
       },
     });
 

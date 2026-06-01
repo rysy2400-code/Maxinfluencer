@@ -74,8 +74,36 @@ async function ensureSessionColumn() {
   }
 }
 
+async function ensureBalanceColumns() {
+  try {
+    await queryTikTok(
+      `ALTER TABLE tiktok_advertiser ADD COLUMN balance_amount DECIMAL(14,4) NULL COMMENT '公司共享余额，NULL 视为 0'`
+    );
+    console.log("✅ tiktok_advertiser.balance_amount 已添加");
+  } catch (e) {
+    if (e.message && /Duplicate column name/i.test(e.message)) {
+      console.log("⏭️ tiktok_advertiser.balance_amount 已存在");
+    } else {
+      throw e;
+    }
+  }
+  try {
+    await queryTikTok(
+      `ALTER TABLE tiktok_advertiser ADD COLUMN balance_currency VARCHAR(16) NULL DEFAULT 'USD' COMMENT '余额币种/单位'`
+    );
+    console.log("✅ tiktok_advertiser.balance_currency 已添加");
+  } catch (e) {
+    if (e.message && /Duplicate column name/i.test(e.message)) {
+      console.log("⏭️ tiktok_advertiser.balance_currency 已存在");
+    } else {
+      throw e;
+    }
+  }
+}
+
 async function run() {
   await ensureTables();
+  await ensureBalanceColumns();
   await ensureSessionColumn();
 
   const companyName = "MaxinAI";
