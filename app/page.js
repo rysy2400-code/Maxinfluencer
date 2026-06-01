@@ -6303,7 +6303,7 @@ export default function HomePage() {
                   );
                 }
 
-                const { browserSteps, screenshots, influencerAnalyses, source } =
+                const { browserSteps, screenshots, influencerAnalyses } =
                   workLiveThinking || {};
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
@@ -6361,39 +6361,6 @@ export default function HomePage() {
                 const currentScreenshot = (screenshots && screenshots.length > 0)
                   ? screenshots.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
                   : null;
-
-                // 浏览器标题：显示“正在浏览 xx网址”，忽略“滚动/滑动”等技术细节
-                let browserStatusLabel = "浏览器";
-                const allScreenshotsSorted = (screenshots || []).slice().sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-                const isScrollLabel = (label) =>
-                  typeof label === "string" && /滚动|滑动|scroll/i.test(label);
-                const buildBrowseText = (label) => {
-                  if (!label) return null;
-                  const urlMatch = label.match(/https?:\/\/[^\s)]+/);
-                  if (urlMatch && urlMatch[0]) {
-                    return `正在浏览 ${urlMatch[0]}`;
-                  }
-                  return label;
-                };
-
-                if (currentScreenshot && currentScreenshot.label) {
-                  if (!isScrollLabel(currentScreenshot.label)) {
-                    browserStatusLabel = buildBrowseText(currentScreenshot.label) || "浏览器";
-                  } else {
-                    // 当前是滚动等操作时，回退到最近一个“非滚动”截图的地址
-                    const stableShot = [...allScreenshotsSorted]
-                      .reverse()
-                      .find(s => s.label && !isScrollLabel(s.label));
-                    if (stableShot) {
-                      browserStatusLabel = buildBrowseText(stableShot.label) || "浏览器";
-                    }
-                  }
-                }
-
-                if (source?.workerHost || source?.workerId) {
-                  const workerLabel = source.workerHost || source.workerId;
-                  browserStatusLabel = `${browserStatusLabel}（${workerLabel}）`;
-                }
 
                 const liveTopTitle = isExecutionPhase ? "红人画像分析" : "红人画像确认";
                 return (
@@ -6597,7 +6564,7 @@ export default function HomePage() {
                       borderBottom: "1px solid #E5E7EB"
                     }}>
                         <span className={currentScreenshot ? "browser-status-blink" : undefined}>
-                          {browserStatusLabel}
+                          浏览器
                         </span>
                       </div>
                       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
