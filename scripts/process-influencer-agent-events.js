@@ -4,6 +4,7 @@
  * 职责（MVP）：
  * - 处理 first_outreach 事件：调用 sendOutreach 发首封邀约邮件；
  * - 处理 outbound_email 事件：根据 payload 中的信息直接发邮件给红人，并写入对话记忆表。
+ * - 处理 advertiser_execution_followup：广告主 Portal 操作（同意价格/寄样/草稿）后的跟进邮件。
  *
  * 使用方式（示例）：
  *   node scripts/process-influencer-agent-events.js
@@ -23,6 +24,7 @@ import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thre
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
+import { generateAdvertiserExecutionFollowupEmailBody } from "../lib/agents/advertiser-execution-followup-email.js";
 import {
   buildTraceIdFromInboundMessageId,
   buildTraceIdFromSourceKey,
@@ -480,6 +482,158 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
   }
 }
 
+async function handleAdvertiserExecutionFollowup(eventRow, payload) {
+  const campaignId = payload.campaignId || eventRow.campaign_id || null;
+  const action = payload.action || null;
+
+  if (!action) {
+    throw new Error("advertiser_execution_followup 缺少 action");
+  }
+
+  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+    campaignId,
+    eventRow,
+    payload
+  );
+  if (!platformInfluencerId) {
+    throw new Error(
+      "advertiser_execution_followup 无法解析平台 influencer_id（请回填 execution.influencer_id）"
+    );
+  }
+
+  const influencer = await getInfluencerById(platformInfluencerId);
+  if (!influencer) {
+    throw new Error(
+      `advertiser_execution_followup 主档不存在红人 influencer_id=${platformInfluencerId}`
+    );
+  }
+
+  const toEmail =
+    typeof influencer.influencerEmail === "string" &&
+    influencer.influencerEmail.includes("@")
+      ? influencer.influencerEmail.trim()
+      : null;
+
+  if (!toEmail) {
+    throw new Error(
+      `advertiser_execution_followup 红人 influencer_id=${platformInfluencerId} 缺少邮箱`
+    );
+  }
+
+  const conversationHistory = await loadConversationHistoryForInfluencer(
+    platformInfluencerId,
+    20
+  );
+
+  const bodyText = await generateAdvertiserExecutionFollowupEmailBody({
+    action,
+    needSample: payload.needSample === true,
+    hasShippingInfo: payload.hasShippingInfo === true,
+    campaignId,
+    flatFee: payload.flatFee,
+    currency: payload.currency || "USD",
+    draftLink: payload.draftLink || null,
+    draftFeedback: payload.draftFeedback || null,
+    conversationHistory,
+    influencer,
+  });
+
+  const ctx = await resolveInfluencerThreadMailContext({
+    influencerId: platformInfluencerId,
+    influencer,
+    campaignId,
+  });
+  const fromAccount = ctx.fromAccount;
+  const subject = ctx.subjectForSend;
+
+  const headers = {
+    "X-Maxin-Influencer-Id": platformInfluencerId || "",
+    "X-Maxin-Campaign-Id": campaignId || "",
+    "X-Maxin-Source": "InfluencerAgent",
+  };
+  if (ctx.inReplyTo) {
+    headers["In-Reply-To"] = ctx.inReplyTo;
+  }
+  if (ctx.references) {
+    headers["References"] = ctx.references;
+  }
+
+  const traceId = buildTraceIdFromSourceKey(
+    `advertiser_followup:${action}:${eventRow.id}`
+  );
+
+  let result = null;
+  let sendErr = null;
+  try {
+    result = await sendMail({
+      fromAccount,
+      to: toEmail,
+      subject,
+      text: bodyText,
+      headers,
+    });
+  } catch (err) {
+    sendErr = err;
+  }
+
+  try {
+    await logConversationMessage({
+      influencerId: platformInfluencerId,
+      campaignId,
+      direction: "bin",
+      channel: "email",
+      fromEmail:
+        fromAccount.email ||
+        fromAccount.email_address ||
+        fromAccount.username ||
+        fromAccount.account ||
+        null,
+      toEmail,
+      subject,
+      bodyText,
+      messageId: result?.messageId || null,
+      sourceType: "advertiser_execution_followup",
+      sourceEventTable: "tiktok_influencer_agent_event",
+      sourceEventId: eventRow.id,
+      sentAt: new Date(),
+      eventType: "email_outbound",
+      eventTime: new Date(),
+      actorType: "agent",
+      sendMode: "auto_send",
+      contentOrigin: "agent_generated",
+      traceId,
+      payload: {
+        kind: "email_outbound",
+        status: sendErr ? "failed" : "succeeded",
+        error: sendErr ? { message: sendErr?.message || String(sendErr) } : null,
+        advertiserFollowup: {
+          action,
+          needSample: payload.needSample === true,
+          hasShippingInfo: payload.hasShippingInfo === true,
+        },
+        email: {
+          to: toEmail,
+          subject,
+          messageId: result?.messageId || null,
+        },
+        source: {
+          eventTable: "tiktok_influencer_agent_event",
+          eventId: eventRow.id,
+        },
+      },
+    });
+  } catch (err) {
+    console.error(
+      "[ProcessInfluencerAgentEvents] 写入广告主跟进邮件到对话表失败:",
+      err
+    );
+  }
+
+  if (sendErr) {
+    throw sendErr;
+  }
+}
+
 async function processInfluencerAgentEvent(eventRow) {
   await markInfluencerAgentEventStatus(eventRow.id, "processing", null);
 
@@ -500,6 +654,12 @@ async function processInfluencerAgentEvent(eventRow) {
 
   if (type === "ask_influencer_special_request") {
     await handleAskInfluencerSpecialRequest(eventRow, payload);
+    await markInfluencerAgentEventStatus(eventRow.id, "succeeded", null);
+    return;
+  }
+
+  if (type === "advertiser_execution_followup") {
+    await handleAdvertiserExecutionFollowup(eventRow, payload);
     await markInfluencerAgentEventStatus(eventRow.id, "succeeded", null);
     return;
   }

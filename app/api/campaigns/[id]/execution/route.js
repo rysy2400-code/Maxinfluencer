@@ -4,6 +4,8 @@ import {
   getExecutionRow,
   updateExecutionStage,
 } from "../../../../../lib/db/campaign-dao.js";
+import { resolveNeedSample } from "../../../../../lib/execution/need-sample.js";
+import { enqueueAdvertiserExecutionFollowup } from "../../../../../lib/execution/enqueue-advertiser-followup.js";
 
 /**
  * PATCH /api/campaigns/[id]/execution
@@ -102,11 +104,7 @@ export async function PATCH(req, { params }) {
         lastEvent = { draftLink: payload.draftLink || payload };
         break;
       case "approveQuote": {
-        const needSample =
-          campaign.productInfo &&
-          typeof campaign.productInfo.needSample === "boolean"
-            ? campaign.productInfo.needSample
-            : true;
+        const needSample = resolveNeedSample(campaign.productInfo);
         stage = needSample ? "pending_sample" : "pending_draft";
         lastEvent = { quoteApprovedAt: new Date().toISOString() };
         break;
@@ -198,6 +196,23 @@ export async function PATCH(req, { params }) {
       lastEvent,
       quoteAppend,
     });
+
+    try {
+      const executionRow = await getExecutionRow(campaignId, influencerId);
+      await enqueueAdvertiserExecutionFollowup({
+        campaignId,
+        influencerId,
+        action,
+        campaign,
+        executionRow,
+        payload,
+      });
+    } catch (enqueueErr) {
+      console.warn(
+        "[Campaign Execution API] 写入 Influencer Agent 跟进队列失败（不影响 stage 更新）:",
+        enqueueErr?.message || enqueueErr
+      );
+    }
 
     return NextResponse.json({
       success: true,

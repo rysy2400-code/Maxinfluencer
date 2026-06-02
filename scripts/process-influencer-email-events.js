@@ -384,6 +384,11 @@ async function applyDecision(decision, event, executions) {
         ? upd.videoLink.trim()
         : null;
 
+    let draftLink =
+      typeof upd.draftLink === "string" && upd.draftLink.trim()
+        ? upd.draftLink.trim()
+        : null;
+
     let shippingInfo =
       upd.shippingInfo && typeof upd.shippingInfo === "object"
         ? upd.shippingInfo
@@ -400,7 +405,7 @@ async function applyDecision(decision, event, executions) {
       }
     }
 
-    if (!videoLink && event.body_text) {
+    if (!videoLink && !draftLink && event.body_text) {
       const m = event.body_text.match(
         /(https?:\/\/www\.tiktok\.com\/@[^\s/]+\/video\/\d+)/
       );
@@ -416,6 +421,7 @@ async function applyDecision(decision, event, executions) {
       newStage,
       note: note || "",
       flatFeeUSD: flatFee,
+      draftLink,
       videoLink,
       shippingInfo,
       emailEvent: {
@@ -428,6 +434,7 @@ async function applyDecision(decision, event, executions) {
       },
       parsedFromEmailBody: {
         flatFeeUSD: flatFee,
+        draftLink,
         videoLink,
       },
       createdAt: new Date().toISOString(),
@@ -584,7 +591,8 @@ ${influencerAgentBasePrompt}
         "newStage": "quote_submitted",
         "note": "简要中文说明你为什么这么做",
         "flatFeeUSD": 200,
-        "videoLink": "https://www.tiktok.com/@xxx/video/123",
+        "draftLink": "https://www.tiktok.com/@xxx/video/123",
+        "videoLink": "https://www.tiktok.com/@xxx/video/456",
         "shippingInfo": {
           "name": "xxx",
           "phone": "xxx",
@@ -626,16 +634,22 @@ ${influencerAgentBasePrompt}
     ]
   }
 
-- updates 只是「建议」，会被写入 tiktok_advertiser_agent_event，由 CampaignExecutionAgent 决定是否真正更新数据库。
+- updates 会被写入 tiktok_advertiser_agent_event，由后台 worker 落库；**stage 变更受状态机约束**，越权变更会被拦截，但报价/寄样/草稿/视频链接等字段仍可能写入。
+- **你只能推进以下 stage 变更**（其它阶段必须由广告主在 Portal 操作）：
+  - pending_quote → quote_submitted：红人同意品牌报价或给出 counter 报价
+  - quote_rejected → quote_submitted：红人拒绝后再给出新报价
+  - pending_draft → draft_submitted：红人提交素材草稿（需广告主已同意价格）
+  - draft_submitted → draft_submitted：红人根据修改建议重新提交草稿
+  - published → published：广告主已通过草稿后，红人提交最终发布视频链接（仅更新 videoLink，不改变 stage 语义）
+- **禁止**将 newStage 设为 pending_sample、pending_draft、published（从非 published 进入）、quote_rejected。
+- 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
+- 电商 campaign 在 quote_submitted 阶段收集寄样信息：填写 shippingInfo，**newStage 保持 quote_submitted**，不要设为 pending_sample。
+- 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
 - newStage 必须是下列之一（不要使用 failed、sample_sent 等已废弃取值）：
   - "pending_quote"
   - "quote_submitted"
-  - "pending_sample"
-  - "pending_draft"
   - "draft_submitted"
-  - "published"
-  - "quote_rejected"
-- quote_rejected **仅**用于：红人已提交报价后，**品牌方明确拒绝该报价**；其它终止合作场景不要用此 stage（可维持当前 stage 并在 note 说明）。
+  - "published"（仅当 activeExecutions 中该 campaign 已是 published、且需更新 videoLink 时）
 - 如果你认为当前邮件不需要修改任何 Campaign 的 stage，请返回：{"updates": []}，但你仍然可以返回 outboundEmails 或 agentEvents。
 - 对于 creator_replied_special_request：当红人明确同意/接受品牌方的特殊请求（如改价、改时间、加条数等）时，specialRequestStatus 必须为 "resolved"；仅当红人拒绝或提出新条件需品牌再决定时，才用 "pending_brand"。
 `;

@@ -24,6 +24,7 @@ import {
   buildCampaignUpdateMessageId,
   buildTraceIdFromInboundMessageId,
 } from "../lib/utils/timeline-ids.js";
+import { resolveInfluencerAgentUpdate } from "../lib/execution/stage-transition.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -95,17 +96,17 @@ async function markCampaignAgentEventStatus(id, status, errorMessage = null) {
 async function applyExecutionUpdateSuggested(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id;
   const influencerId = payload.influencerId || eventRow.influencer_id;
-  const newStage = payload.newStage;
+  const requestedStage = payload.newStage;
 
-  if (!campaignId || !influencerId || !newStage) {
+  if (!campaignId || !influencerId || !requestedStage) {
     throw new Error(
       "execution_update_suggested 缺少必要字段：campaignId / influencerId / newStage"
     );
   }
 
-  if (!ALLOWED_EXECUTION_STAGES.has(newStage)) {
+  if (!ALLOWED_EXECUTION_STAGES.has(requestedStage)) {
     throw new Error(
-      `无效的 newStage「${newStage}」。允许值：${[...ALLOWED_EXECUTION_STAGES].join(
+      `无效的 newStage「${requestedStage}」。允许值：${[...ALLOWED_EXECUTION_STAGES].join(
         ", "
       )}。注意：quote_rejected 仅表示「红人已报价后，品牌方拒绝该报价」；不要使用已废弃的 failed。`
     );
@@ -123,6 +124,11 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       ? payload.videoLink.trim()
       : null;
 
+  let draftLink =
+    typeof payload.draftLink === "string" && payload.draftLink.trim()
+      ? payload.draftLink.trim()
+      : null;
+
   let shippingInfo =
     payload.shippingInfo && typeof payload.shippingInfo === "object"
       ? payload.shippingInfo
@@ -132,7 +138,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   const execRows = await queryTikTok(
     `
-    SELECT flat_fee, currency, quote_negotiation, last_event
+    SELECT stage, flat_fee, currency, quote_negotiation, last_event
     FROM tiktok_campaign_execution
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
@@ -142,10 +148,28 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     throw new Error(`未找到执行行：${campaignId} / ${influencerId}`);
   }
   const cur = execRows[0];
+  const currentStage = cur.stage || "pending_quote";
+
+  const resolved = resolveInfluencerAgentUpdate({
+    currentStage,
+    requestedStage,
+    lastEventRaw: cur.last_event,
+    payload,
+  });
+
+  const { effectiveStage, skippedStageReason } = resolved;
+
+  if (skippedStageReason) {
+    console.warn(
+      `[ProcessCampaignAgentEvents] stage 变更被拦截 (${campaignId}/${influencerId}): ${currentStage} → ${requestedStage}. ${skippedStageReason}`
+    );
+  }
+
   let nextCurrency = normalizeCurrencyCode(cur.currency, "USD");
   let negotiation = parseQuoteNegotiationColumn(cur.quote_negotiation);
+  let mergedLastEvent = parseJsonOrObject(cur.last_event) || {};
 
-  if (flatFee != null && Number.isFinite(Number(flatFee))) {
+  if (resolved.allowFlatFeeUpdate && flatFee != null && Number.isFinite(Number(flatFee))) {
     const role =
       payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
         ? "advertiser"
@@ -168,7 +192,53 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         sourceEventId: eventRow.id,
       },
     ];
+  } else if (flatFee != null) {
+    flatFee = null;
   }
+
+  if (!resolved.allowShippingInfoUpdate) {
+    shippingInfo = null;
+  }
+
+  if (resolved.allowDraftLinkUpdate) {
+    if (!draftLink && videoLink) {
+      draftLink = videoLink;
+      videoLink = null;
+    }
+    if (draftLink) {
+      mergedLastEvent = {
+        ...mergedLastEvent,
+        draftLink,
+        draftSubmittedAt: new Date().toISOString(),
+      };
+    }
+  } else {
+    draftLink = null;
+  }
+
+  if (!resolved.allowVideoLinkUpdate) {
+    videoLink = null;
+  }
+
+  mergedLastEvent = {
+    ...mergedLastEvent,
+    campaignAgentDecision: {
+      updatedAt: new Date().toISOString(),
+      campaignId,
+      influencerId,
+      sourceEventId: eventRow.id,
+      sourceEventType: eventRow.event_type,
+      emailEvent: emailEvent || {},
+      note: payload.note || "",
+      requestedStage,
+      effectiveStage,
+      skippedStageReason: skippedStageReason || null,
+      flatFeeUSD: flatFee,
+      videoLink,
+      draftLink,
+      shippingInfo: shippingInfo || null,
+    },
+  };
 
   await queryTikTok(
     `
@@ -179,43 +249,17 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         quote_negotiation = ?,
         video_link = COALESCE(?, video_link),
         shipping_info = COALESCE(?, shipping_info),
-        last_event = JSON_MERGE_PRESERVE(
-          COALESCE(last_event, JSON_OBJECT()),
-          JSON_OBJECT(
-            'campaignAgentDecision',
-            JSON_OBJECT(
-              'updatedAt', ?,
-              'campaignId', ?,
-              'influencerId', ?,
-              'sourceEventId', ?,
-              'sourceEventType', ?,
-              'emailEvent', ?,
-              'note', ?,
-              'flatFeeUSD', ?,
-              'videoLink', ?,
-              'shippingInfo', ?
-            )
-          )
-        )
+        last_event = ?
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
     [
-      newStage,
+      effectiveStage,
       flatFee,
       nextCurrency,
       JSON.stringify(negotiation),
       videoLink,
       shippingInfo ? JSON.stringify(shippingInfo) : null,
-      new Date().toISOString(),
-      campaignId,
-      influencerId,
-      eventRow.id,
-      eventRow.event_type,
-      JSON.stringify(emailEvent || {}),
-      payload.note || "",
-      flatFee,
-      videoLink,
-      shippingInfo ? JSON.stringify(shippingInfo) : null,
+      JSON.stringify(mergedLastEvent),
       campaignId,
       ...paramsExecutionCreatorMatch(influencerId),
     ]
@@ -365,7 +409,7 @@ async function processCampaignAgentEvent(eventRow) {
         status: "succeeded",
         errorMessage: null,
         payloadSummary: {
-          newStage: payload.newStage || null,
+          requestedStage: payload.newStage || null,
           flatFeeUSD: payload.flatFeeUSD || null,
           videoLink: payload.videoLink || null,
         },
@@ -466,4 +510,3 @@ main()
     console.error("[ProcessCampaignAgentEvents] 运行出错:", err);
     process.exit(1);
   });
-
