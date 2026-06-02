@@ -10,6 +10,10 @@ import {
 } from "../lib/influencer/avg-views.js";
 import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
 import { formatAdvertiserBalance } from "../lib/utils/advertiser-balance.js";
+import {
+  isExecutionUiCampaignStatus,
+  shouldShowBinComputerPanel,
+} from "../lib/campaign/execution-ui-status.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -1642,6 +1646,7 @@ export default function HomePage() {
   const verticalResizeStartSplitRef = useRef(50); // 上下拖拽开始时的百分比
   /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
+  const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
   const resolveCampaignRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
@@ -1689,6 +1694,11 @@ export default function HomePage() {
     }
     return { running, paused, completed };
   }, [publishedSessions]);
+  /** 草稿区：排除已出现在「已发布」列表的会话（与 tiktok_campaign 权威状态对齐） */
+  const draftCampaignSessions = useMemo(() => {
+    const publishedIds = new Set(publishedSessions.map((s) => s.id));
+    return campaignSessions.filter((s) => !publishedIds.has(s.id));
+  }, [campaignSessions, publishedSessions]);
   const chatRenderableItems = useMemo(
     () => buildChatRenderableItems(messages),
     [messages]
@@ -1771,76 +1781,126 @@ export default function HomePage() {
   // 输入框自适应高度（欢迎页大输入框 + 底部输入框共用同一输入值）
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
-  const isExecutionPhaseGlobal =
-    context?.workflowState === "published" || context?.published === true;
-  /** 已发布但尚未从 session 解析出 campaignId（避免短暂展示上一份执行数据） */
-  const isResolvingCampaign =
-    isExecutionPhaseGlobal && !!currentSessionId && resolvedCampaignId == null;
 
-  // 执行阶段：按 session_id 从 DB 解析 campaignId，并在与 context 不一致时写回会话
-  useEffect(() => {
-    if (!isExecutionPhaseGlobal || !currentSessionId) {
+  /** 侧栏已发布列表中的当前会话元数据（切换时用于乐观展示 Bin 工作区） */
+  const currentPublishedSessionMeta = useMemo(() => {
+    if (!currentSessionId) return null;
+    return publishedSessions.find((s) => s.id === currentSessionId) ?? null;
+  }, [currentSessionId, publishedSessions]);
+
+  /** 是否进入执行 UI：以 tiktok_campaign.status 为准（running / paused / completed） */
+  const isExecutionPhaseGlobal = shouldShowBinComputerPanel({
+    campaignId: resolvedCampaignId,
+    campaignStatus: resolvedCampaignStatus,
+  });
+
+  /** 已发布会话、列表显示可执行，但 campaign 接口尚未返回（避免闪上一份执行数据） */
+  const isResolvingCampaign =
+    !!currentSessionId &&
+    !isExecutionPhaseGlobal &&
+    !!currentPublishedSessionMeta?.campaignId &&
+    isExecutionUiCampaignStatus(
+      currentPublishedSessionMeta.campaignStatus || "running"
+    );
+
+  const showBinComputerPanelEffective =
+    isExecutionPhaseGlobal || isResolvingCampaign;
+
+  const refreshSessionCampaignFromDb = useCallback(async (sessionId) => {
+    if (!sessionId) {
       setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
       resolveCampaignSessionRef.current = null;
       return;
     }
 
-    const sessionId = currentSessionId;
     const reqId = ++resolveCampaignRequestRef.current;
     const sessionChanged = resolveCampaignSessionRef.current !== sessionId;
     resolveCampaignSessionRef.current = sessionId;
     if (sessionChanged) {
-      setResolvedCampaignId(null);
       setExecutionStatus(null);
       setExecutionConfig(null);
       setExecutionError(null);
     }
 
-    let cancelled = false;
+    try {
+      const res = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/campaign`,
+        { credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (reqId !== resolveCampaignRequestRef.current) return;
 
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/campaign`,
-          { credentials: "include" }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (cancelled || reqId !== resolveCampaignRequestRef.current) return;
+      if (!res.ok || !data.success || !data.campaignId) {
+        setResolvedCampaignId(null);
+        setResolvedCampaignStatus(null);
+        return;
+      }
 
-        if (!res.ok || !data.success || !data.campaignId) {
-          setResolvedCampaignId(null);
-          return;
-        }
+      const dbCampaignId = String(data.campaignId);
+      const dbStatus =
+        typeof data.status === "string" && data.status.trim()
+          ? data.status.trim()
+          : "running";
+      setResolvedCampaignId(dbCampaignId);
+      setResolvedCampaignStatus(dbStatus);
+      loadCampaignSessions({ silent: true }).catch(() => {});
 
-        const dbCampaignId = String(data.campaignId);
-        setResolvedCampaignId(dbCampaignId);
-        loadCampaignSessions({ silent: true }).catch(() => {});
-
+      if (isExecutionUiCampaignStatus(dbStatus)) {
         setContext((prev) => {
-          if (!prev || prev.campaignId === dbCampaignId) return prev;
-          const next = { ...prev, campaignId: dbCampaignId };
+          const base = prev && typeof prev === "object" ? prev : {};
+          const needsPatch =
+            base.campaignId !== dbCampaignId ||
+            base.published !== true ||
+            base.workflowState !== "published";
+          if (!needsPatch) return prev;
+          const next = {
+            ...base,
+            campaignId: dbCampaignId,
+            published: true,
+            workflowState: "published",
+          };
           fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
             method: "PUT",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ context: next }),
           }).catch((err) => {
-            console.warn("[HomePage] 同步 context.campaignId 失败:", err);
+            console.warn("[HomePage] 同步执行阶段 context 失败:", err);
           });
           return next;
         });
-      } catch (e) {
-        if (!cancelled && reqId === resolveCampaignRequestRef.current) {
-          console.error("[HomePage] 解析 session campaign 失败:", e);
-          setResolvedCampaignId(null);
-        }
       }
-    })();
+    } catch (e) {
+      if (reqId === resolveCampaignRequestRef.current) {
+        console.error("[HomePage] 解析 session campaign 失败:", e);
+        setResolvedCampaignId(null);
+        setResolvedCampaignStatus(null);
+      }
+    }
+  }, []);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSessionId, isExecutionPhaseGlobal]);
+  // 切换会话时按 DB 解析 tiktok_campaign；已发布列表元数据用于切换瞬间乐观展示
+  useEffect(() => {
+    if (!currentSessionId) {
+      setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
+      resolveCampaignSessionRef.current = null;
+      return;
+    }
+    const pub = publishedSessions.find((s) => s.id === currentSessionId);
+    if (
+      pub?.campaignId &&
+      isExecutionUiCampaignStatus(pub.campaignStatus || "running")
+    ) {
+      setResolvedCampaignId(String(pub.campaignId));
+      setResolvedCampaignStatus(pub.campaignStatus || "running");
+    } else if (!pub) {
+      setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
+    }
+    refreshSessionCampaignFromDb(currentSessionId);
+  }, [currentSessionId, refreshSessionCampaignFromDb, publishedSessions]);
 
   useEffect(() => {
     binComputerViewRef.current = binComputerView;
@@ -3151,12 +3211,11 @@ export default function HomePage() {
                   }
 
                   const nextCtx = data.data.context;
-                  if (
-                    nextCtx?.campaignId &&
-                    (nextCtx.workflowState === "published" || nextCtx.published)
-                  ) {
-                    setResolvedCampaignId(String(nextCtx.campaignId));
-                    fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+                  if (nextCtx?.campaignId) {
+                    const cid = String(nextCtx.campaignId);
+                    setResolvedCampaignId(cid);
+                    setResolvedCampaignStatus("running");
+                    fetch(`/api/campaigns/${cid}/report-config`, {
                       credentials: "include",
                     })
                       .then((r) => r.json())
@@ -3166,13 +3225,17 @@ export default function HomePage() {
                       .catch(() => {});
                   }
 
-                  // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
                   const ctxAfter = data.data.context;
                   if (
                     ctxAfter?.published ||
-                    ctxAfter?.workflowState === "published"
+                    ctxAfter?.workflowState === "published" ||
+                    ctxAfter?.campaignId
                   ) {
                     loadCampaignSessions({ silent: true }).catch(() => {});
+                    const sid = sessionIdForChat || currentSessionId;
+                    if (sid) {
+                      refreshSessionCampaignFromDb(sid).catch(() => {});
+                    }
                   }
 
                   // 消息发送完成后，更新会话（延迟保存，避免频繁请求）
@@ -3213,12 +3276,11 @@ export default function HomePage() {
           }
 
           const nextCtx = data.context;
-          if (
-            nextCtx?.campaignId &&
-            (nextCtx.workflowState === "published" || nextCtx.published)
-          ) {
-            setResolvedCampaignId(String(nextCtx.campaignId));
-            fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+          if (nextCtx?.campaignId) {
+            const cid = String(nextCtx.campaignId);
+            setResolvedCampaignId(cid);
+            setResolvedCampaignStatus("running");
+            fetch(`/api/campaigns/${cid}/report-config`, {
               credentials: "include",
             })
               .then((r) => r.json())
@@ -3226,6 +3288,11 @@ export default function HomePage() {
                 if (d.success) setExecutionConfig(d);
               })
               .catch(() => {});
+            const sid = sessionIdForChat || currentSessionId;
+            if (sid) {
+              refreshSessionCampaignFromDb(sid).catch(() => {});
+            }
+            loadCampaignSessions({ silent: true }).catch(() => {});
           }
         }
       }
@@ -3905,7 +3972,7 @@ export default function HomePage() {
     messages[0].name === "Bin";
 
   // 仅已发布 campaign 展示「Bin的电脑」；草稿/发布对话阶段中间栏占满
-  const showBinComputerPanel = !isEmptyState && isExecutionPhaseGlobal;
+  const showBinComputerPanel = !isEmptyState && showBinComputerPanelEffective;
 
   // 新建一条服务端草稿并进入对话区（不再进入无会话的欢迎顶栏页）
   async function createDraftSessionAndActivate() {
@@ -4686,7 +4753,7 @@ export default function HomePage() {
             <>
               {/* 只有在存在草稿 / 已发布会话，或加载/拉取出错时，才展示下方列表，避免在完全空状态点击发布按钮时闪烁文字 */}
               {(sessionsError ||
-                campaignSessions.length > 0 ||
+                draftCampaignSessions.length > 0 ||
                 publishedSessions.length > 0) && (
                 <>
                   {/* Campaign 草稿列表（仅在有草稿时展示） */}
@@ -4742,7 +4809,7 @@ export default function HomePage() {
                     重试
                   </button>
             </div>
-          ) : campaignSessions.length === 0 ? (
+          ) : draftCampaignSessions.length === 0 ? (
                       <div
                         style={{
                           padding: "4px 0 8px",
@@ -4761,7 +4828,7 @@ export default function HomePage() {
                           marginBottom: 4,
                         }}
                       >
-              {campaignSessions.map((session) => {
+              {draftCampaignSessions.map((session) => {
                 const isActive = session.id === currentSessionId;
                 return (
                   <div
@@ -5683,8 +5750,7 @@ export default function HomePage() {
             }}>
               {/* 显示右侧 Agent 工作区域：根据 workflowState 在「发布阶段」和「执行阶段」之间切换布局 */}
               {(() => {
-                const isExecutionPhase =
-                  context?.workflowState === "published" || context?.published === true;
+                const isExecutionPhase = isExecutionPhaseGlobal;
                 const lastMessage = messages[messages.length - 1];
 
                 // 执行总览数据来自 report-config / work-notes / execution-status，不依赖 lastMessage.thinking
