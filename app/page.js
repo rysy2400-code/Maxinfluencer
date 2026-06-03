@@ -14,6 +14,7 @@ import {
   isExecutionUiCampaignStatus,
   shouldShowBinComputerPanel,
 } from "../lib/campaign/execution-ui-status.js";
+import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -731,8 +732,8 @@ function ExecutionProgressMetricsLine({ item }) {
   const isYt = platform === "YouTube";
   const countryRaw = resolveVideoPublishCountry(item);
   const country =
-    countryRaw != null && String(countryRaw).trim() !== ""
-      ? String(countryRaw).trim()
+    countryRaw != null
+      ? formatCountryForDisplay(countryRaw) ?? countryRaw
       : isYt
         ? ""
         : "—";

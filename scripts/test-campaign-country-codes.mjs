@@ -4,18 +4,28 @@ import {
   countryMatchesPublishLocation,
   resolveAllowedCountriesFromCampaign,
   enrichCampaignInfoCountryFields,
+  isRecognizedCountryRegion,
+  formatCountryForDisplay,
 } from "../lib/influencer/campaign-country-codes.js";
 
 const cases = [
   [["美国"], "US", true],
   [["US"], "US", true],
   [["美国", "德国"], "DE", true],
+  [["法国"], "FR", true],
+  [["France"], "FR", true],
   [["美国"], "GB", false],
   [[], "US", true],
   [["美国"], null, false],
 ];
 
 let failed = 0;
+
+if (isRecognizedCountryRegion("火星") || normalizeAllowedCountries(["火星"]).length) {
+  console.error("FAIL unrecognized 火星 should not map");
+  failed += 1;
+}
+
 for (const [allowed, pub, expect] of cases) {
   const got = countryMatchesPublishLocation(pub, allowed);
   if (got !== expect) {
@@ -34,6 +44,32 @@ if (
   JSON.stringify(resolveAllowedCountriesFromCampaign({ region: "德国" })) !==
   '["DE"]'
 ) {
+  failed += 1;
+}
+
+const frInfo = enrichCampaignInfoCountryFields({
+  region: ["France", "德国"],
+  platform: "Instagram",
+});
+if (JSON.stringify(frInfo.countries) !== '["FR","DE"]') {
+  console.error("FAIL fr+de countries", frInfo.countries);
+  failed += 1;
+}
+if (!frInfo.region.includes("法国") || !frInfo.region.includes("德国")) {
+  console.error("FAIL fr+de region zh", frInfo.region);
+  failed += 1;
+}
+
+if (formatCountryForDisplay("DE") !== "德国") {
+  console.error("FAIL formatCountryForDisplay DE");
+  failed += 1;
+}
+if (formatCountryForDisplay("德国") !== "德国") {
+  console.error("FAIL formatCountryForDisplay 德国");
+  failed += 1;
+}
+if (formatCountryForDisplay(null) !== null || formatCountryForDisplay("") !== null) {
+  console.error("FAIL formatCountryForDisplay empty");
   failed += 1;
 }
 
