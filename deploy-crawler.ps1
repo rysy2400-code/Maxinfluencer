@@ -128,37 +128,12 @@ function Ensure-Schtask {
 
 function Resolve-PublicIpFromIpip {
   param([int]$MaxAttempts = 3)
-  $lastErr = $null
-  for ($i = 1; $i -le $MaxAttempts; $i++) {
-    try {
-      try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-      $resp = Invoke-WebRequest -UseBasicParsing -Uri "https://myip.ipip.net" -TimeoutSec 8
-      if (-not $resp -or [int]$resp.StatusCode -ne 200) {
-        throw "http_status=$($resp.StatusCode)"
-      }
-      $body = [string]$resp.Content
-      if ($body -match '(\d{1,3}(?:\.\d{1,3}){3})') {
-        return @{
-          Ok = $true
-          Ip = $matches[1]
-          Attempts = $i
-          Error = $null
-        }
-      }
-      throw "unparseable_response=$body"
-    } catch {
-      $lastErr = $_.Exception.Message
-      if ($i -lt $MaxAttempts) {
-        Start-Sleep -Seconds $i
-      }
-    }
+  $identityScript = Join-Path $scriptsDir "crawler-worker-identity.ps1"
+  if (-not (Test-Path $identityScript)) {
+    throw "Missing $identityScript (run git pull on crawler VM)"
   }
-  return @{
-    Ok = $false
-    Ip = ""
-    Attempts = $MaxAttempts
-    Error = $lastErr
-  }
+  . $identityScript
+  return Resolve-CrawlerPublicIpFromIpip -MaxAttempts $MaxAttempts
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -214,38 +189,15 @@ if ([string]::IsNullOrWhiteSpace($redisUrl)) {
   throw "REDIS_URL is required for crawler work-live events. Set CRAWLER_REDIS_URL (preferred) or REDIS_URL before deploy."
 }
 $workLiveChannelPrefix = if ($env:WORK_LIVE_CHANNEL_PREFIX) { "$($env:WORK_LIVE_CHANNEL_PREFIX)" } else { "work-live" }
-$workerId = if ($env:CRAWLER_WORKER_ID) { "$($env:CRAWLER_WORKER_ID)" } else { "search-worker-$($env:COMPUTERNAME)" }
-$workerHost = if ($env:CRAWLER_WORKER_HOST) { "$($env:CRAWLER_WORKER_HOST)" } else { "$($env:COMPUTERNAME)" }
-$workerLanIp = if ($env:CRAWLER_WORKER_IP) { "$($env:CRAWLER_WORKER_IP)" } else { "" }
-if ([string]::IsNullOrWhiteSpace($workerLanIp)) {
-  try {
-    $workerLanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-      Where-Object { $_.IPAddress -and $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -ne "WellKnown" } |
-      Select-Object -ExpandProperty IPAddress -First 1)
-  } catch { $workerLanIp = "" }
-}
 
-$ipCacheFile = Join-Path $Root ".last_worker_ip"
-$ipRes = Resolve-PublicIpFromIpip -MaxAttempts 3
-$workerIp = ""
-$workerIpSource = ""
-if ($ipRes.Ok -and -not [string]::IsNullOrWhiteSpace($ipRes.Ip)) {
-  $workerIp = [string]$ipRes.Ip
-  $workerIpSource = "myip.ipip.net"
-  try { Set-Content -Path $ipCacheFile -Value $workerIp -Encoding ASCII } catch {}
-} elseif (Test-Path $ipCacheFile) {
-  try { $workerIp = (Get-Content -Path $ipCacheFile -Raw).Trim() } catch { $workerIp = "" }
-  if (-not [string]::IsNullOrWhiteSpace($workerIp)) {
-    $workerIpSource = "cache"
-    Write-Warning "resolve public ip failed from myip.ipip.net after $($ipRes.Attempts) attempts: $($ipRes.Error); fallback to cached ip=$workerIp"
-  }
-}
-if ([string]::IsNullOrWhiteSpace($workerIp)) {
-  $workerIp = $workerLanIp
-  $workerIpSource = "lan"
-  Write-Warning "resolve public ip failed from myip.ipip.net after $($ipRes.Attempts) attempts: $($ipRes.Error); fallback to lan ip=$workerLanIp"
-}
-Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, attempts=$($ipRes.Attempts), lan=$workerLanIp) -> using=$workerIp"
+. (Join-Path $scriptsDir "crawler-worker-identity.ps1")
+$workerIdentity = Set-CrawlerWorkerProcessEnv -ProjectRoot $Root -MaxAttempts 3 -AllowCacheFallback
+$workerIp = $workerIdentity.PublicIp
+$workerIpSource = $workerIdentity.Source
+$workerHost = $workerIdentity.Host
+$workerLanIp = $workerIdentity.LanIp
+$workerId = $workerIdentity.WorkerId
+Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, lan=$workerLanIp, host=$workerHost) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { $searchCdpEndpoint }
 
@@ -305,16 +257,14 @@ while (`$true) {
 
 $guardCrawlerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
+`$Root = "$($Root.Replace("\", "\\"))"
+. (Join-Path `$Root "scripts\crawler-worker-identity.ps1")
 `$node = "$($nodeExe.Replace("\", "\\"))"
 `$script = "$($workerScript.Replace("\", "\\"))"
 `$env:REDIS_URL = "$($redisUrl.Replace("\", "\\").Replace('"','\"'))"
 `$env:WORK_LIVE_CHANNEL_PREFIX = "$($workLiveChannelPrefix.Replace("\", "\\").Replace('"','\"'))"
 `$env:WORK_LIVE_PUSH_URL = ""
 `$env:WORK_LIVE_PUSH_SECRET = ""
-`$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
-`$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
-`$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
-`$env:SEARCH_WORKER_LAN_IP = "$($workerLanIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:SEARCH_WORKER_SLOTS = "$searchWorkerSlots"
@@ -323,7 +273,19 @@ $guardCrawlerContent = @"
 `$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 while (`$true) {
+  try {
+    `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback
+  } catch {
+    Start-Sleep -Seconds 8
+    continue
+  }
   `$all = @(Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-influencer-search\.js" })
+  if (`$all.Count -gt 0 -and (Test-CrawlerWorkerNeedsRestart -ProjectRoot `$Root -ExpectedPublicIp `$identity.PublicIp)) {
+    foreach (`$proc in `$all) {
+      try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    `$all = @()
+  }
   if (`$all.Count -gt 1) {
     `$keep = `$all | Sort-Object CreationDate -Descending | Select-Object -First 1
     foreach (`$proc in `$all) {
@@ -332,7 +294,8 @@ while (`$true) {
       }
     }
   } elseif (`$all.Count -eq 0) {
-    Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory "$($Root.Replace("\", "\\"))" -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory `$Root -WindowStyle Hidden | Out-Null
+    Write-CrawlerWorkerRuntimeMarker -ProjectRoot `$Root -PublicIp `$identity.PublicIp
   }
   Start-Sleep -Seconds 8
 }
@@ -341,16 +304,28 @@ while (`$true) {
 $healthScript = Join-Path $Root "scripts\worker-health-heartbeat.js"
 $guardHealthContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
+`$Root = "$($Root.Replace("\", "\\"))"
+. (Join-Path `$Root "scripts\crawler-worker-identity.ps1")
 `$node = "$($nodeExe.Replace("\", "\\"))"
 `$script = "$($healthScript.Replace("\", "\\"))"
-`$env:SEARCH_WORKER_ID = "$($workerId.Replace("\", "\\").Replace('"','\"'))"
-`$env:SEARCH_WORKER_HOST = "$($workerHost.Replace("\", "\\").Replace('"','\"'))"
-`$env:SEARCH_WORKER_IP = "$($workerIp.Replace("\", "\\").Replace('"','\"'))"
 `$env:WORKER_HEALTH_INTERVAL_MS = "30000"
 while (`$true) {
-  `$p = Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-health-heartbeat\.js" }
-  if (-not `$p) {
-    Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory "$($Root.Replace("\", "\\"))" -WindowStyle Hidden | Out-Null
+  try {
+    `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback
+  } catch {
+    Start-Sleep -Seconds 8
+    continue
+  }
+  `$p = @(Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq "node.exe" -and `$_.CommandLine -match "worker-health-heartbeat\.js" })
+  if (`$p.Count -gt 0 -and (Test-CrawlerWorkerNeedsRestart -ProjectRoot `$Root -ExpectedPublicIp `$identity.PublicIp)) {
+    foreach (`$proc in `$p) {
+      try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    `$p = @()
+  }
+  if (-not `$p -or `$p.Count -eq 0) {
+    Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory `$Root -WindowStyle Hidden | Out-Null
+    Write-CrawlerWorkerRuntimeMarker -ProjectRoot `$Root -PublicIp `$identity.PublicIp
   }
   Start-Sleep -Seconds 8
 }
@@ -370,6 +345,10 @@ try {
   $oldWorker = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search\.js" }
   foreach ($p in $oldWorker) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
 } catch {}
+try {
+  Remove-Item -Path (Join-Path $Root ".worker_runtime_ip") -Force -ErrorAction SilentlyContinue
+} catch {}
+Write-CrawlerWorkerRuntimeMarker -ProjectRoot $Root -PublicIp $workerIp
 
 Stop-StaleCdpBrowsers
 Disable-Cdp9223Guard
