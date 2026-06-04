@@ -1063,7 +1063,7 @@ function ExecutionProgressRow({
                         </div>
                         {entry.at ? (
                           <div style={{ fontSize: 10, color: "#9CA3AF" }}>
-                            {new Date(entry.at).toLocaleString("zh-CN")}
+                            {formatExecutionTimeBeijing(entry.at) || "—"}
                           </div>
                         ) : null}
                         {entry.reason ? (
