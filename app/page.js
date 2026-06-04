@@ -9,6 +9,12 @@ import {
   formatEcpmFromFlatAndViews,
 } from "../lib/influencer/avg-views.js";
 import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
+import { formatAdvertiserBalance } from "../lib/utils/advertiser-balance.js";
+import {
+  isExecutionUiCampaignStatus,
+  shouldShowBinComputerPanel,
+} from "../lib/campaign/execution-ui-status.js";
+import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -148,6 +154,200 @@ function CampaignSessionRowMenu({ sessionId, showTrigger, menuOpen, onToggleMenu
             }}
           >
             删除
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function usernameInitials(username) {
+  const s = typeof username === "string" ? username.trim() : "";
+  if (!s) return "?";
+  if (/[\u4e00-\u9fff]/.test(s)) return s.slice(0, 1);
+  const parts = s.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return s.slice(0, 2).toUpperCase();
+}
+
+/** 侧栏底部账户条 + 余额/充值/退出菜单 */
+function SidebarAccountMenu({
+  user,
+  menuOpen,
+  onToggleMenu,
+  onRecharge,
+  onLogout,
+}) {
+  const balanceLabel = formatAdvertiserBalance(user?.balance?.amount, user?.balance?.currency);
+  const initials = usernameInitials(user?.username);
+
+  return (
+    <div data-account-menu-root style={{ position: "relative" }}>
+      <button
+        type="button"
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        onClick={onToggleMenu}
+        style={{
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "none",
+          background: menuOpen ? "#F3F4F6" : "transparent",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          textAlign: "left",
+          transition: "background 0.15s ease",
+        }}
+        onMouseEnter={(e) => {
+          if (!menuOpen) e.currentTarget.style.backgroundColor = "#F3F4F6";
+        }}
+        onMouseLeave={(e) => {
+          if (!menuOpen) e.currentTarget.style.backgroundColor = "transparent";
+        }}
+      >
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: "50%",
+            backgroundColor: "#E5E7EB",
+            color: "#374151",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 11,
+            fontWeight: 600,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          {initials}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "#1F2937",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              lineHeight: 1.3,
+            }}
+          >
+            {user?.username || "—"}
+          </div>
+          <div
+            title={user?.companyName || ""}
+            style={{
+              fontSize: 10,
+              color: "#9CA3AF",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              lineHeight: 1.3,
+              marginTop: 2,
+            }}
+          >
+            {user?.companyName || "—"}
+          </div>
+        </div>
+        <div
+          style={{
+            flexShrink: 0,
+            color: "#9CA3AF",
+            fontSize: 10,
+            lineHeight: 1,
+            transform: menuOpen ? "rotate(180deg)" : "none",
+            transition: "transform 0.15s ease",
+          }}
+          aria-hidden
+        >
+          ▾
+        </div>
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: "100%",
+            marginBottom: 4,
+            background: "#FFFFFF",
+            border: "1px solid #E5E7EB",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+            zIndex: 90,
+            padding: "4px 0",
+            fontSize: 13,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "8px 12px",
+              color: "#6B7280",
+              fontSize: 12,
+            }}
+          >
+            <span>账户余额</span>
+            <span style={{ color: "#111827", fontWeight: 600, fontSize: 13 }}>{balanceLabel}</span>
+          </div>
+          <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRecharge();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#111827",
+              fontSize: 13,
+            }}
+          >
+            充值
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLogout();
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              padding: "8px 12px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "#DC2626",
+              fontSize: 13,
+            }}
+          >
+            退出登录
           </button>
         </div>
       ) : null}
@@ -540,7 +740,7 @@ function formatExecutionTimeBeijing(iso) {
   });
 }
 
-/** 待审核价格：最新回复（按 Asia/Shanghai 格式化，文案不标注时区） */
+/** 待审核价格：最新回复（Asia/Shanghai，文案不标注时区） */
 function ExecutionProgressLastReplyTime({ at }) {
   const text = formatExecutionTimeBeijing(at);
   return (
@@ -556,8 +756,8 @@ function ExecutionProgressMetricsLine({ item }) {
   const isYt = platform === "YouTube";
   const countryRaw = resolveVideoPublishCountry(item);
   const country =
-    countryRaw != null && String(countryRaw).trim() !== ""
-      ? String(countryRaw).trim()
+    countryRaw != null
+      ? formatCountryForDisplay(countryRaw) ?? countryRaw
       : isYt
         ? ""
         : "—";
@@ -1482,6 +1682,7 @@ export default function HomePage() {
   const verticalResizeStartSplitRef = useRef(50); // 上下拖拽开始时的百分比
   /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
+  const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
   const resolveCampaignRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
@@ -1529,6 +1730,11 @@ export default function HomePage() {
     }
     return { running, paused, completed };
   }, [publishedSessions]);
+  /** 草稿区：排除已出现在「已发布」列表的会话（与 tiktok_campaign 权威状态对齐） */
+  const draftCampaignSessions = useMemo(() => {
+    const publishedIds = new Set(publishedSessions.map((s) => s.id));
+    return campaignSessions.filter((s) => !publishedIds.has(s.id));
+  }, [campaignSessions, publishedSessions]);
   const chatRenderableItems = useMemo(
     () => buildChatRenderableItems(messages),
     [messages]
@@ -1546,8 +1752,10 @@ export default function HomePage() {
   const renamingSessionIdRef = useRef(null);
   const ignoreRenameBlurRef = useRef(false);
 
-  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin } | null
+  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin, balance } | null
   const [authChecked, setAuthChecked] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginCompany, setLoginCompany] = useState("");
   const [loginUser, setLoginUser] = useState("");
@@ -1580,6 +1788,18 @@ export default function HomePage() {
   }, [sessionRowMenuId]);
 
   useEffect(() => {
+    if (!accountMenuOpen) return;
+    const onDown = (e) => {
+      const root = document.querySelector("[data-account-menu-root]");
+      if (root && !root.contains(e.target)) {
+        setAccountMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [accountMenuOpen]);
+
+  useEffect(() => {
     renamingSessionIdRef.current = renamingSessionId;
   }, [renamingSessionId]);
 
@@ -1597,76 +1817,126 @@ export default function HomePage() {
   // 输入框自适应高度（欢迎页大输入框 + 底部输入框共用同一输入值）
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
-  const isExecutionPhaseGlobal =
-    context?.workflowState === "published" || context?.published === true;
-  /** 已发布但尚未从 session 解析出 campaignId（避免短暂展示上一份执行数据） */
-  const isResolvingCampaign =
-    isExecutionPhaseGlobal && !!currentSessionId && resolvedCampaignId == null;
 
-  // 执行阶段：按 session_id 从 DB 解析 campaignId，并在与 context 不一致时写回会话
-  useEffect(() => {
-    if (!isExecutionPhaseGlobal || !currentSessionId) {
+  /** 侧栏已发布列表中的当前会话元数据（切换时用于乐观展示 Bin 工作区） */
+  const currentPublishedSessionMeta = useMemo(() => {
+    if (!currentSessionId) return null;
+    return publishedSessions.find((s) => s.id === currentSessionId) ?? null;
+  }, [currentSessionId, publishedSessions]);
+
+  /** 是否进入执行 UI：以 tiktok_campaign.status 为准（running / paused / completed） */
+  const isExecutionPhaseGlobal = shouldShowBinComputerPanel({
+    campaignId: resolvedCampaignId,
+    campaignStatus: resolvedCampaignStatus,
+  });
+
+  /** 已发布会话、列表显示可执行，但 campaign 接口尚未返回（避免闪上一份执行数据） */
+  const isResolvingCampaign =
+    !!currentSessionId &&
+    !isExecutionPhaseGlobal &&
+    !!currentPublishedSessionMeta?.campaignId &&
+    isExecutionUiCampaignStatus(
+      currentPublishedSessionMeta.campaignStatus || "running"
+    );
+
+  const showBinComputerPanelEffective =
+    isExecutionPhaseGlobal || isResolvingCampaign;
+
+  const refreshSessionCampaignFromDb = useCallback(async (sessionId) => {
+    if (!sessionId) {
       setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
       resolveCampaignSessionRef.current = null;
       return;
     }
 
-    const sessionId = currentSessionId;
     const reqId = ++resolveCampaignRequestRef.current;
     const sessionChanged = resolveCampaignSessionRef.current !== sessionId;
     resolveCampaignSessionRef.current = sessionId;
     if (sessionChanged) {
-      setResolvedCampaignId(null);
       setExecutionStatus(null);
       setExecutionConfig(null);
       setExecutionError(null);
     }
 
-    let cancelled = false;
+    try {
+      const res = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/campaign`,
+        { credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (reqId !== resolveCampaignRequestRef.current) return;
 
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/campaign`,
-          { credentials: "include" }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (cancelled || reqId !== resolveCampaignRequestRef.current) return;
+      if (!res.ok || !data.success || !data.campaignId) {
+        setResolvedCampaignId(null);
+        setResolvedCampaignStatus(null);
+        return;
+      }
 
-        if (!res.ok || !data.success || !data.campaignId) {
-          setResolvedCampaignId(null);
-          return;
-        }
+      const dbCampaignId = String(data.campaignId);
+      const dbStatus =
+        typeof data.status === "string" && data.status.trim()
+          ? data.status.trim()
+          : "running";
+      setResolvedCampaignId(dbCampaignId);
+      setResolvedCampaignStatus(dbStatus);
+      loadCampaignSessions({ silent: true }).catch(() => {});
 
-        const dbCampaignId = String(data.campaignId);
-        setResolvedCampaignId(dbCampaignId);
-        loadCampaignSessions({ silent: true }).catch(() => {});
-
+      if (isExecutionUiCampaignStatus(dbStatus)) {
         setContext((prev) => {
-          if (!prev || prev.campaignId === dbCampaignId) return prev;
-          const next = { ...prev, campaignId: dbCampaignId };
+          const base = prev && typeof prev === "object" ? prev : {};
+          const needsPatch =
+            base.campaignId !== dbCampaignId ||
+            base.published !== true ||
+            base.workflowState !== "published";
+          if (!needsPatch) return prev;
+          const next = {
+            ...base,
+            campaignId: dbCampaignId,
+            published: true,
+            workflowState: "published",
+          };
           fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
             method: "PUT",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ context: next }),
           }).catch((err) => {
-            console.warn("[HomePage] 同步 context.campaignId 失败:", err);
+            console.warn("[HomePage] 同步执行阶段 context 失败:", err);
           });
           return next;
         });
-      } catch (e) {
-        if (!cancelled && reqId === resolveCampaignRequestRef.current) {
-          console.error("[HomePage] 解析 session campaign 失败:", e);
-          setResolvedCampaignId(null);
-        }
       }
-    })();
+    } catch (e) {
+      if (reqId === resolveCampaignRequestRef.current) {
+        console.error("[HomePage] 解析 session campaign 失败:", e);
+        setResolvedCampaignId(null);
+        setResolvedCampaignStatus(null);
+      }
+    }
+  }, []);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSessionId, isExecutionPhaseGlobal]);
+  // 切换会话时按 DB 解析 tiktok_campaign；已发布列表元数据用于切换瞬间乐观展示
+  useEffect(() => {
+    if (!currentSessionId) {
+      setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
+      resolveCampaignSessionRef.current = null;
+      return;
+    }
+    const pub = publishedSessions.find((s) => s.id === currentSessionId);
+    if (
+      pub?.campaignId &&
+      isExecutionUiCampaignStatus(pub.campaignStatus || "running")
+    ) {
+      setResolvedCampaignId(String(pub.campaignId));
+      setResolvedCampaignStatus(pub.campaignStatus || "running");
+    } else if (!pub) {
+      setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
+    }
+    refreshSessionCampaignFromDb(currentSessionId);
+  }, [currentSessionId, refreshSessionCampaignFromDb, publishedSessions]);
 
   useEffect(() => {
     binComputerViewRef.current = binComputerView;
@@ -2977,12 +3247,11 @@ export default function HomePage() {
                   }
 
                   const nextCtx = data.data.context;
-                  if (
-                    nextCtx?.campaignId &&
-                    (nextCtx.workflowState === "published" || nextCtx.published)
-                  ) {
-                    setResolvedCampaignId(String(nextCtx.campaignId));
-                    fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+                  if (nextCtx?.campaignId) {
+                    const cid = String(nextCtx.campaignId);
+                    setResolvedCampaignId(cid);
+                    setResolvedCampaignStatus("running");
+                    fetch(`/api/campaigns/${cid}/report-config`, {
                       credentials: "include",
                     })
                       .then((r) => r.json())
@@ -2992,13 +3261,17 @@ export default function HomePage() {
                       .catch(() => {});
                   }
 
-                  // 发布成功后刷新左侧草稿/已发布列表（服务端已把 status 置为 published）
                   const ctxAfter = data.data.context;
                   if (
                     ctxAfter?.published ||
-                    ctxAfter?.workflowState === "published"
+                    ctxAfter?.workflowState === "published" ||
+                    ctxAfter?.campaignId
                   ) {
                     loadCampaignSessions({ silent: true }).catch(() => {});
+                    const sid = sessionIdForChat || currentSessionId;
+                    if (sid) {
+                      refreshSessionCampaignFromDb(sid).catch(() => {});
+                    }
                   }
 
                   // 消息发送完成后，更新会话（延迟保存，避免频繁请求）
@@ -3039,12 +3312,11 @@ export default function HomePage() {
           }
 
           const nextCtx = data.context;
-          if (
-            nextCtx?.campaignId &&
-            (nextCtx.workflowState === "published" || nextCtx.published)
-          ) {
-            setResolvedCampaignId(String(nextCtx.campaignId));
-            fetch(`/api/campaigns/${nextCtx.campaignId}/report-config`, {
+          if (nextCtx?.campaignId) {
+            const cid = String(nextCtx.campaignId);
+            setResolvedCampaignId(cid);
+            setResolvedCampaignStatus("running");
+            fetch(`/api/campaigns/${cid}/report-config`, {
               credentials: "include",
             })
               .then((r) => r.json())
@@ -3052,6 +3324,11 @@ export default function HomePage() {
                 if (d.success) setExecutionConfig(d);
               })
               .catch(() => {});
+            const sid = sessionIdForChat || currentSessionId;
+            if (sid) {
+              refreshSessionCampaignFromDb(sid).catch(() => {});
+            }
+            loadCampaignSessions({ silent: true }).catch(() => {});
           }
         }
       }
@@ -3731,7 +4008,7 @@ export default function HomePage() {
     messages[0].name === "Bin";
 
   // 仅已发布 campaign 展示「Bin的电脑」；草稿/发布对话阶段中间栏占满
-  const showBinComputerPanel = !isEmptyState && isExecutionPhaseGlobal;
+  const showBinComputerPanel = !isEmptyState && showBinComputerPanelEffective;
 
   // 新建一条服务端草稿并进入对话区（不再进入无会话的欢迎顶栏页）
   async function createDraftSessionAndActivate() {
@@ -3978,6 +4255,8 @@ export default function HomePage() {
     }
     cancelRenameSession();
     setSessionRowMenuId(null);
+    setAccountMenuOpen(false);
+    setRechargeModalOpen(false);
     setAuthUser(null);
     setCurrentSessionId(null);
     clearChatPersistenceKeys();
@@ -4510,7 +4789,7 @@ export default function HomePage() {
             <>
               {/* 只有在存在草稿 / 已发布会话，或加载/拉取出错时，才展示下方列表，避免在完全空状态点击发布按钮时闪烁文字 */}
               {(sessionsError ||
-                campaignSessions.length > 0 ||
+                draftCampaignSessions.length > 0 ||
                 publishedSessions.length > 0) && (
                 <>
                   {/* Campaign 草稿列表（仅在有草稿时展示） */}
@@ -4566,7 +4845,7 @@ export default function HomePage() {
                     重试
                   </button>
             </div>
-          ) : campaignSessions.length === 0 ? (
+          ) : draftCampaignSessions.length === 0 ? (
                       <div
                         style={{
                           padding: "4px 0 8px",
@@ -4585,7 +4864,7 @@ export default function HomePage() {
                           marginBottom: 4,
                         }}
                       >
-              {campaignSessions.map((session) => {
+              {draftCampaignSessions.map((session) => {
                 const isActive = session.id === currentSessionId;
                 return (
                   <div
@@ -4930,22 +5209,19 @@ export default function HomePage() {
               gap: 8,
             }}
           >
-            <button
-              type="button"
-              onClick={handleLogout}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                fontSize: 12,
-                color: "#6B7280",
-                background: "#FFFFFF",
-                border: "1px solid #E5E7EB",
-                borderRadius: 8,
-                cursor: "pointer",
+            <SidebarAccountMenu
+              user={authUser}
+              menuOpen={accountMenuOpen}
+              onToggleMenu={() => setAccountMenuOpen((open) => !open)}
+              onRecharge={() => {
+                setAccountMenuOpen(false);
+                setRechargeModalOpen(true);
               }}
-            >
-              退出登录
-            </button>
+              onLogout={() => {
+                setAccountMenuOpen(false);
+                void handleLogout();
+              }}
+            />
             {authUser.isAdmin ? (
               <>
                 <a
@@ -5510,8 +5786,7 @@ export default function HomePage() {
             }}>
               {/* 显示右侧 Agent 工作区域：根据 workflowState 在「发布阶段」和「执行阶段」之间切换布局 */}
               {(() => {
-                const isExecutionPhase =
-                  context?.workflowState === "published" || context?.published === true;
+                const isExecutionPhase = isExecutionPhaseGlobal;
                 const lastMessage = messages[messages.length - 1];
 
                 // 执行总览数据来自 report-config / work-notes / execution-status，不依赖 lastMessage.thinking
@@ -6130,7 +6405,7 @@ export default function HomePage() {
                   );
                 }
 
-                const { browserSteps, screenshots, influencerAnalyses, source } =
+                const { browserSteps, screenshots, influencerAnalyses } =
                   workLiveThinking || {};
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
@@ -6188,39 +6463,6 @@ export default function HomePage() {
                 const currentScreenshot = (screenshots && screenshots.length > 0)
                   ? screenshots.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
                   : null;
-
-                // 浏览器标题：显示“正在浏览 xx网址”，忽略“滚动/滑动”等技术细节
-                let browserStatusLabel = "浏览器";
-                const allScreenshotsSorted = (screenshots || []).slice().sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-                const isScrollLabel = (label) =>
-                  typeof label === "string" && /滚动|滑动|scroll/i.test(label);
-                const buildBrowseText = (label) => {
-                  if (!label) return null;
-                  const urlMatch = label.match(/https?:\/\/[^\s)]+/);
-                  if (urlMatch && urlMatch[0]) {
-                    return `正在浏览 ${urlMatch[0]}`;
-                  }
-                  return label;
-                };
-
-                if (currentScreenshot && currentScreenshot.label) {
-                  if (!isScrollLabel(currentScreenshot.label)) {
-                    browserStatusLabel = buildBrowseText(currentScreenshot.label) || "浏览器";
-                  } else {
-                    // 当前是滚动等操作时，回退到最近一个“非滚动”截图的地址
-                    const stableShot = [...allScreenshotsSorted]
-                      .reverse()
-                      .find(s => s.label && !isScrollLabel(s.label));
-                    if (stableShot) {
-                      browserStatusLabel = buildBrowseText(stableShot.label) || "浏览器";
-                    }
-                  }
-                }
-
-                if (source?.workerHost || source?.workerId) {
-                  const workerLabel = source.workerHost || source.workerId;
-                  browserStatusLabel = `${browserStatusLabel}（${workerLabel}）`;
-                }
 
                 const liveTopTitle = isExecutionPhase ? "红人画像分析" : "红人画像确认";
                 return (
@@ -6424,7 +6666,7 @@ export default function HomePage() {
                       borderBottom: "1px solid #E5E7EB"
                     }}>
                         <span className={currentScreenshot ? "browser-status-blink" : undefined}>
-                          {browserStatusLabel}
+                          浏览器
                         </span>
                       </div>
                       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -6466,6 +6708,82 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {rechargeModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(255, 255, 255, 0.65)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+          onClick={() => setRechargeModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-labelledby="recharge-modal-title"
+            style={{
+              width: "100%",
+              maxWidth: 380,
+              background: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+              borderRadius: 14,
+              padding: "28px 24px",
+              boxShadow:
+                "0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 40px rgba(15, 23, 42, 0.08)",
+              boxSizing: "border-box",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              id="recharge-modal-title"
+              style={{
+                color: "#111827",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 6,
+                letterSpacing: "-0.02em",
+              }}
+            >
+              充值请联系 Maxin AI 销售
+            </div>
+            <div
+              style={{
+                color: "#6B7280",
+                fontSize: 13,
+                marginBottom: 22,
+                lineHeight: 1.55,
+              }}
+            >
+              当前支持线下签约与对公转账。如需充值或开具发票，请联系您的 Maxin AI 客户经理。
+            </div>
+            <button
+              type="button"
+              onClick={() => setRechargeModalOpen(false)}
+              style={{
+                width: "100%",
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FFFFFF",
+                color: "#111827",
+                fontSize: 14,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
 
       {loginOpen && (
         <div
