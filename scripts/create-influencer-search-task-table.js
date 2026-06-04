@@ -57,6 +57,13 @@ async function ensureIndex(table, indexName, ddl) {
   return true;
 }
 
+async function dropIndexIfExists(table, indexName) {
+  const ok = await indexExists(table, indexName);
+  if (!ok) return false;
+  await queryTikTok(`ALTER TABLE ${table} DROP INDEX ${indexName}`);
+  return true;
+}
+
 function splitSqlStatements(sqlText) {
   const lines = String(sqlText || "").split("\n");
   const withoutComments = lines
@@ -94,16 +101,66 @@ async function main() {
   if (await ensureColumn(taskTable, "worker_ip", "worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("task.worker_ip");
   if (await ensureColumn(taskTable, "last_progress_at", "last_progress_at DATETIME NULL COMMENT '最近一次确认任务有推进的时间（用于 stuck 回收）'")) changed.push("task.last_progress_at");
   if (await ensureColumn(taskTable, "progress_analyzed_count", "progress_analyzed_count INT NOT NULL DEFAULT 0 COMMENT '候选写入尝试数（包含重复/INSERT IGNORE）'")) changed.push("task.progress_analyzed_count");
+  if (
+    await ensureColumn(
+      taskTable,
+      "platform",
+      "platform VARCHAR(24) NOT NULL DEFAULT 'tiktok' COMMENT '投放平台 slug：tiktok|instagram|youtube'"
+    )
+  ) {
+    changed.push("task.platform");
+  }
 
-  // indexes / unique key
+  try {
+    await queryTikTok(
+      `
+      UPDATE ${taskTable}
+      SET platform = LOWER(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.platform')), ''))
+      WHERE JSON_EXTRACT(payload, '$.platform') IS NOT NULL
+        AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.platform')) != ''
+    `
+    );
+  } catch {
+    /* ignore backfill errors */
+  }
+
+  // indexes / unique key（同 run 同关键词可多平台各一条）
   if (await ensureIndex(taskTable, "idx_campaign_run", "INDEX idx_campaign_run (campaign_id, run_id)")) changed.push("task.idx_campaign_run");
   if (await ensureIndex(taskTable, "idx_session_status", "INDEX idx_session_status (session_id, status)")) changed.push("task.idx_session_status");
   if (await ensureIndex(taskTable, "idx_keyword", "INDEX idx_keyword (campaign_id, keyword, created_at)")) changed.push("task.idx_keyword");
   if (await ensureIndex(taskTable, "idx_worker_host_ip_status", "INDEX idx_worker_host_ip_status (worker_host, worker_ip, status)")) changed.push("task.idx_worker_host_ip_status");
-  if (await ensureIndex(taskTable, "uk_campaign_run_keyword", "UNIQUE KEY uk_campaign_run_keyword (campaign_id, run_id, keyword)")) changed.push("task.uk_campaign_run_keyword");
+  if (await dropIndexIfExists(taskTable, "uk_campaign_run_keyword")) changed.push("task.drop_uk_campaign_run_keyword");
+  if (
+    await ensureIndex(
+      taskTable,
+      "uk_campaign_run_keyword_platform",
+      "UNIQUE KEY uk_campaign_run_keyword_platform (campaign_id, run_id, keyword, platform)"
+    )
+  ) {
+    changed.push("task.uk_campaign_run_keyword_platform");
+  }
 
   const resultTable = "tiktok_keyword_run_result";
   if (await ensureColumn(resultTable, "assigned_worker_ip", "assigned_worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("result.assigned_worker_ip");
+  if (
+    await ensureColumn(
+      resultTable,
+      "platform",
+      "platform VARCHAR(24) NOT NULL DEFAULT 'tiktok' COMMENT '投放平台 slug：tiktok|instagram|youtube'"
+    )
+  ) {
+    changed.push("result.platform");
+  }
+  if (await dropIndexIfExists(resultTable, "uk_campaign_run_keyword")) changed.push("result.drop_uk_campaign_run_keyword");
+  if (
+    await ensureIndex(
+      resultTable,
+      "uk_campaign_run_keyword_platform",
+      "UNIQUE KEY uk_campaign_run_keyword_platform (campaign_id, run_id, keyword, platform)"
+    )
+  ) {
+    changed.push("result.uk_campaign_run_keyword_platform");
+  }
   if (await ensureIndex(resultTable, "idx_worker_ip_time", "INDEX idx_worker_ip_time (assigned_worker_host, assigned_worker_ip, created_at)")) changed.push("result.idx_worker_ip_time");
 
   if (changed.length) {

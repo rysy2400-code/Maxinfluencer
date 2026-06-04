@@ -123,6 +123,7 @@ async function upsertKeywordRunResult({
   taskId,
   keyword,
   keywordType = "new",
+  platform = "tiktok",
   workerId,
   workerHost,
   workerIp,
@@ -130,6 +131,7 @@ async function upsertKeywordRunResult({
 }) {
   if (!campaignId || !runId || !keyword) return;
   const score = calcKeywordScore(metrics);
+  const platformSlug = String(platform || "tiktok").trim().toLowerCase() || "tiktok";
 
   await queryTikTok(
     `
@@ -139,6 +141,7 @@ async function upsertKeywordRunResult({
       run_id,
       task_id,
       keyword,
+      platform,
       keyword_type,
       assigned_worker,
       assigned_worker_host,
@@ -151,10 +154,12 @@ async function upsertKeywordRunResult({
       fail_reason,
       elapsed_ms,
       score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
+      task_id = VALUES(task_id),
       assigned_worker = VALUES(assigned_worker),
       assigned_worker_host = VALUES(assigned_worker_host),
+      assigned_worker_ip = VALUES(assigned_worker_ip),
       search_count = VALUES(search_count),
       enrich_success_count = VALUES(enrich_success_count),
       analyze_recommended_count = VALUES(analyze_recommended_count),
@@ -171,6 +176,7 @@ async function upsertKeywordRunResult({
       runId,
       taskId || null,
       keyword,
+      platformSlug,
       keywordType || "new",
       workerId || null,
       workerHost || null,
@@ -436,6 +442,7 @@ async function processTask(task, platformSlug) {
       taskId: task.id,
       keyword: taskKeyword || "(llm_empty)",
       keywordType: taskKeywordType,
+      platform: taskPlatformSlug,
       workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
@@ -501,6 +508,7 @@ async function processTask(task, platformSlug) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
+      platform: taskPlatformSlug,
       workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
@@ -538,6 +546,7 @@ async function processTask(task, platformSlug) {
       taskId: task.id,
       keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
+      platform: taskPlatformSlug,
       workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
@@ -586,13 +595,14 @@ async function processTask(task, platformSlug) {
     sessionId,
     runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
     taskId: task.id,
-    keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
-    keywordType: taskKeywordType,
-    workerId: platformWorkerId,
-    workerHost: CURRENT_WORKER_HOST,
-    workerIp: CURRENT_WORKER_IP,
-    metrics: {
-      searchCount: Number(result?.videos?.length || 0),
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
+      keywordType: taskKeywordType,
+      platform: taskPlatformSlug,
+      workerId: platformWorkerId,
+      workerHost: CURRENT_WORKER_HOST,
+      workerIp: CURRENT_WORKER_IP,
+      metrics: {
+        searchCount: Number(result?.videos?.length || 0),
       enrichSuccessCount: Number(result?.influencers?.length || 0),
       analyzeRecommendedCount: Number((result?.influencers || []).filter((x) => x && x.isRecommended).length || 0),
       insertCandidateCount: Number(result?.influencers?.length || 0),
