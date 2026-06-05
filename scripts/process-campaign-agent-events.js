@@ -268,9 +268,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
 /**
  * 处理 creator_replied_special_request：红人回复特殊请求。
- * 当 specialRequestStatus === "resolved" 时：
- * - 更新 tiktok_campaign_execution.last_event 记录结论
- * - 若配置了 BRAND_NOTIFICATION_EMAIL，发邮件告知品牌方好消息
+ * - 更新 tiktok_campaign_execution.last_event 记录结论（不自动改 flat_fee / stage）
+ * - resolved / pending_brand 均追加 Bin 消息到广告主 session
  */
 async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id;
@@ -311,8 +310,8 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
     [JSON.stringify(summary), campaignId, ...paramsExecutionCreatorMatch(influencerId)]
   );
 
-  // 红人同意时，向该 campaign 关联的 session 追加一条 Bin 消息，品牌方在前端聊天框可见
-  if (specialRequestStatus === "resolved") {
+  // 同步广告主聊天：红人同意或需品牌决策时均通知（不自动改 flat_fee）
+  if (specialRequestStatus === "resolved" || specialRequestStatus === "pending_brand") {
     try {
       const rows = await queryTikTok(
         "SELECT session_id FROM tiktok_campaign WHERE id = ? LIMIT 1",
@@ -320,7 +319,14 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
       );
       const sessionId = rows?.[0]?.session_id || null;
       if (sessionId) {
-        const content = `【特殊请求已达成一致】\n\n红人已同意本轮特殊请求。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n执行表已更新，可在 Campaign 执行详情中查看。`;
+        const handleHint =
+          typeof influencerId === "string" && influencerId && !/^\d+$/.test(influencerId)
+            ? `@${influencerId.replace(/^@/, "")}`
+            : `@${influencerId}`;
+        const content =
+          specialRequestStatus === "resolved"
+            ? `【特殊请求已达成一致】\n\n红人 ${handleHint} 已同意本轮特殊请求。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数，如需调整请在本对话中确认后再操作。）`
+            : `【特殊请求 · 待您决策】\n\n红人 ${handleHint} 已对本轮询问作出回复，需要您确认下一步。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数；您可继续协商或在本对话中明确指示。）`;
         const result = await appendBinMessageToSession(sessionId, content);
         if (!result.success) {
           console.warn(
