@@ -16,9 +16,20 @@ if ($env:CHROME_VISIBLE) {
   $v = "$($env:CHROME_VISIBLE)".ToLowerInvariant()
   $visible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
 }
-$chromeModeArgs = if ($visible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
 $launchUrl = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "about:blank" }
-$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=$chromeDir --no-first-run --no-default-browser-check $launchUrl"
+$chromeArgList = @(
+  "--remote-debugging-address=127.0.0.1",
+  "--remote-debugging-port=9222",
+  "--user-data-dir=$chromeDir",
+  "--no-first-run",
+  "--no-default-browser-check",
+  $launchUrl
+)
+if (-not $visible) {
+  $chromeArgList = @("--headless=new", "--disable-gpu") + $chromeArgList
+} else {
+  $chromeArgList = @("--disable-gpu") + $chromeArgList
+}
 
 function Stop-Chrome9222 {
   Get-CimInstance Win32_Process | Where-Object {
