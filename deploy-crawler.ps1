@@ -228,6 +228,9 @@ Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAn
 
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
 if (-not (Test-Path $chromeDir9222)) { New-Item -ItemType Directory -Path $chromeDir9222 | Out-Null }
+$chromeRestartSignalFile = "C:\maxinfluencer\signals\restart-chrome-9222.flag"
+$chromeRestartSignalDir = Split-Path $chromeRestartSignalFile -Parent
+if (-not (Test-Path $chromeRestartSignalDir)) { New-Item -ItemType Directory -Path $chromeRestartSignalDir -Force | Out-Null }
 
 $isVisible = $true
 if ($env:CHROME_VISIBLE) {
@@ -241,18 +244,15 @@ $guard9222 = Join-Path $scriptsDir "guard-chrome-9222.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
+$guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
-`$chrome = "$($chromeExe.Replace("\", "\\"))"
-`$args = "$chromeModeArgs --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=$($chromeDir9222.Replace("\", "\\")) --no-first-run --no-default-browser-check $launchUrl9222"
-while (`$true) {
-  `$mine = Get-CimInstance Win32_Process | Where-Object {
-    (`$_.Name -match "chrome|msedge") -and
-    (`$_.CommandLine -match "remote-debugging-port=9222")
-  }
-  if (-not `$mine) { Start-Process -FilePath `$chrome -ArgumentList `$args | Out-Null }
-  Start-Sleep -Seconds 8
-}
+`$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
+`$env:CHROME_9222_USER_DATA_DIR = "$($chromeDir9222.Replace("\", "\\"))"
+`$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
+`$env:CHROME_VISIBLE = "$($env:CHROME_VISIBLE)"
+`$env:CHROME_9222_URL = "$launchUrl9222"
+. "$($guard9222Source.Replace("\", "\\"))"
 "@
 
 $guardCrawlerContent = @"
@@ -267,6 +267,8 @@ $guardCrawlerContent = @"
 `$env:WORK_LIVE_PUSH_SECRET = ""
 `$env:CDP_ENDPOINT = "$($searchCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
 `$env:CDP_ENDPOINT_ENRICH = "$($enrichCdpEndpoint.Replace("\", "\\").Replace('"','\"'))"
+`$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
+`$env:CDP_9222_SESSION_LOCK = "true"
 `$env:SEARCH_WORKER_SLOTS = "$searchWorkerSlots"
 `$env:CDP_9222_MODE = "$cdp9222Mode"
 `$env:CDP_9222_LOCK_TIMEOUT_MS = "$cdp9222LockTimeoutMs"
