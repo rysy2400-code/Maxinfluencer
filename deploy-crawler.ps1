@@ -240,11 +240,11 @@ if ($env:CHROME_VISIBLE) {
 $chromeModeArgs = if ($isVisible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
 $launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "about:blank" }
 
-$guard9222 = Join-Path $scriptsDir "guard-chrome-9222.ps1"
+$guard9222 = Join-Path $scriptsDir "run-guard-chrome-9222.ps1"
+$guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
-$guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
