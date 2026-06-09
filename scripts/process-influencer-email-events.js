@@ -17,7 +17,10 @@ import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
-import { loadConversationHistoryForInfluencer } from "../lib/agents/influencer-agent.js";
+import {
+  loadConversationHistoryForInfluencer,
+  stripBudgetFromCampaignInfo,
+} from "../lib/agents/influencer-agent.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import {
@@ -81,7 +84,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
     influencerSnapshot: parseJsonOrObject(r.influencer_snapshot),
     lastEvent: parseJsonOrObject(r.last_event),
     productInfo: parseJsonOrObject(r.product_info),
-    campaignInfo: parseJsonOrObject(r.campaign_info),
+    campaignInfo: stripBudgetFromCampaignInfo(parseJsonOrObject(r.campaign_info)),
   }));
 }
 
