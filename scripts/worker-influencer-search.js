@@ -460,6 +460,10 @@ async function processTask(task, platformSlug) {
 
   const defaultTarget = Math.max(influencersPerDay * 2, 10);
   const target = requestedBatch > 0 ? requestedBatch : defaultTarget;
+  const searchPoolMax = Math.max(
+    target,
+    Number(process.env.SEARCH_MAX_POOL_SIZE || 500)
+  );
   let result = null;
   try {
     const primaryKeyword =
@@ -479,8 +483,8 @@ async function processTask(task, platformSlug) {
         campaignId,
       },
       {
-        maxResults: target,
-        maxEnrichCount: target,
+        maxResults: searchPoolMax,
+        maxEnrichCount: searchPoolMax,
         enrichProfileData: true,
         platform: taskPlatformSlug,
         taskId: task.id,
