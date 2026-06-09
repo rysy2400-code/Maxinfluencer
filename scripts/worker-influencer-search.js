@@ -427,6 +427,7 @@ async function processTask(task, platformSlug) {
         influencerProfile,
         userMessage: payload.userMessage || "",
         keywordStrategy: keywordStrategy || "",
+        targetPlatform: taskPlatformSlug,
       });
 
   if (
