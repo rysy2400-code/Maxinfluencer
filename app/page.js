@@ -3247,11 +3247,20 @@ export default function HomePage() {
                   }
 
                   const nextCtx = data.data.context;
-                  if (nextCtx?.campaignId) {
-                    const cid = String(nextCtx.campaignId);
-                    setResolvedCampaignId(cid);
-                    setResolvedCampaignStatus("running");
-                    fetch(`/api/campaigns/${cid}/report-config`, {
+                  const didModifyCampaign =
+                    data.data.thinking?.toolCall?.toolName === "modify_campaign" ||
+                    data.data.thinking?.subAgentResult?.action === "modify_campaign";
+                  const cidForRefresh = nextCtx?.campaignId
+                    ? String(nextCtx.campaignId)
+                    : resolvedCampaignId
+                      ? String(resolvedCampaignId)
+                      : null;
+                  if (cidForRefresh && (nextCtx?.campaignId || didModifyCampaign)) {
+                    if (nextCtx?.campaignId) {
+                      setResolvedCampaignId(cidForRefresh);
+                      setResolvedCampaignStatus("running");
+                    }
+                    fetch(`/api/campaigns/${cidForRefresh}/report-config`, {
                       credentials: "include",
                     })
                       .then((r) => r.json())
@@ -3312,11 +3321,20 @@ export default function HomePage() {
           }
 
           const nextCtx = data.context;
-          if (nextCtx?.campaignId) {
-            const cid = String(nextCtx.campaignId);
-            setResolvedCampaignId(cid);
-            setResolvedCampaignStatus("running");
-            fetch(`/api/campaigns/${cid}/report-config`, {
+          const didModifyCampaign =
+            data.thinking?.toolCall?.toolName === "modify_campaign" ||
+            data.thinking?.subAgentResult?.action === "modify_campaign";
+          const cidForRefresh = nextCtx?.campaignId
+            ? String(nextCtx.campaignId)
+            : resolvedCampaignId
+              ? String(resolvedCampaignId)
+              : null;
+          if (cidForRefresh && (nextCtx?.campaignId || didModifyCampaign)) {
+            if (nextCtx?.campaignId) {
+              setResolvedCampaignId(cidForRefresh);
+              setResolvedCampaignStatus("running");
+            }
+            fetch(`/api/campaigns/${cidForRefresh}/report-config`, {
               credentials: "include",
             })
               .then((r) => r.json())
@@ -5926,12 +5944,16 @@ export default function HomePage() {
                                   {campaignSummary?.publishTimeRange ?? "未设置"}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>预算：</span>
-                                  {campaignSummary?.budget ?? "未设置"}
+                                  <span style={{ fontWeight: 600 }}>总预算：</span>
+                                  {campaignSummary?.totalBudget ?? campaignSummary?.budget ?? "未设置"}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>佣金：</span>
                                   {campaignSummary?.commission ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>单位红人报价策略：</span>
+                                  {campaignSummary?.pricingStrategy ?? "未设置"}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
