@@ -2897,6 +2897,16 @@ export default function HomePage() {
     }
   }, [resolvedCampaignId]);
 
+  const refreshAuthUser = useCallback(async () => {
+    try {
+      const r = await fetch("/api/auth/me", { credentials: "include" });
+      const d = await r.json().catch(() => ({}));
+      if (d.success && d.user) setAuthUser(d.user);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const patchExecution = useCallback(
     async (action, influencerId, payload = {}) => {
       const cid = resolvedCampaignId;
@@ -2905,12 +2915,16 @@ export default function HomePage() {
       try {
         const res = await fetch(`/api/campaigns/${cid}/execution`, {
           method: "PATCH",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ influencerId, action, payload }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || "更新失败");
         await refreshExecutionStatusQuiet();
+        if (action === "approveQuote") {
+          await refreshAuthUser();
+        }
       } catch (err) {
         console.error(err);
         alert(err.message || "更新失败");
@@ -2918,7 +2932,7 @@ export default function HomePage() {
         setExecPatchingId(null);
       }
     },
-    [resolvedCampaignId, refreshExecutionStatusQuiet]
+    [resolvedCampaignId, refreshExecutionStatusQuiet, refreshAuthUser]
   );
 
   const exportExecutionStage = useCallback(
@@ -6040,17 +6054,29 @@ export default function HomePage() {
                                       const timeLabel = formatWorkNoteDateTime(item?.time);
                                       const keyword = item?.keyword || "（未命名关键词）";
                                       const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
+                                      const searchFound =
+                                        item?.searchFoundCount != null &&
+                                        !Number.isNaN(Number(item.searchFoundCount))
+                                          ? Number(item.searchFoundCount)
+                                          : null;
                                       const browsed =
                                         item?.browsedCount != null && !Number.isNaN(Number(item.browsedCount))
                                           ? Number(item.browsedCount)
                                           : item?.extractedCount != null && !Number.isNaN(Number(item.extractedCount))
                                             ? Number(item.extractedCount)
                                             : null;
+                                      const analyzed =
+                                        item?.extractedCount != null &&
+                                        !Number.isNaN(Number(item.extractedCount))
+                                          ? Number(item.extractedCount)
+                                          : browsed;
                                       const matched = item?.matchedCount;
                                       const resultText =
-                                        browsed == null || matched == null
+                                        searchFound == null && analyzed == null && matched == null
                                           ? ""
-                                          : `已浏览 ${browsed} 位红人主页，${matched} 位符合红人画像要求。`;
+                                          : searchFound != null
+                                            ? `搜索到 ${searchFound} 个频道，已分析 ${analyzed ?? 0} 位，${matched ?? 0} 位符合红人画像要求。`
+                                            : `已浏览 ${browsed ?? analyzed ?? 0} 位红人主页，${matched ?? 0} 位符合红人画像要求。`;
                                       const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
                                       const libraryLabel =
                                         item?.libraryLabel ||

@@ -4,8 +4,10 @@ import {
   getExecutionRow,
   updateExecutionStage,
 } from "../../../../../lib/db/campaign-dao.js";
-import { resolveNeedSample } from "../../../../../lib/execution/need-sample.js";
 import { enqueueAdvertiserExecutionFollowup } from "../../../../../lib/execution/enqueue-advertiser-followup.js";
+import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
+import { assertUserCanAccessCampaign } from "../../../../../lib/auth/campaign-access.js";
+import { executeApproveQuote } from "../../../../../lib/execution/approve-quote.js";
 
 /**
  * PATCH /api/campaigns/[id]/execution
@@ -15,11 +17,35 @@ import { enqueueAdvertiserExecutionFollowup } from "../../../../../lib/execution
  */
 export async function PATCH(req, { params }) {
   try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json(
+        { success: false, error: "请先登录" },
+        { status: 401 }
+      );
+    }
+
     const { id: campaignId } = params;
     if (!campaignId) {
       return NextResponse.json(
         { success: false, error: "缺少 campaign ID" },
         { status: 400 }
+      );
+    }
+
+    const access = await assertUserCanAccessCampaign(campaignId, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            access.status === 403
+              ? "无权操作该 Campaign"
+              : access.status === 404
+                ? "Campaign 不存在"
+                : "无权操作",
+        },
+        { status: access.status }
       );
     }
 
@@ -104,10 +130,26 @@ export async function PATCH(req, { params }) {
         lastEvent = { draftLink: payload.draftLink || payload };
         break;
       case "approveQuote": {
-        const needSample = resolveNeedSample(campaign.productInfo);
-        stage = needSample ? "pending_sample" : "pending_draft";
-        lastEvent = { quoteApprovedAt: new Date().toISOString() };
-        break;
+        const chargeResult = await executeApproveQuote({
+          campaignId,
+          influencerId,
+          advertiserId: auth.advertiserId,
+          advertiserUserId: auth.advertiserUserId,
+          payload,
+        });
+        if (!chargeResult.success) {
+          return NextResponse.json(
+            { success: false, error: chargeResult.message },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          stage: chargeResult.stage,
+          chargedAmount: chargeResult.chargedAmount,
+          balanceAfter: chargeResult.balanceAfter,
+          message: chargeResult.alreadyProcessed ? "已同意报价" : "更新成功",
+        });
       }
       case "rejectQuote": {
         const rejectReason = String(payload.rejectReason || "").trim();

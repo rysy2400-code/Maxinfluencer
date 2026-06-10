@@ -26,7 +26,15 @@ export async function POST(req) {
         );
       }
     }
-    const context = sessionId ? { ...rawContext, sessionId } : { ...rawContext };
+    const advertiserAuth = {
+      advertiserId: auth.advertiserId,
+      advertiserUserId: auth.advertiserUserId,
+      isAdmin: auth.isAdmin,
+      companyName: auth.companyName,
+    };
+    const context = sessionId
+      ? { ...rawContext, sessionId, advertiserAuth }
+      : { ...rawContext, advertiserAuth };
     const stream = body.stream !== false; // 默认启用流式传输
 
     if (!messages.length) {
