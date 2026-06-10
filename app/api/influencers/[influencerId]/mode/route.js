@@ -3,9 +3,13 @@ import {
   getInfluencerHandoverMode,
   setInfluencerHandoverMode,
 } from "../../../../../lib/db/influencer-handover-dao.js";
+import { requireInboxAdmin } from "../../../../../lib/auth/influencer-inbox-auth-http.js";
 
-export async function GET(_req, { params }) {
+export async function GET(req, { params }) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const influencerId = params?.influencerId;
     if (!influencerId) {
       return NextResponse.json(
@@ -26,6 +30,9 @@ export async function GET(_req, { params }) {
 
 export async function PATCH(req, { params }) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const influencerId = params?.influencerId;
     if (!influencerId) {
       return NextResponse.json(

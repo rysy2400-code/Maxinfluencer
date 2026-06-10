@@ -13,6 +13,7 @@ import {
   buildTraceIdFromInboundMessageId,
   buildTraceIdFromSourceKey,
 } from "../../../../../../lib/utils/timeline-ids.js";
+import { requireInboxAdmin } from "../../../../../../lib/auth/influencer-inbox-auth-http.js";
 
 function nonEmpty(v) {
   const s = v == null ? "" : String(v).trim();
@@ -21,6 +22,9 @@ function nonEmpty(v) {
 
 export async function POST(req, { params }) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const influencerId = params?.influencerId;
     if (!influencerId) {
       return NextResponse.json(

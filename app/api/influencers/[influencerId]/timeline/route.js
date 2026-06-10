@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { decodeCursor } from "../../../../../lib/utils/cursor.js";
 import { listTimelineEvents } from "../../../../../lib/db/influencer-timeline-dao.js";
+import { requireInboxAdmin } from "../../../../../lib/auth/influencer-inbox-auth-http.js";
 
 function parseLimit(raw, fallback = 30, max = 100) {
   const n = Number(raw || fallback);
@@ -10,6 +11,9 @@ function parseLimit(raw, fallback = 30, max = 100) {
 
 export async function GET(req, { params }) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const influencerId = params?.influencerId;
     if (!influencerId) {
       return NextResponse.json(

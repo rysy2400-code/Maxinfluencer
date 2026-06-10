@@ -172,16 +172,27 @@ function usernameInitials(username) {
   return s.slice(0, 2).toUpperCase();
 }
 
-/** 侧栏底部账户条 + 余额/充值/退出菜单 */
+/** 侧栏底部账户条 + 余额/充值/退出/切换账户菜单 */
 function SidebarAccountMenu({
   user,
   menuOpen,
   onToggleMenu,
   onRecharge,
   onLogout,
+  switchPanelOpen,
+  onToggleSwitchPanel,
+  switchQuery,
+  onSwitchQueryChange,
+  switchUsers,
+  switchLoading,
+  onSwitchToUser,
+  onSwitchReset,
+  isActingAs,
+  realUser,
 }) {
   const balanceLabel = formatAdvertiserBalance(user?.balance?.amount, user?.balance?.currency);
   const initials = usernameInitials(user?.username);
+  const showAdminSwitch = !!user?.isAdmin;
 
   return (
     <div data-account-menu-root style={{ position: "relative" }}>
@@ -287,6 +298,8 @@ function SidebarAccountMenu({
             zIndex: 90,
             padding: "4px 0",
             fontSize: 13,
+            maxHeight: switchPanelOpen ? 320 : undefined,
+            overflowY: switchPanelOpen ? "auto" : undefined,
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -304,6 +317,114 @@ function SidebarAccountMenu({
             <span>账户余额</span>
             <span style={{ color: "#111827", fontWeight: 600, fontSize: 13 }}>{balanceLabel}</span>
           </div>
+          {showAdminSwitch ? (
+            <>
+              <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSwitchPanel();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  width: "100%",
+                  padding: "8px 12px",
+                  border: "none",
+                  background: switchPanelOpen ? "#F9FAFB" : "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  color: "#111827",
+                  fontSize: 13,
+                }}
+              >
+                <span>切换账户</span>
+                <span style={{ color: "#9CA3AF", fontSize: 10 }}>{switchPanelOpen ? "▴" : "▸"}</span>
+              </button>
+              {switchPanelOpen ? (
+                <div style={{ padding: "0 8px 8px" }}>
+                  <input
+                    type="search"
+                    value={switchQuery}
+                    onChange={(e) => onSwitchQueryChange(e.target.value)}
+                    placeholder="搜索公司或用户名"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      border: "1px solid #E5E7EB",
+                      fontSize: 12,
+                      marginBottom: 6,
+                    }}
+                  />
+                  {isActingAs && realUser ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSwitchReset();
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "6px 8px",
+                        marginBottom: 6,
+                        borderRadius: 6,
+                        border: "1px solid #DBEAFE",
+                        background: "#EFF6FF",
+                        color: "#1D4ED8",
+                        fontSize: 12,
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      切回 {realUser.username}（{realUser.companyName}）
+                    </button>
+                  ) : null}
+                  {switchLoading ? (
+                    <div style={{ padding: "6px 4px", color: "#9CA3AF", fontSize: 12 }}>加载中…</div>
+                  ) : switchUsers.length === 0 ? (
+                    <div style={{ padding: "6px 4px", color: "#9CA3AF", fontSize: 12 }}>无匹配账户</div>
+                  ) : (
+                    switchUsers.map((acc) => (
+                      <button
+                        key={acc.advertiserUserId}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSwitchToUser(acc.advertiserUserId);
+                        }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          padding: "6px 8px",
+                          border: "none",
+                          borderRadius: 6,
+                          background: "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontSize: 12,
+                          color: "#374151",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "#F3F4F6";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        {acc.companyName} / {acc.username}
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
           <button
             type="button"
@@ -1752,10 +1873,14 @@ export default function HomePage() {
   const renamingSessionIdRef = useRef(null);
   const ignoreRenameBlurRef = useRef(false);
 
-  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin, balance } | null
+  const [authUser, setAuthUser] = useState(null); // { companyName, username, isAdmin, balance, isActingAs, realUser } | null
   const [authChecked, setAuthChecked] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
+  const [switchPanelOpen, setSwitchPanelOpen] = useState(false);
+  const [switchQuery, setSwitchQuery] = useState("");
+  const [switchUsers, setSwitchUsers] = useState([]);
+  const [switchLoading, setSwitchLoading] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginCompany, setLoginCompany] = useState("");
   const [loginUser, setLoginUser] = useState("");
@@ -1793,11 +1918,38 @@ export default function HomePage() {
       const root = document.querySelector("[data-account-menu-root]");
       if (root && !root.contains(e.target)) {
         setAccountMenuOpen(false);
+        setSwitchPanelOpen(false);
       }
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [accountMenuOpen]);
+
+  useEffect(() => {
+    if (!accountMenuOpen || !switchPanelOpen || !authUser?.isAdmin) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSwitchLoading(true);
+      try {
+        const qs = new URLSearchParams();
+        if (switchQuery.trim()) qs.set("q", switchQuery.trim());
+        qs.set("limit", "50");
+        const r = await fetch(`/api/admin/switchable-users?${qs.toString()}`, {
+          credentials: "include",
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled && d.success) setSwitchUsers(d.users || []);
+      } catch {
+        if (!cancelled) setSwitchUsers([]);
+      } finally {
+        if (!cancelled) setSwitchLoading(false);
+      }
+    }, switchQuery.trim() ? 300 : 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [accountMenuOpen, switchPanelOpen, switchQuery, authUser?.isAdmin]);
 
   useEffect(() => {
     renamingSessionIdRef.current = renamingSessionId;
@@ -4279,6 +4431,14 @@ export default function HomePage() {
     void commitRenameSession(sessionId);
   };
 
+  const resetSessionForAccountChange = () => {
+    clearChatPersistenceKeys();
+    setCurrentSessionId(null);
+    setMessages(cloneWelcomeMessages());
+    setContext({ workflowState: "idle" });
+    setImageErrors({});
+  };
+
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
@@ -4288,6 +4448,8 @@ export default function HomePage() {
     cancelRenameSession();
     setSessionRowMenuId(null);
     setAccountMenuOpen(false);
+    setSwitchPanelOpen(false);
+    setSwitchQuery("");
     setRechargeModalOpen(false);
     setAuthUser(null);
     setCurrentSessionId(null);
@@ -4296,6 +4458,52 @@ export default function HomePage() {
     setContext({ workflowState: "idle" });
     setCampaignSessions([]);
     setPublishedSessions([]);
+  };
+
+  const applySwitchUser = async (data) => {
+    if (!data?.user) return;
+    setAuthUser(data.user);
+    setSwitchPanelOpen(false);
+    setSwitchQuery("");
+    setAccountMenuOpen(false);
+    resetSessionForAccountChange();
+    await loadCampaignSessions();
+  };
+
+  const handleSwitchToUser = async (advertiserUserId) => {
+    try {
+      const res = await fetch("/api/admin/switch", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ advertiserUserId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        window.alert(data.error || "切换失败");
+        return;
+      }
+      await applySwitchUser(data);
+    } catch (err) {
+      window.alert(err?.message || "切换失败");
+    }
+  };
+
+  const handleSwitchReset = async () => {
+    try {
+      const res = await fetch("/api/admin/switch/reset", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        window.alert(data.error || "切回失败");
+        return;
+      }
+      await applySwitchUser(data);
+    } catch (err) {
+      window.alert(err?.message || "切回失败");
+    }
   };
 
   const submitLogin = async (e) => {
@@ -5253,34 +5461,31 @@ export default function HomePage() {
                 setAccountMenuOpen(false);
                 void handleLogout();
               }}
+              switchPanelOpen={switchPanelOpen}
+              onToggleSwitchPanel={() => setSwitchPanelOpen((open) => !open)}
+              switchQuery={switchQuery}
+              onSwitchQueryChange={setSwitchQuery}
+              switchUsers={switchUsers}
+              switchLoading={switchLoading}
+              onSwitchToUser={(id) => void handleSwitchToUser(id)}
+              onSwitchReset={() => void handleSwitchReset()}
+              isActingAs={!!authUser.isActingAs}
+              realUser={authUser.realUser}
             />
             {authUser.isAdmin ? (
-              <>
-                <a
-                  href="/admin"
-                  style={{
-                    fontSize: 11,
-                    color: "#3B82F6",
-                    textAlign: "center",
-                    textDecoration: "none",
-                  }}
-                >
-                  会话管理（管理员）
-                </a>
-                <a
-                  href="/ops"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    fontSize: 11,
-                    color: "#3B82F6",
-                    textAlign: "center",
-                    textDecoration: "none",
-                  }}
-                >
-                  爬虫运维台
-                </a>
-              </>
+              <a
+                href="/ops"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: 11,
+                  color: "#3B82F6",
+                  textAlign: "center",
+                  textDecoration: "none",
+                }}
+              >
+                爬虫运维台
+              </a>
             ) : null}
           </div>
         )}

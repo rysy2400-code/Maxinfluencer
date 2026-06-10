@@ -7,6 +7,7 @@ import {
 import { softDeleteCampaignBySessionId } from "../../../../lib/db/campaign-dao.js";
 import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
 import { assertUserCanAccessSession } from "../../../../lib/auth/session-access.js";
+import { insertAdminActionLog } from "../../../../lib/db/admin-action-log-dao.js";
 
 export const dynamic = "force-dynamic";
 
@@ -135,6 +136,7 @@ export async function PUT(req, { params }) {
       );
     }
 
+    const priorSession = access.session;
     const result = await updateCampaignSession(id, updates);
 
     if (!result.success) {
@@ -145,6 +147,26 @@ export async function PUT(req, { params }) {
         },
         { status: 500 }
       );
+    }
+
+    if (
+      auth.isActingAs &&
+      status === "published" &&
+      priorSession?.status !== "published" &&
+      result.session?.id
+    ) {
+      await insertAdminActionLog({
+        realAdvertiserUserId: auth.realUser.advertiserUserId,
+        effectiveAdvertiserUserId: auth.effectiveUser.advertiserUserId,
+        action: "session_publish",
+        resourceType: "session",
+        resourceId: String(result.session.id),
+        meta: {
+          title: result.session.title || null,
+          companyName: auth.effectiveUser.companyName,
+          username: auth.effectiveUser.username,
+        },
+      });
     }
 
     return NextResponse.json({

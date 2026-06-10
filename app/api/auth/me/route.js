@@ -7,19 +7,24 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   try {
-    const user = await getAuthenticatedAdvertiserUser(req);
-    if (!user) {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
       return NextResponse.json({ success: false, authenticated: false }, { status: 401 });
     }
-    const row = await getAdvertiserUserById(user.advertiserUserId);
+    const row = await getAdvertiserUserById(auth.effectiveUser.advertiserUserId);
     const balance = normalizeAdvertiserBalance(row?.balance_amount, row?.balance_currency);
     return NextResponse.json({
       success: true,
       authenticated: true,
       user: {
-        companyName: user.companyName,
-        username: user.username,
-        isAdmin: user.isAdmin,
+        companyName: auth.effectiveUser.companyName,
+        username: auth.effectiveUser.username,
+        isAdmin: auth.realUser.isAdmin,
+        isActingAs: auth.isActingAs,
+        realUser: {
+          companyName: auth.realUser.companyName,
+          username: auth.realUser.username,
+        },
         balance,
       },
     });

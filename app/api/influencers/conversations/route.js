@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listInfluencerConversations } from "../../../../lib/db/influencer-conversations-dao.js";
+import { requireInboxAdmin } from "../../../../lib/auth/influencer-inbox-auth-http.js";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ function decodeConversationsCursor(cursor) {
 
 export async function GET(req) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const { searchParams } = new URL(req.url);
     const q = searchParams.get("q") || null;
     const cursor = searchParams.get("cursor");

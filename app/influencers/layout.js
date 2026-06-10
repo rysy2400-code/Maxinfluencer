@@ -48,8 +48,168 @@ function writeExpandTouched(obj) {
   }
 }
 
+function InfluencerInboxLoginScreen({ onSuccess }) {
+  const [companyName, setCompanyName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await fetch("/api/influencers/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: companyName.trim(),
+          username: username.trim(),
+          password,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        setErr(data.error || "登录失败");
+        setBusy(false);
+        return;
+      }
+      setPassword("");
+      onSuccess(data.user);
+    } catch (e2) {
+      setErr(e2?.message || "网络错误");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#F3F4F6",
+        padding: 24,
+        fontFamily:
+          "system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif",
+      }}
+    >
+      <form
+        onSubmit={submit}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          background: "#fff",
+          borderRadius: 12,
+          border: "1px solid #E5E7EB",
+          padding: "28px 24px",
+          boxShadow: "0 12px 40px rgba(15,23,42,0.08)",
+        }}
+      >
+        <h1 style={{ margin: "0 0 8px", fontSize: 20, color: "#111827" }}>红人收件箱</h1>
+        <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6B7280", lineHeight: 1.5 }}>
+          请使用管理员账号登录，查看全平台红人对话。
+        </p>
+        <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 6 }}>公司名</label>
+        <input
+          value={companyName}
+          onChange={(e) => setCompanyName(e.target.value)}
+          required
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "10px 12px",
+            marginBottom: 12,
+            borderRadius: 8,
+            border: "1px solid #D1D5DB",
+            fontSize: 14,
+          }}
+        />
+        <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 6 }}>用户名</label>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "10px 12px",
+            marginBottom: 12,
+            borderRadius: 8,
+            border: "1px solid #D1D5DB",
+            fontSize: 14,
+          }}
+        />
+        <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 6 }}>密码（6 位数字）</label>
+        <input
+          type="password"
+          inputMode="numeric"
+          maxLength={6}
+          value={password}
+          onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          required
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "10px 12px",
+            marginBottom: 12,
+            borderRadius: 8,
+            border: "1px solid #D1D5DB",
+            fontSize: 14,
+          }}
+        />
+        {err ? (
+          <div style={{ color: "#DC2626", fontSize: 13, marginBottom: 12 }}>{err}</div>
+        ) : null}
+        <button
+          type="submit"
+          disabled={busy}
+          style={{
+            width: "100%",
+            padding: "11px 12px",
+            borderRadius: 8,
+            border: "none",
+            background: "#111827",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: busy ? "wait" : "pointer",
+            opacity: busy ? 0.7 : 1,
+          }}
+        >
+          {busy ? "登录中…" : "登录"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function InfluencersLayout({ children }) {
   const influencerId = useInfluencerIdFromPath();
+
+  const [inboxAuthChecked, setInboxAuthChecked] = useState(false);
+  const [inboxUser, setInboxUser] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/influencers/auth/me", { credentials: "include" });
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled && d.success && d.user) setInboxUser(d.user);
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) setInboxAuthChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [listView, setListView] = useState("time");
   const [listQ, setListQ] = useState("");
@@ -290,6 +450,27 @@ export default function InfluencersLayout({ children }) {
       ? "搜索红人 / 品牌 / 产品 / 公司 / 账户名"
       : "搜索 id / 用户名 / 昵称 / 邮箱";
 
+  if (!inboxAuthChecked) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#6B7280",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        加载中…
+      </div>
+    );
+  }
+
+  if (!inboxUser) {
+    return <InfluencerInboxLoginScreen onSuccess={setInboxUser} />;
+  }
+
   return (
     <InfluencerInboxProvider value={inboxValue}>
       <div style={shellStyle}>
@@ -323,6 +504,41 @@ export default function InfluencersLayout({ children }) {
                 minWidth: 0,
               }}
             >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 8,
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>红人收件箱</div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await fetch("/api/influencers/auth/logout", {
+                        method: "POST",
+                        credentials: "include",
+                      });
+                    } catch {
+                      /* ignore */
+                    }
+                    setInboxUser(null);
+                  }}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#6B7280",
+                    fontSize: 11,
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  退出
+                </button>
+              </div>
               <div
                 style={{
                   display: "flex",

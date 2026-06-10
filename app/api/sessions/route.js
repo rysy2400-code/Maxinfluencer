@@ -4,6 +4,7 @@ import {
   getAllCampaignSessions,
 } from "../../../lib/db/campaign-session-dao.js";
 import { getAuthenticatedAdvertiserUser } from "../../../lib/auth/advertiser-auth-http.js";
+import { insertAdminActionLog } from "../../../lib/db/admin-action-log-dao.js";
 
 export const dynamic = "force-dynamic";
 
@@ -108,6 +109,21 @@ export async function POST(req) {
         },
         { status: 500 }
       );
+    }
+
+    if (auth.isActingAs && result.session?.id) {
+      await insertAdminActionLog({
+        realAdvertiserUserId: auth.realUser.advertiserUserId,
+        effectiveAdvertiserUserId: auth.effectiveUser.advertiserUserId,
+        action: "session_create",
+        resourceType: "session",
+        resourceId: String(result.session.id),
+        meta: {
+          title: result.session.title || null,
+          companyName: auth.effectiveUser.companyName,
+          username: auth.effectiveUser.username,
+        },
+      });
     }
 
     return NextResponse.json({

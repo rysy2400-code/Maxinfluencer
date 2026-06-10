@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getOutboundAttachmentById } from "../../../../../lib/db/influencer-outbound-attachments-dao.js";
+import { requireInboxAdmin } from "../../../../../lib/auth/influencer-inbox-auth-http.js";
 
 function buildContentDisposition(filename, download) {
   const safe = (filename || "attachment").replace(/"/g, "");
@@ -9,6 +10,9 @@ function buildContentDisposition(filename, download) {
 
 export async function GET(req, { params }) {
   try {
+    const gate = await requireInboxAdmin(req);
+    if (!gate.ok) return gate.response;
+
     const attachmentId = Number(params?.attachmentId);
     if (!attachmentId || Number.isNaN(attachmentId)) {
       return NextResponse.json(
