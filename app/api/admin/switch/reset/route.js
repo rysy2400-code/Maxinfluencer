@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
-import { setAdvertiserAuthCookie } from "../../../../../lib/auth/advertiser-auth-cookie.js";
-import { insertAdminActionLog } from "../../../../../lib/db/admin-action-log-dao.js";
-import { normalizeAdvertiserBalance } from "../../../../../lib/utils/advertiser-balance.js";
-import { getAdvertiserUserById } from "../../../../../lib/db/tiktok-advertiser-dao.js";
+import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
+import { setAdvertiserAuthCookie } from "../../../../lib/auth/advertiser-auth-cookie.js";
+import { insertAdminActionLog } from "../../../../lib/db/admin-action-log-dao.js";
+import { normalizeAdvertiserBalance } from "../../../../lib/utils/advertiser-balance.js";
+import { getAdvertiserUserById } from "../../../../lib/db/tiktok-advertiser-dao.js";
 
 export const dynamic = "force-dynamic";
 

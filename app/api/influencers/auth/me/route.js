@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedInboxAdmin } from "../../../../../lib/auth/advertiser-auth-http.js";
+import { getAuthenticatedInboxAdmin } from "../../../../lib/auth/advertiser-auth-http.js";
 
 export const dynamic = "force-dynamic";
 

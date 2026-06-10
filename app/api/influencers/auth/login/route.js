@@ -3,9 +3,9 @@ import {
   findAdvertiserByDisplayName,
   findUserByAdvertiserAndUsername,
   verifyPassword,
-} from "../../../../../lib/db/tiktok-advertiser-dao.js";
-import { setInboxAuthCookie } from "../../../../../lib/auth/advertiser-auth-cookie.js";
-import { insertAdminActionLog } from "../../../../../lib/db/admin-action-log-dao.js";
+} from "../../../../lib/db/tiktok-advertiser-dao.js";
+import { setInboxAuthCookie } from "../../../../lib/auth/advertiser-auth-cookie.js";
+import { insertAdminActionLog } from "../../../../lib/db/admin-action-log-dao.js";
 
 export const dynamic = "force-dynamic";
 
