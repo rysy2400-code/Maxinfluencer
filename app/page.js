@@ -15,6 +15,14 @@ import {
   shouldShowBinComputerPanel,
 } from "../lib/campaign/execution-ui-status.js";
 import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
+import {
+  isChatVisibleMessage,
+  mergeSessionMessages,
+  normalizeSessionMessagesForStorage,
+  parseMessageTime,
+  sortSessionMessagesByTime,
+  stripNonChatMessages,
+} from "../lib/chat/session-messages.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -480,7 +488,7 @@ const STORAGE_KEY_MESSAGES = "maxinfluencer_chat_messages";
 const STORAGE_KEY_CONTEXT = "maxinfluencer_chat_context";
 const STORAGE_KEY_CURRENT_SESSION_ID = "maxinfluencer_current_session_id";
 const STORAGE_KEY_VERSION = "maxinfluencer_message_version";
-const MESSAGE_VERSION = "v2.0"; // 修改 defaultMessage 时更新此版本号
+const MESSAGE_VERSION = "v2.1"; // v2.1: 聊天消息按时间排序 + 剔除工作实况占位
 
 function cloneWelcomeMessages() {
   return [
@@ -508,22 +516,8 @@ function clearChatPersistenceKeys() {
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
 const SESSION_MESSAGES_POLL_MS = 60_000;
 
-function sessionMessageMergeKey(msg) {
-  if (!msg || typeof msg !== "object") return "";
-  const role = msg.role || "";
-  const name = msg.name || "";
-  const content = String(msg.content || "").slice(0, 500);
-  return `${role}|${name}|${content}`;
-}
-
 /** 微信式灰条：相邻有时间的消息间隔 ≥5 分钟或跨自然日 */
 const CHAT_TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
-
-function parseMessageTime(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 function isSameCalendarDay(a, b) {
   return (
@@ -570,11 +564,12 @@ function findPreviousTimestampedTime(messages, fromIndex) {
 function buildChatRenderableItems(messages) {
   const items = [];
   if (!Array.isArray(messages)) return items;
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
+  const sorted = sortSessionMessagesByTime(messages).filter(isChatVisibleMessage);
+  for (let i = 0; i < sorted.length; i++) {
+    const m = sorted[i];
     const msgTime = parseMessageTime(m?.createdAt);
     if (msgTime) {
-      const prevTime = findPreviousTimestampedTime(messages, i);
+      const prevTime = findPreviousTimestampedTime(sorted, i);
       if (shouldShowChatTimeSeparator(prevTime, msgTime)) {
         items.push({
           type: "separator",
@@ -590,26 +585,6 @@ function buildChatRenderableItems(messages) {
 
 function chatMessageCompletedAt() {
   return new Date().toISOString();
-}
-
-/** 仅追加服务端新增的 assistant 消息，不覆盖本地流式/未保存状态 */
-function mergeIncomingAssistantMessages(local, remote) {
-  if (!Array.isArray(remote) || remote.length === 0) return local;
-  const base = Array.isArray(local) ? local : [];
-  const seen = new Set(base.map(sessionMessageMergeKey));
-  const appended = [];
-  for (const m of remote) {
-    if (!m || m.role !== "assistant") continue;
-    const key = sessionMessageMergeKey(m);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    appended.push({
-      ...m,
-      createdAt: m.createdAt || chatMessageCompletedAt(),
-    });
-  }
-  if (appended.length === 0) return base;
-  return [...base, ...appended];
 }
 
 function ChatTimeSeparator({ label }) {
@@ -669,28 +644,17 @@ function workLiveHasRenderableContent(thinking) {
   );
 }
 
-function patchWorkLiveAssistantThinking(prev, updater) {
-  const updated = [...(Array.isArray(prev) ? prev : [])];
-  let idx = findWorkLiveAssistantIndex(updated);
-  if (idx < 0) {
-    updated.push({
-      role: "assistant",
-      name: "Bin",
-      content: "",
-      thinking: { ...EMPTY_WORK_LIVE_THINKING },
-    });
-    idx = updated.length - 1;
-  }
-  const msg = updated[idx];
+function patchWorkLiveThinkingState(prev, updater) {
   const base =
-    msg.thinking && typeof msg.thinking === "object"
-      ? msg.thinking
-      : { ...EMPTY_WORK_LIVE_THINKING };
-  updated[idx] = {
-    ...msg,
-    thinking: updater(base),
-  };
-  return updated;
+    prev && typeof prev === "object" ? prev : { ...EMPTY_WORK_LIVE_THINKING };
+  return updater({
+    ...EMPTY_WORK_LIVE_THINKING,
+    ...base,
+    browserSteps: base.browserSteps || [],
+    screenshots: base.screenshots || [],
+    influencerAnalyses: base.influencerAnalyses || [],
+    workNotes: base.workNotes || [],
+  });
 }
 
 /** 工作笔记条目去重键：优先 taskId；缺失时勿仅用 keyword（多轮同词会误合并） */
@@ -1850,6 +1814,7 @@ export default function HomePage() {
   const workLiveAutoSwitchedRef = useRef(false); // 本轮是否已自动切到工作实况
   const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
   const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
+  const [workLiveThinking, setWorkLiveThinking] = useState(EMPTY_WORK_LIVE_THINKING);
   const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
@@ -2361,8 +2326,8 @@ export default function HomePage() {
     let flushTimer = null;
 
     const applyThinking = (d) => {
-      setMessages((prev) =>
-        patchWorkLiveAssistantThinking(prev, (currentThinking) => ({
+      setWorkLiveThinking((prev) =>
+        patchWorkLiveThinkingState(prev, (currentThinking) => ({
           ...currentThinking,
           ...d,
           browserSteps:
@@ -2438,8 +2403,8 @@ export default function HomePage() {
             );
             return merged.slice(-60);
           });
-          setMessages((prev) =>
-            patchWorkLiveAssistantThinking(prev, (currentThinking) => {
+          setWorkLiveThinking((prev) =>
+            patchWorkLiveThinkingState(prev, (currentThinking) => {
               const existing = Array.isArray(currentThinking.workNotes)
                 ? currentThinking.workNotes
                 : [];
@@ -2463,8 +2428,8 @@ export default function HomePage() {
           );
         } else if (data.type === "screenshot" && data.data) {
           const newShot = data.data;
-          setMessages((prev) =>
-            patchWorkLiveAssistantThinking(prev, (currentThinking) => {
+          setWorkLiveThinking((prev) =>
+            patchWorkLiveThinkingState(prev, (currentThinking) => {
               const existing = Array.isArray(currentThinking.screenshots)
                 ? currentThinking.screenshots
                 : [];
@@ -2508,19 +2473,13 @@ export default function HomePage() {
     };
   }, [isExecutionPhaseGlobal, currentSessionId]);
 
-  // 执行阶段：预置 assistant.thinking，避免 SSE 写入与展示读的不是同一条消息
+  // 执行阶段：工作实况数据独立存放，不写入聊天 messages，避免空 assistant 占位导致孤立头像
   useEffect(() => {
-    if (!isExecutionPhaseGlobal || !currentSessionId) return;
-    setMessages((prev) =>
-      patchWorkLiveAssistantThinking(prev, (t) => ({
-        ...EMPTY_WORK_LIVE_THINKING,
-        ...t,
-        browserSteps: t.browserSteps || [],
-        screenshots: t.screenshots || [],
-        influencerAnalyses: t.influencerAnalyses || [],
-        workNotes: t.workNotes || [],
-      }))
-    );
+    if (!isExecutionPhaseGlobal || !currentSessionId) {
+      setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
+      return;
+    }
+    setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
   }, [isExecutionPhaseGlobal, currentSessionId]);
 
   useEffect(() => {
@@ -2548,7 +2507,7 @@ export default function HomePage() {
         if (cancelled || !res.ok || !data.success) return;
         const remote = data.session?.messages;
         if (!Array.isArray(remote)) return;
-        setMessages((prev) => mergeIncomingAssistantMessages(prev, remote));
+        setMessages((prev) => stripNonChatMessages(mergeSessionMessages(prev, remote)));
       } catch (e) {
         console.warn("[HomePage] 轮询会话消息失败:", e);
       }
@@ -2706,7 +2665,21 @@ export default function HomePage() {
         const res = await fetch(`/api/sessions/${currentSessionId}`, { credentials: "include" });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (res.ok && data.success && data.session) return;
+        if (res.ok && data.success && data.session) {
+          const serverMessages = Array.isArray(data.session.messages)
+            ? data.session.messages
+            : cloneWelcomeMessages();
+          setMessages(
+            serverMessages.length > 0
+              ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
+              : cloneWelcomeMessages()
+          );
+          setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
+          if (data.session.context && typeof data.session.context === "object") {
+            setContext(data.session.context);
+          }
+          return;
+        }
         clearChatPersistenceKeys();
         setCurrentSessionId(null);
         setMessages(cloneWelcomeMessages());
@@ -2754,7 +2727,7 @@ export default function HomePage() {
           try {
             const parsed = JSON.parse(savedMessages);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              setMessages(parsed);
+              setMessages(stripNonChatMessages(sortSessionMessagesByTime(parsed)));
             }
           } catch (e) {
             console.error("[HomePage] 恢复消息失败:", e);
@@ -2833,12 +2806,30 @@ export default function HomePage() {
     if (!currentSessionId) return;
     
     try {
+      let messagesToPersist = normalizeSessionMessagesForStorage(messages, {
+        keepStreaming: loading,
+      });
+      try {
+        const latestRes = await fetch(`/api/sessions/${currentSessionId}`, {
+          credentials: 'include',
+        });
+        const latestData = await latestRes.json().catch(() => ({}));
+        if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
+          messagesToPersist = normalizeSessionMessagesForStorage(
+            mergeSessionMessages(messages, latestData.session.messages),
+            { keepStreaming: loading }
+          );
+        }
+      } catch (mergeErr) {
+        console.warn('[HomePage] 保存前合并服务端消息失败，使用本地排序结果:', mergeErr);
+      }
+
       const response = await fetch(`/api/sessions/${currentSessionId}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: messages.slice(-50), // 只保存最近 50 条
+          messages: messagesToPersist,
           context,
         }),
       });
@@ -2851,7 +2842,7 @@ export default function HomePage() {
     } catch (error) {
       console.error('[HomePage] 保存会话失败:', error);
     }
-  }, [currentSessionId, messages, context, loadCampaignSessions]);
+  }, [currentSessionId, messages, context, loadCampaignSessions, loading]);
 
   // 保存消息到 localStorage（带错误处理和存储限制）
   useEffect(() => {
@@ -2871,7 +2862,7 @@ export default function HomePage() {
     localStorageSaveTimerRef.current = setTimeout(() => {
       try {
         // 限制存储的消息数量（只保存最近的 50 条消息）
-        const messagesToSave = messages.slice(-50);
+        const messagesToSave = stripNonChatMessages(sortSessionMessagesByTime(messages)).slice(-50);
         
         // 清理消息中的大对象（截图等），避免超出配额
         const cleanedMessages = messagesToSave.map(msg => {
@@ -4353,8 +4344,10 @@ export default function HomePage() {
       const data = await response.json();
       if (data.success && data.session) {
         setCurrentSessionId(sessionId);
-        setMessages(data.session.messages || defaultMessage);
+        const loaded = Array.isArray(data.session.messages) ? data.session.messages : defaultMessage;
+        setMessages(stripNonChatMessages(sortSessionMessagesByTime(loaded)));
         setContext(data.session.context || { workflowState: 'idle' });
+        setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
       }
     } catch (error) {
       console.error('[HomePage] 切换会话失败:', error);
@@ -5829,6 +5822,8 @@ export default function HomePage() {
                   return <ChatTimeSeparator key={item.key} label={item.label} />;
                 }
                 const m = item.message;
+                if (!isChatVisibleMessage(m)) return null;
+                const visibleContent = String(m.content || "").trim();
                 return (
                 <div
                   key={item.key}
@@ -5854,7 +5849,7 @@ export default function HomePage() {
                         <BinLogo size={22} />
                       </div>
                     )}
-                    {m.content && (
+                    {visibleContent && (
                       <div
                         style={{
                           padding: "12px 16px",
@@ -5877,7 +5872,7 @@ export default function HomePage() {
                       </div>
                     )}
                     {/* 思考过程展示 - 精简版（类似 Manus / Cursor） */}
-                    {m.role === "assistant" && m.thinking && m.thinking.steps && m.thinking.steps.length > 0 && !m.content && (
+                    {m.role === "assistant" && m.thinking && m.thinking.steps && m.thinking.steps.length > 0 && !visibleContent && (
                       <div
                         style={{
                           marginTop: 8,
@@ -6751,8 +6746,10 @@ export default function HomePage() {
                   );
                 }
 
-                const workLiveThinking = getWorkLiveThinking(messages);
-                if (!workLiveHasRenderableContent(workLiveThinking)) {
+                const panelWorkLiveThinking = isExecutionPhase
+                  ? workLiveThinking
+                  : getWorkLiveThinking(messages);
+                if (!workLiveHasRenderableContent(panelWorkLiveThinking)) {
                   const waitLabel =
                     isExecutionPhase && binComputerView === "live"
                       ? "暂无工作实况（等待 Agent 开始浏览与分析）…"
@@ -6770,7 +6767,7 @@ export default function HomePage() {
                 }
 
                 const { browserSteps, screenshots, influencerAnalyses } =
-                  workLiveThinking || {};
+                  panelWorkLiveThinking || {};
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
                 
