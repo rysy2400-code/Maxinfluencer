@@ -20,7 +20,6 @@ import {
   mergeSessionMessages,
   normalizeSessionMessagesForStorage,
   parseMessageTime,
-  sessionMessageMergeKey,
   sortSessionMessagesByTime,
   stripNonChatMessages,
 } from "../lib/chat/session-messages.js";
@@ -514,6 +513,27 @@ function clearChatPersistenceKeys() {
   }
 }
 
+function computeSessionPersistFingerprint(messages, context) {
+  const normalized = normalizeSessionMessagesForStorage(
+    Array.isArray(messages) ? messages : [],
+    { keepStreaming: false }
+  );
+  return JSON.stringify({ messages: normalized, context: context || {} });
+}
+
+function rememberSessionPersistBaseline(snapshotRef, sessionId, messages, context) {
+  snapshotRef.current = {
+    sessionId,
+    fingerprint: computeSessionPersistFingerprint(messages, context),
+  };
+}
+
+function isSessionPersistDirty(snapshotRef, sessionId, messages, context) {
+  const snap = snapshotRef.current;
+  if (!sessionId || snap.sessionId !== sessionId) return true;
+  return snap.fingerprint !== computeSessionPersistFingerprint(messages, context);
+}
+
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
 const SESSION_MESSAGES_POLL_MS = 60_000;
 
@@ -586,32 +606,6 @@ function buildChatRenderableItems(messages) {
 
 function chatMessageCompletedAt() {
   return new Date().toISOString();
-}
-
-function fingerprintSessionMessages(messages) {
-  return stripNonChatMessages(sortSessionMessagesByTime(messages))
-    .map(sessionMessageMergeKey)
-    .join("\n");
-}
-
-function fingerprintSessionContext(context) {
-  return JSON.stringify(context || {});
-}
-
-function createSessionBaseline(sessionId, messages, context) {
-  return {
-    sessionId,
-    messagesKey: fingerprintSessionMessages(messages),
-    contextKey: fingerprintSessionContext(context),
-  };
-}
-
-function isSessionStateDirty(baseline, sessionId, messages, context) {
-  if (!baseline || baseline.sessionId !== sessionId) return true;
-  return (
-    baseline.messagesKey !== fingerprintSessionMessages(messages) ||
-    baseline.contextKey !== fingerprintSessionContext(context)
-  );
 }
 
 function ChatTimeSeparator({ label }) {
@@ -1842,8 +1836,8 @@ export default function HomePage() {
   const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
   const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
   const [workLiveThinking, setWorkLiveThinking] = useState(EMPTY_WORK_LIVE_THINKING);
+  const sessionPersistSnapshotRef = useRef({ sessionId: null, fingerprint: "" });
   const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
-  const sessionBaselineRef = useRef(createSessionBaseline(null, [], {}));
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
   const publishedSessionGroups = useMemo(() => {
@@ -2697,22 +2691,28 @@ export default function HomePage() {
           const serverMessages = Array.isArray(data.session.messages)
             ? data.session.messages
             : cloneWelcomeMessages();
-          const nextContext =
-            data.session.context && typeof data.session.context === "object"
-              ? data.session.context
-              : { workflowState: "idle" };
-          const nextMessages =
+          const normalized =
             serverMessages.length > 0
               ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
               : cloneWelcomeMessages();
-          setMessages(nextMessages);
+          setMessages(normalized);
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
-          setContext(nextContext);
-          sessionBaselineRef.current = createSessionBaseline(
-            currentSessionId,
-            nextMessages,
-            nextContext
-          );
+          if (data.session.context && typeof data.session.context === "object") {
+            setContext(data.session.context);
+            rememberSessionPersistBaseline(
+              sessionPersistSnapshotRef,
+              currentSessionId,
+              normalized,
+              data.session.context
+            );
+          } else {
+            rememberSessionPersistBaseline(
+              sessionPersistSnapshotRef,
+              currentSessionId,
+              normalized,
+              { workflowState: "idle" }
+            );
+          }
           return;
         }
         clearChatPersistenceKeys();
@@ -2837,42 +2837,38 @@ export default function HomePage() {
   // 保存当前会话到后端（如果存在 currentSessionId）
   // options.reloadSessions: 是否在保存成功后刷新左侧会话列表（默认 false，避免每次回复造成左侧闪烁）
   // 不传 title：标题仅由创建会话、侧栏重命名等显式写入；避免保存消息/切换会话时按首条用户消息覆盖改名
-  const saveCurrentSession = React.useCallback(async (options = {}) => {
-    const {
-      reloadSessions = false,
-      sessionId: overrideSessionId,
-      messages: overrideMessages,
-      context: overrideContext,
-      skipIfClean = false,
-      skipServerMerge = false,
-    } = options;
-
-    const sid = overrideSessionId ?? currentSessionId;
-    const msgs = overrideMessages ?? messages;
-    const ctx = overrideContext ?? context;
-    if (!sid) return;
+  const saveCurrentSession = React.useCallback(async (options = { reloadSessions: false }) => {
+    const targetSessionId = options.sessionId ?? currentSessionId;
+    const targetMessages = options.messages ?? messages;
+    const targetContext = options.context ?? context;
+    if (!targetSessionId) return;
 
     if (
-      skipIfClean &&
-      !isSessionStateDirty(sessionBaselineRef.current, sid, msgs, ctx)
+      !options.force &&
+      !isSessionPersistDirty(
+        sessionPersistSnapshotRef,
+        targetSessionId,
+        targetMessages,
+        targetContext
+      )
     ) {
       return;
     }
 
     try {
-      let messagesToPersist = normalizeSessionMessagesForStorage(msgs, {
-        keepStreaming: loading,
+      let messagesToPersist = normalizeSessionMessagesForStorage(targetMessages, {
+        keepStreaming: loading && targetSessionId === currentSessionId,
       });
-      if (!skipServerMerge) {
+      if (!options.skipMergeFetch) {
         try {
-          const latestRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+          const latestRes = await fetch(`/api/sessions/${targetSessionId}`, {
             credentials: 'include',
           });
           const latestData = await latestRes.json().catch(() => ({}));
           if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
             messagesToPersist = normalizeSessionMessagesForStorage(
-              mergeSessionMessages(msgs, latestData.session.messages),
-              { keepStreaming: loading }
+              mergeSessionMessages(targetMessages, latestData.session.messages),
+              { keepStreaming: loading && targetSessionId === currentSessionId }
             );
           }
         } catch (mergeErr) {
@@ -2880,20 +2876,25 @@ export default function HomePage() {
         }
       }
 
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+      const response = await fetch(`/api/sessions/${targetSessionId}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messagesToPersist,
-          context: ctx,
+          context: targetContext,
         }),
       });
-
+      
       const data = await response.json();
       if (data.success) {
-        sessionBaselineRef.current = createSessionBaseline(sid, msgs, ctx);
-        if (reloadSessions) {
+        rememberSessionPersistBaseline(
+          sessionPersistSnapshotRef,
+          targetSessionId,
+          messagesToPersist,
+          targetContext
+        );
+        if (options.reloadSessions !== false) {
           await loadCampaignSessions();
         }
       }
@@ -4369,8 +4370,16 @@ export default function HomePage() {
       throw new Error(createData.error || "创建草稿失败");
     }
     setCurrentSessionId(createData.session.id);
-    setMessages(createData.session.messages || defaultMessage);
-    setContext(createData.session.context || { workflowState: "idle" });
+    const nextMessages = createData.session.messages || defaultMessage;
+    const nextContext = createData.session.context || { workflowState: "idle" };
+    setMessages(nextMessages);
+    setContext(nextContext);
+    rememberSessionPersistBaseline(
+      sessionPersistSnapshotRef,
+      createData.session.id,
+      nextMessages,
+      nextContext
+    );
     setImageErrors({});
     setSidebarCollapsed(false);
     await loadCampaignSessions({ silent: true });
@@ -4380,7 +4389,7 @@ export default function HomePage() {
   const handleCreateNewSession = async () => {
     try {
       if (currentSessionId && !isEmptyState) {
-        await saveCurrentSession({ skipIfClean: true });
+        await saveCurrentSession();
       }
       await createDraftSessionAndActivate();
     } catch (error) {
@@ -4392,45 +4401,43 @@ export default function HomePage() {
   // 切换到指定会话（skipSave：当前会话已删除等情况，勿对已失效 id 执行 PUT）
   const handleSwitchSession = async (sessionId, opts = {}) => {
     const skipSave = Boolean(opts.skipSave);
+    if (sessionId === currentSessionId) return;
+
     const prevSessionId = currentSessionId;
     const prevMessages = messages;
     const prevContext = context;
-    const prevBaseline = sessionBaselineRef.current;
 
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-        credentials: 'include',
-      });
+      const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
       const data = await response.json();
-      if (data.success && data.session) {
-        const nextContext = data.session.context || { workflowState: 'idle' };
-        const loaded = Array.isArray(data.session.messages) ? data.session.messages : defaultMessage;
-        const nextMessages = stripNonChatMessages(sortSessionMessagesByTime(loaded));
-        setCurrentSessionId(sessionId);
-        setMessages(nextMessages);
-        setContext(nextContext);
-        setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
-        sessionBaselineRef.current = createSessionBaseline(
-          sessionId,
-          nextMessages,
-          nextContext
-        );
+      if (!data.success || !data.session) {
+        console.error('[HomePage] 切换会话失败:', data?.error || data);
+        return;
       }
 
-      if (
-        !skipSave &&
-        prevSessionId &&
-        prevSessionId !== sessionId &&
-        isSessionStateDirty(prevBaseline, prevSessionId, prevMessages, prevContext)
-      ) {
-        saveCurrentSession({
+      const loadedMessages = Array.isArray(data.session.messages)
+        ? data.session.messages
+        : defaultMessage;
+      const loadedContext = data.session.context || { workflowState: 'idle' };
+      const normalized = stripNonChatMessages(sortSessionMessagesByTime(loadedMessages));
+
+      setCurrentSessionId(sessionId);
+      setMessages(normalized);
+      setContext(loadedContext);
+      setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
+      rememberSessionPersistBaseline(
+        sessionPersistSnapshotRef,
+        sessionId,
+        normalized,
+        loadedContext
+      );
+
+      if (!skipSave && prevSessionId) {
+        void saveCurrentSession({
           sessionId: prevSessionId,
           messages: prevMessages,
           context: prevContext,
           reloadSessions: false,
-          skipIfClean: false,
-        }).catch((err) => {
-          console.warn('[HomePage] 切换后后台保存上一会话失败:', err);
         });
       }
     } catch (error) {
