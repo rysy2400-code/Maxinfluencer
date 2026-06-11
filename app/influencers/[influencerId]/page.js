@@ -11,6 +11,89 @@ import React, {
 import { useParams } from "next/navigation";
 import { useInfluencerInbox } from "../influencer-inbox-context";
 import { formatTime, Pill } from "../shared-ui";
+import {
+  inboundAttachmentDownloadUrl,
+  inboundAttachmentPreviewUrl,
+  isImageAttachment,
+} from "../../../lib/influencer/inbound-attachment-urls.js";
+
+function attachmentPreviewHref(att) {
+  if (att?.inboundAttachmentId) {
+    return inboundAttachmentPreviewUrl(att.inboundAttachmentId);
+  }
+  if (att?.attachmentId) {
+    return `/api/influencers/attachments/${att.attachmentId}`;
+  }
+  return null;
+}
+
+function attachmentDownloadHref(att) {
+  if (att?.inboundAttachmentId) {
+    return inboundAttachmentDownloadUrl(att.inboundAttachmentId);
+  }
+  if (att?.attachmentId) {
+    return `/api/influencers/attachments/${att.attachmentId}?download=1`;
+  }
+  return null;
+}
+
+function renderTimelineAttachments(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+  return (
+    <div style={{ marginTop: 8, fontSize: 12, color: "#555" }}>
+      {items.map((att, idx) => {
+        const previewHref = attachmentPreviewHref(att);
+        const downloadHref = attachmentDownloadHref(att);
+        const showImage = isImageAttachment(att?.contentType) && previewHref;
+        return (
+          <div key={`${att?.inboundAttachmentId || att?.attachmentId || idx}`} style={{ marginTop: 6 }}>
+            {showImage ? (
+              <a href={previewHref} target="_blank" rel="noreferrer">
+                <img
+                  src={previewHref}
+                  alt={att?.filename || `attachment-${idx + 1}`}
+                  loading="lazy"
+                  style={{
+                    display: "block",
+                    maxWidth: 240,
+                    maxHeight: 240,
+                    borderRadius: 8,
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    objectFit: "contain",
+                    background: "#F5F5F5",
+                  }}
+                />
+              </a>
+            ) : null}
+            <div style={{ marginTop: showImage ? 4 : 0 }}>
+              {att?.filename || `file-${idx + 1}`}
+              {previewHref ? (
+                <a
+                  href={previewHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ marginLeft: 8, color: "#576B95" }}
+                >
+                  预览
+                </a>
+              ) : null}
+              {downloadHref ? (
+                <a
+                  href={downloadHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ marginLeft: 6, color: "#576B95" }}
+                >
+                  下载
+                </a>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function InfluencerChatPage() {
   const params = useParams();
@@ -306,40 +389,7 @@ export default function InfluencerChatPage() {
           <div style={{ whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.45 }}>
             {item.bodyText}
           </div>
-          {item.payloadSafe?.attachments?.items?.length ? (
-            <div style={{ marginTop: 8, fontSize: 12, color: "#555" }}>
-              {item.payloadSafe.attachments.items.map((att, idx) => {
-                const aid = att?.attachmentId;
-                const previewHref = aid ? `/api/influencers/attachments/${aid}` : null;
-                const downloadHref = aid ? `/api/influencers/attachments/${aid}?download=1` : null;
-                return (
-                  <div key={`${aid || idx}`} style={{ marginTop: 4 }}>
-                    {att?.filename || `file-${idx + 1}`}
-                    {previewHref ? (
-                      <a
-                        href={previewHref}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ marginLeft: 8, color: "#576B95" }}
-                      >
-                        预览
-                      </a>
-                    ) : null}
-                    {downloadHref ? (
-                      <a
-                        href={downloadHref}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ marginLeft: 6, color: "#576B95" }}
-                      >
-                        下载
-                      </a>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
+          {renderTimelineAttachments(item.payloadSafe?.attachments?.items)}
         </div>
       </div>
     );

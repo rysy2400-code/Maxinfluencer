@@ -23,6 +23,26 @@ import {
 } from "../lib/agents/influencer-agent.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
+
+const AUTO_REPLY_PATTERNS = [
+  /thank you for your email/i,
+  /we value your message/i,
+  /will respond as soon as possible/i,
+  /out of office/i,
+  /automatic reply/i,
+  /auto-?reply/i,
+  /away from (my|the) (desk|office)/i,
+];
+
+function isLikelyAutoReply(subject, bodyText) {
+  const combined = `${subject || ""}\n${bodyText || ""}`.trim();
+  if (!combined) return false;
+  return AUTO_REPLY_PATTERNS.some((re) => re.test(combined));
+}
+
+function isBodyEffectivelyEmpty(bodyText) {
+  return !String(bodyText || "").trim() || String(bodyText).trim().length < 15;
+}
 import {
   buildActionMessageId,
   buildTraceIdFromInboundMessageId,
@@ -303,12 +323,21 @@ async function handleAgentEvents(decision, event, executions) {
     const campaignId = ae.campaignId || exec?.campaignId || null;
     const influencerId =
       ae.influencerId || event.influencer_id || exec?.influencerId || null;
+    const execHandle =
+      exec?.influencerId != null ? String(exec.influencerId).trim() : "";
+    const tiktokUsername =
+      (typeof ae.tiktokUsername === "string" && ae.tiktokUsername.trim()
+        ? ae.tiktokUsername.trim().replace(/^@/, "")
+        : execHandle && !/^\d+$/.test(execHandle)
+          ? execHandle.replace(/^@/, "")
+          : null) || null;
     const eventType = ae.type || ae.eventType || "generic";
 
     const payload = {
       ...ae,
       campaignId,
       influencerId,
+      ...(tiktokUsername ? { tiktokUsername } : {}),
       source: "influencer_email_agent",
       sourceEventId: event.id,
       sourceMessageId: event.message_id,
@@ -518,6 +547,8 @@ async function processEvent(event) {
       to: event.to_email,
       subject: event.subject,
       bodyText: event.body_text,
+      bodyEffectivelyEmpty: isBodyEffectivelyEmpty(event.body_text),
+      likelyAutoReply: isLikelyAutoReply(event.subject, event.body_text),
       messageId: event.message_id,
       inReplyTo: event.in_reply_to,
       createdAt: event.created_at,
@@ -655,6 +686,13 @@ ${influencerAgentBasePrompt}
   - "published"（仅当 activeExecutions 中该 campaign 已是 published、且需更新 videoLink 时）
 - 如果你认为当前邮件不需要修改任何 Campaign 的 stage，请返回：{"updates": []}，但你仍然可以返回 outboundEmails 或 agentEvents。
 - 对于 creator_replied_special_request：当红人明确同意/接受品牌方的特殊请求（如改价、改时间、加条数等）时，specialRequestStatus 必须为 "resolved"；仅当红人拒绝或提出新条件需品牌再决定时，才用 "pending_brand"。
+
+【正文为空 / 自动回复 / 非实质性回复】
+- 若 email.bodyText 为空、极短（少于 15 个有效字符）或明显是自动回复（subject/body 含 "Thank you for your email"、"We value your message"、"Out of office"、"Automatic reply"、"Auto-Reply" 等）：
+  - **禁止**仅因「红人回复了邮件」就将 newStage 设为 quote_submitted，也**禁止**推断红人已接受报价或有意向合作。
+  - 应返回 {"updates": []}，且通常不需要 outboundEmails（除非需礼貌确认已收到并等待正式回复）。
+  - note 中应写「疑似自动回复或正文未能解析，等待红人实质性回复」，**不要**写「正文为空但回复行为表明有意向」。
+- 只有 email.bodyText 中**明确**出现报价、同意合作、提交草稿/视频链接等实质性内容时，才可推进 stage。
 `;
 
   const userContent = `下面是一个红人的最新邮件和与该红人相关的所有 Campaign 执行状态，请根据邮件内容判断是否需要更新某些 Campaign 的 stage。\n\n输入数据（JSON）：\n${JSON.stringify(

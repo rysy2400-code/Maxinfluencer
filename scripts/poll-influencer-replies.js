@@ -21,6 +21,7 @@ import {
   getOpContactEmail,
 } from "../lib/email/temporary-outbound-pool.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
 import { buildTraceIdFromInboundMessageId } from "../lib/utils/timeline-ids.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -235,6 +236,9 @@ async function pollOnce() {
 
         // 记录红人来信到对话记忆表（仅保存清洗后的最新回复内容）
         try {
+          const inboundAttachments = eventId
+            ? await listInboundAttachmentsByEmailEventId(eventId)
+            : [];
           const traceId = buildTraceIdFromInboundMessageId(msg.messageId);
           await logConversationMessage({
             influencerId,
@@ -269,7 +273,19 @@ async function pollOnce() {
               },
               attachmentsCount: Array.isArray(msg.attachments)
                 ? msg.attachments.length
-                : 0,
+                : inboundAttachments.length,
+              attachments:
+                inboundAttachments.length > 0
+                  ? {
+                      source: "inbound_email_event_attachments",
+                      items: inboundAttachments.map((a) => ({
+                        inboundAttachmentId: a.inboundAttachmentId,
+                        filename: a.filename,
+                        contentType: a.contentType,
+                        sizeBytes: a.sizeBytes,
+                      })),
+                    }
+                  : undefined,
             },
           });
         } catch (err) {

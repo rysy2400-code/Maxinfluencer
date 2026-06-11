@@ -2,6 +2,18 @@
 
 import React from "react";
 
+export function formatInfluencerLabel(inf) {
+  const u = inf?.username && String(inf.username).trim().replace(/^@/, "");
+  if (u) return `@${u}`;
+  return inf?.displayName || inf?.influencerId || "—";
+}
+
+export function formatInfluencerInitials(inf) {
+  const label = formatInfluencerLabel(inf);
+  const source = label.startsWith("@") ? label.slice(1) : label;
+  return (source || "?").slice(0, 2).toUpperCase();
+}
+
 export function formatTime(v) {
   if (!v) return "";
   try {

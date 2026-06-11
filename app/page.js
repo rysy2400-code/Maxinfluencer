@@ -1013,6 +1013,7 @@ function ExecutionProgressRow({
   execPatchingId,
   patchExecution,
   executionUsernameSet,
+  highlightUsername,
 }) {
   const [draftExpanded, setDraftExpanded] = React.useState(false);
   const [negExpanded, setNegExpanded] = React.useState(false);
@@ -1053,23 +1054,26 @@ function ExecutionProgressRow({
     item.profile_analysis ||
     "";
 
+  const isHighlighted = highlightUsername && username === highlightUsername;
   const cardStyle = {
     padding: "10px 12px",
     borderRadius: 10,
     backgroundColor: "#FFFFFF",
-    border: "1px solid #E5E7EB",
+    border: isHighlighted ? "2px solid #4F46E5" : "1px solid #E5E7EB",
     borderLeft:
       platform === "Instagram"
         ? "3px solid #E1306C"
         : platform === "YouTube"
           ? "3px solid #FF0000"
           : "3px solid #111827",
+    boxShadow: isHighlighted ? "0 0 0 3px rgba(79, 70, 229, 0.2)" : "none",
     fontSize: 12,
     color: "#374151",
     display: "flex",
     flexDirection: "column",
     gap: 6,
   };
+  const rowDomId = username ? `execution-row-${username}` : undefined;
 
   const usernameLink = (
     <a
@@ -1088,7 +1092,7 @@ function ExecutionProgressRow({
     const profileBlock = profileAnalysis && String(profileAnalysis).trim() !== "" ? profileAnalysis : "—";
 
     return (
-      <div style={cardStyle}>
+      <div id={rowDomId} style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {usernameLink}
@@ -1248,7 +1252,7 @@ function ExecutionProgressRow({
   );
 
   return (
-    <div style={cardStyle}>
+    <div id={rowDomId} style={cardStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {usernameLink}
@@ -1822,6 +1826,8 @@ export default function HomePage() {
   const [executionExportingStage, setExecutionExportingStage] = useState(null); // 正在导出的执行阶段 key
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
+  const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
+  const pendingFocusExecutionUsernameRef = useRef(null);
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
   const [analyzedCandidatesItems, setAnalyzedCandidatesItems] = useState([]);
   const [analyzedCandidatesNextBeforeId, setAnalyzedCandidatesNextBeforeId] = useState(null);
@@ -2120,6 +2126,64 @@ export default function HomePage() {
       setActiveExecutionStage("contacted");
     }
   }, [isExecutionPhaseGlobal]);
+
+  const focusExecutionInfluencer = React.useCallback(
+    (username) => {
+      const handle = String(username || "")
+        .trim()
+        .replace(/^@/, "");
+      if (!handle) return;
+
+      setBinComputerView("overview");
+      setHighlightExecutionUsername(handle);
+      window.setTimeout(() => setHighlightExecutionUsername(null), 2500);
+
+      const cols = executionStatus?.columns || {};
+      const stageOrder = [
+        "contacted",
+        "pendingPrice",
+        "pendingSample",
+        "pendingDraft",
+        "published",
+      ];
+      let targetStage = null;
+      for (const key of stageOrder) {
+        if ((cols[key] || []).some((row) => row?.id === handle)) {
+          targetStage = key;
+          break;
+        }
+      }
+      if (!targetStage) {
+        if (analyzedCandidatesItems.some((row) => row?.id === handle)) {
+          targetStage = "analyzed";
+        }
+      }
+
+      pendingFocusExecutionUsernameRef.current = handle;
+      if (targetStage) {
+        setActiveExecutionStage(targetStage);
+      } else {
+        requestAnimationFrame(() => {
+          const el = document.getElementById(`execution-row-${handle}`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+          pendingFocusExecutionUsernameRef.current = null;
+        });
+      }
+    },
+    [executionStatus, analyzedCandidatesItems]
+  );
+
+  useEffect(() => {
+    const handle = pendingFocusExecutionUsernameRef.current;
+    if (!handle || binComputerView !== "overview") return undefined;
+
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`execution-row-${handle}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      pendingFocusExecutionUsernameRef.current = null;
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [activeExecutionStage, binComputerView, executionStatus]);
 
   useEffect(() => {
     setAnalyzedCandidatesItems([]);
@@ -3718,6 +3782,7 @@ export default function HomePage() {
     // 使用更宽松的正则，允许空值和特殊字符，使用非贪婪匹配
     // 格式: [INFLUENCER:avatar:url:platform:id:name:followers:views:reason:isRecommended:analysis]
     const influencerRegex = /\[INFLUENCER:([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^\]]*?)\]/g;
+    const execInfluencerRegex = /\[EXEC:@([\w.\u4e00-\u9fa5]+)\]/g;
     const parts = [];
     let lastIndex = 0;
     let partIndex = 0;
@@ -3750,6 +3815,18 @@ export default function HomePage() {
       });
     }
     
+    // 匹配可点击跳转执行看板的红人 @username
+    execInfluencerRegex.lastIndex = 0;
+    while ((match = execInfluencerRegex.exec(content)) !== null) {
+      matches.push({
+        type: "execInfluencer",
+        index: match.index,
+        length: match[0].length,
+        username: match[1],
+        fullMatch: match[0],
+      });
+    }
+
     // 匹配红人账户
     influencerRegex.lastIndex = 0; // 重置正则
     while ((match = influencerRegex.exec(content)) !== null) {
@@ -3896,6 +3973,30 @@ export default function HomePage() {
           >
             {match.text}
           </a>
+        );
+      } else if (match.type === "execInfluencer") {
+        parts.push(
+          <button
+            key={`exec-influencer-${partIndex++}`}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              focusExecutionInfluencer(match.username);
+            }}
+            style={{
+              color: "#4F46E5",
+              fontWeight: 600,
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              fontSize: "inherit",
+              fontFamily: "inherit",
+              lineHeight: "inherit",
+            }}
+          >
+            @{match.username}
+          </button>
         );
       }
       
@@ -6570,6 +6671,7 @@ export default function HomePage() {
                                           execPatchingId={execPatchingId}
                                           patchExecution={patchExecution}
                                           executionUsernameSet={executionUsernameSet}
+                                          highlightUsername={highlightExecutionUsername}
                                         />
                                       ))
                                     )}
@@ -6602,6 +6704,7 @@ export default function HomePage() {
                                           execPatchingId={execPatchingId}
                                           patchExecution={patchExecution}
                                           executionUsernameSet={executionUsernameSet}
+                                          highlightUsername={highlightExecutionUsername}
                                         />
                                       ))
                                     )}
@@ -6635,6 +6738,7 @@ export default function HomePage() {
                                       execPatchingId={execPatchingId}
                                       patchExecution={patchExecution}
                                       executionUsernameSet={executionUsernameSet}
+                                      highlightUsername={highlightExecutionUsername}
                                     />
                                   ))
                                 )}

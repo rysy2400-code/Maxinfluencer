@@ -2,7 +2,7 @@
 
 import React, { useMemo } from "react";
 import Link from "next/link";
-import { formatTime, Pill } from "./shared-ui";
+import { formatInfluencerInitials, formatInfluencerLabel, formatTime, Pill } from "./shared-ui";
 
 /** 与 lib/db/influencer-inbox-by-project-dao.js 中 EXECUTION_STAGE_ORDER 保持一致 */
 const EXECUTION_STAGE_ORDER = [
@@ -118,11 +118,11 @@ export function ProjectInboxList({
               flexShrink: 0,
             }}
           >
-            {(inf.displayName || inf.username || inf.influencerId || "?").slice(0, 2).toUpperCase()}
+            {formatInfluencerInitials(inf)}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 13 }}>
-              {inf.displayName || inf.username || inf.influencerId}
+              {formatInfluencerLabel(inf)}
             </div>
             <div
               style={{

@@ -11,7 +11,7 @@ import React, {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { InfluencerInboxProvider } from "./influencer-inbox-context";
-import { formatTime, Pill } from "./shared-ui";
+import { formatInfluencerInitials, formatInfluencerLabel, formatTime, Pill } from "./shared-ui";
 import { findSelectionPath, ProjectInboxList } from "./project-inbox-list";
 
 const EXPAND_STORAGE_KEY = "maxinfluencer_inbox_expand_v1";
@@ -693,13 +693,11 @@ export default function InfluencersLayout({ children }) {
                               flexShrink: 0,
                             }}
                           >
-                            {(inf.displayName || inf.username || inf.influencerId || "?")
-                              .slice(0, 2)
-                              .toUpperCase()}
+                            {formatInfluencerInitials(inf)}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 700, fontSize: 14 }}>
-                              {inf.displayName || inf.username || inf.influencerId}
+                              {formatInfluencerLabel(inf)}
                             </div>
                             <div
                               style={{

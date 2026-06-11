@@ -25,6 +25,12 @@ import {
   buildTraceIdFromInboundMessageId,
 } from "../lib/utils/timeline-ids.js";
 import { resolveInfluencerAgentUpdate } from "../lib/execution/stage-transition.js";
+import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
+import { buildInboundImageMarkers } from "../lib/influencer/inbound-attachment-urls.js";
+import {
+  formatExecInfluencerMention,
+  resolveTiktokUsernameForExecution,
+} from "../lib/execution/exec-influencer-mention.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -319,14 +325,29 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
       );
       const sessionId = rows?.[0]?.session_id || null;
       if (sessionId) {
-        const handleHint =
-          typeof influencerId === "string" && influencerId && !/^\d+$/.test(influencerId)
-            ? `@${influencerId.replace(/^@/, "")}`
-            : `@${influencerId}`;
+        let tiktokUsername =
+          typeof payload.tiktokUsername === "string"
+            ? payload.tiktokUsername.trim().replace(/^@/, "")
+            : "";
+        if (!tiktokUsername || /^\d+$/.test(tiktokUsername)) {
+          tiktokUsername =
+            (await resolveTiktokUsernameForExecution(campaignId, influencerId)) ||
+            "";
+        }
+        const handleHint = tiktokUsername
+          ? formatExecInfluencerMention(tiktokUsername)
+          : `@${influencerId}`;
+        const sourceEmailEventId =
+          payload.sourceEventId != null ? Number(payload.sourceEventId) : null;
+        const inboundAttachments =
+          sourceEmailEventId && !Number.isNaN(sourceEmailEventId)
+            ? await listInboundAttachmentsByEmailEventId(sourceEmailEventId)
+            : [];
+        const attachmentMarkers = buildInboundImageMarkers(inboundAttachments);
         const content =
           specialRequestStatus === "resolved"
-            ? `【特殊请求已达成一致】\n\n红人 ${handleHint} 已同意本轮特殊请求。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数，如需调整请在本对话中确认后再操作。）`
-            : `【特殊请求 · 待您决策】\n\n红人 ${handleHint} 已对本轮询问作出回复，需要您确认下一步。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数；您可继续协商或在本对话中明确指示。）`;
+            ? `【特殊请求已达成一致】\n\n红人 ${handleHint} 已同意本轮特殊请求。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数，如需调整请在本对话中确认后再操作。）${attachmentMarkers}`
+            : `【特殊请求 · 待您决策】\n\n红人 ${handleHint} 已对本轮询问作出回复，需要您确认下一步。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数；您可继续协商或在本对话中明确指示。）${attachmentMarkers}`;
         const result = await appendBinMessageToSession(sessionId, content);
         if (!result.success) {
           console.warn(
