@@ -22,6 +22,22 @@ function Invoke-Npm {
   }
 }
 
+function Stop-OrphanNextOnPort80 {
+  Write-Host "[deploy-web] Stopping orphan next processes listening on port 80..."
+  try {
+    $lines = netstat -ano | Select-String "0\.0\.0\.0:80\s+0\.0\.0\.0:0\s+LISTENING"
+    foreach ($line in $lines) {
+      $procId = ($line.ToString().Trim() -split '\s+')[-1]
+      if ($procId -notmatch '^\d+$') { continue }
+      $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+      if ($proc -and $proc.CommandLine -match 'next" start -p 80') {
+        Stop-Process -Id ([int]$procId) -Force -ErrorAction SilentlyContinue
+      }
+    }
+  } catch {}
+  Start-Sleep -Seconds 2
+}
+
 function Stop-MaxinWebForDeploy {
   # Windows：PM2 子进程会占用 node_modules 下文件，npm ci 删除/覆盖时常见 EPERM / ENOTEMPTY
   Write-Host "[deploy-web] Stopping/removing PM2 app 'maxin-web' to release file locks..."
@@ -31,6 +47,7 @@ function Stop-MaxinWebForDeploy {
   try {
     pm2 delete maxin-web 2>$null | Out-Null
   } catch {}
+  Stop-OrphanNextOnPort80
   Start-Sleep -Seconds 4
 }
 
@@ -171,6 +188,7 @@ try {
 }
 
 Write-Host "[deploy-web] pm2 start maxin-web via ecosystem..."
+Stop-OrphanNextOnPort80
 pm2 start $ecosystemPath --only maxin-web --update-env
 if ($LASTEXITCODE -ne 0) {
   throw "pm2 start failed (exit $LASTEXITCODE). Try: pm2 kill  (stops PM2 daemon) then re-run deploy-web.ps1"
