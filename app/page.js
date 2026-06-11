@@ -4380,7 +4380,7 @@ export default function HomePage() {
   const handleCreateNewSession = async () => {
     try {
       if (currentSessionId && !isEmptyState) {
-        await saveCurrentSession();
+        await saveCurrentSession({ skipIfClean: true });
       }
       await createDraftSessionAndActivate();
     } catch (error) {
