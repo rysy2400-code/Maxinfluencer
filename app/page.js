@@ -20,6 +20,7 @@ import {
   mergeSessionMessages,
   normalizeSessionMessagesForStorage,
   parseMessageTime,
+  sessionMessageMergeKey,
   sortSessionMessagesByTime,
   stripNonChatMessages,
 } from "../lib/chat/session-messages.js";
@@ -585,6 +586,32 @@ function buildChatRenderableItems(messages) {
 
 function chatMessageCompletedAt() {
   return new Date().toISOString();
+}
+
+function fingerprintSessionMessages(messages) {
+  return stripNonChatMessages(sortSessionMessagesByTime(messages))
+    .map(sessionMessageMergeKey)
+    .join("\n");
+}
+
+function fingerprintSessionContext(context) {
+  return JSON.stringify(context || {});
+}
+
+function createSessionBaseline(sessionId, messages, context) {
+  return {
+    sessionId,
+    messagesKey: fingerprintSessionMessages(messages),
+    contextKey: fingerprintSessionContext(context),
+  };
+}
+
+function isSessionStateDirty(baseline, sessionId, messages, context) {
+  if (!baseline || baseline.sessionId !== sessionId) return true;
+  return (
+    baseline.messagesKey !== fingerprintSessionMessages(messages) ||
+    baseline.contextKey !== fingerprintSessionContext(context)
+  );
 }
 
 function ChatTimeSeparator({ label }) {
@@ -1816,6 +1843,7 @@ export default function HomePage() {
   const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
   const [workLiveThinking, setWorkLiveThinking] = useState(EMPTY_WORK_LIVE_THINKING);
   const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
+  const sessionBaselineRef = useRef(createSessionBaseline(null, [], {}));
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
   const publishedSessionGroups = useMemo(() => {
@@ -2669,15 +2697,22 @@ export default function HomePage() {
           const serverMessages = Array.isArray(data.session.messages)
             ? data.session.messages
             : cloneWelcomeMessages();
-          setMessages(
+          const nextContext =
+            data.session.context && typeof data.session.context === "object"
+              ? data.session.context
+              : { workflowState: "idle" };
+          const nextMessages =
             serverMessages.length > 0
               ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
-              : cloneWelcomeMessages()
-          );
+              : cloneWelcomeMessages();
+          setMessages(nextMessages);
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
-          if (data.session.context && typeof data.session.context === "object") {
-            setContext(data.session.context);
-          }
+          setContext(nextContext);
+          sessionBaselineRef.current = createSessionBaseline(
+            currentSessionId,
+            nextMessages,
+            nextContext
+          );
           return;
         }
         clearChatPersistenceKeys();
@@ -2802,42 +2837,65 @@ export default function HomePage() {
   // 保存当前会话到后端（如果存在 currentSessionId）
   // options.reloadSessions: 是否在保存成功后刷新左侧会话列表（默认 false，避免每次回复造成左侧闪烁）
   // 不传 title：标题仅由创建会话、侧栏重命名等显式写入；避免保存消息/切换会话时按首条用户消息覆盖改名
-  const saveCurrentSession = React.useCallback(async (options = { reloadSessions: false }) => {
-    if (!currentSessionId) return;
-    
+  const saveCurrentSession = React.useCallback(async (options = {}) => {
+    const {
+      reloadSessions = false,
+      sessionId: overrideSessionId,
+      messages: overrideMessages,
+      context: overrideContext,
+      skipIfClean = false,
+      skipServerMerge = false,
+    } = options;
+
+    const sid = overrideSessionId ?? currentSessionId;
+    const msgs = overrideMessages ?? messages;
+    const ctx = overrideContext ?? context;
+    if (!sid) return;
+
+    if (
+      skipIfClean &&
+      !isSessionStateDirty(sessionBaselineRef.current, sid, msgs, ctx)
+    ) {
+      return;
+    }
+
     try {
-      let messagesToPersist = normalizeSessionMessagesForStorage(messages, {
+      let messagesToPersist = normalizeSessionMessagesForStorage(msgs, {
         keepStreaming: loading,
       });
-      try {
-        const latestRes = await fetch(`/api/sessions/${currentSessionId}`, {
-          credentials: 'include',
-        });
-        const latestData = await latestRes.json().catch(() => ({}));
-        if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
-          messagesToPersist = normalizeSessionMessagesForStorage(
-            mergeSessionMessages(messages, latestData.session.messages),
-            { keepStreaming: loading }
-          );
+      if (!skipServerMerge) {
+        try {
+          const latestRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+            credentials: 'include',
+          });
+          const latestData = await latestRes.json().catch(() => ({}));
+          if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
+            messagesToPersist = normalizeSessionMessagesForStorage(
+              mergeSessionMessages(msgs, latestData.session.messages),
+              { keepStreaming: loading }
+            );
+          }
+        } catch (mergeErr) {
+          console.warn('[HomePage] 保存前合并服务端消息失败，使用本地排序结果:', mergeErr);
         }
-      } catch (mergeErr) {
-        console.warn('[HomePage] 保存前合并服务端消息失败，使用本地排序结果:', mergeErr);
       }
 
-      const response = await fetch(`/api/sessions/${currentSessionId}`, {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messagesToPersist,
-          context,
+          context: ctx,
         }),
       });
-      
+
       const data = await response.json();
-      if (data.success && options.reloadSessions !== false) {
-        // 更新本地草稿列表（可选，避免在仅切换会话时造成左侧闪烁）
-        await loadCampaignSessions();
+      if (data.success) {
+        sessionBaselineRef.current = createSessionBaseline(sid, msgs, ctx);
+        if (reloadSessions) {
+          await loadCampaignSessions();
+        }
       }
     } catch (error) {
       console.error('[HomePage] 保存会话失败:', error);
@@ -4334,20 +4392,46 @@ export default function HomePage() {
   // 切换到指定会话（skipSave：当前会话已删除等情况，勿对已失效 id 执行 PUT）
   const handleSwitchSession = async (sessionId, opts = {}) => {
     const skipSave = Boolean(opts.skipSave);
+    const prevSessionId = currentSessionId;
+    const prevMessages = messages;
+    const prevContext = context;
+    const prevBaseline = sessionBaselineRef.current;
+
     try {
-      if (!skipSave && currentSessionId && currentSessionId !== sessionId) {
-        await saveCurrentSession({ reloadSessions: false });
-      }
-      
-      // 加载新会话
-      const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+        credentials: 'include',
+      });
       const data = await response.json();
       if (data.success && data.session) {
-        setCurrentSessionId(sessionId);
+        const nextContext = data.session.context || { workflowState: 'idle' };
         const loaded = Array.isArray(data.session.messages) ? data.session.messages : defaultMessage;
-        setMessages(stripNonChatMessages(sortSessionMessagesByTime(loaded)));
-        setContext(data.session.context || { workflowState: 'idle' });
+        const nextMessages = stripNonChatMessages(sortSessionMessagesByTime(loaded));
+        setCurrentSessionId(sessionId);
+        setMessages(nextMessages);
+        setContext(nextContext);
         setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
+        sessionBaselineRef.current = createSessionBaseline(
+          sessionId,
+          nextMessages,
+          nextContext
+        );
+      }
+
+      if (
+        !skipSave &&
+        prevSessionId &&
+        prevSessionId !== sessionId &&
+        isSessionStateDirty(prevBaseline, prevSessionId, prevMessages, prevContext)
+      ) {
+        saveCurrentSession({
+          sessionId: prevSessionId,
+          messages: prevMessages,
+          context: prevContext,
+          reloadSessions: false,
+          skipIfClean: false,
+        }).catch((err) => {
+          console.warn('[HomePage] 切换后后台保存上一会话失败:', err);
+        });
       }
     } catch (error) {
       console.error('[HomePage] 切换会话失败:', error);
