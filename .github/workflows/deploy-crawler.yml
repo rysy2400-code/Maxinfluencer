@@ -35,6 +35,8 @@ jobs:
           - 152.32.252.45
           - 36.255.223.141
           - 152.32.192.65
+          - 152.32.211.203
+          - 107.150.119.142
     steps:
       - name: Deploy crawler over SSH (${{ matrix.host }})
         uses: appleboy/ssh-action@v1.2.0
