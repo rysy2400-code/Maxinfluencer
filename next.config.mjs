@@ -10,11 +10,24 @@ const nextConfig = {
     cpus: 1,
     workerThreads: false,
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     // cheerio 只在服务端使用，配置 webpack 正确处理
     if (isServer) {
       config.externals = config.externals || [];
       // 确保 cheerio 在服务端正确解析
+    }
+    if (dev) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: [
+          "**/node_modules/**",
+          "**/.next/**",
+          "**/.affiliate-partner-profile/**",
+          "**/.chrome-cdp-*/**",
+          "**/.tiktok-user-data*/**",
+          "**/tiktok-user-data-chrome/**",
+        ],
+      };
     }
     return config;
   },

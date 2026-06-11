@@ -31,34 +31,65 @@ if (-not $visible) {
   $chromeArgList = @("--disable-gpu") + $chromeArgList
 }
 
-function Stop-Chrome9222 {
+$profileDirPattern = [Regex]::Escape($chromeDir)
+$unhealthySince = $null
+
+function Test-Cdp9222Healthy {
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9222/json/version" -TimeoutSec 3
+    return ($r.StatusCode -eq 200)
+  } catch {
+    return $false
+  }
+}
+
+function Get-Chrome9222ProfileProcesses {
   Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -match "chrome|msedge") -and
-    ($_.CommandLine -match "remote-debugging-port=9222")
-  } | ForEach-Object {
+    ($_.CommandLine -and ($_.CommandLine -match $profileDirPattern))
+  }
+}
+
+function Stop-Chrome9222 {
+  Get-Chrome9222ProfileProcesses | ForEach-Object {
     try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
   }
 }
 
 function Start-Chrome9222 {
   if (Test-Path $chrome) {
-    Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
+    $wd = Split-Path $chrome -Parent
+    Start-Process -FilePath $chrome -ArgumentList $chromeArgList -WorkingDirectory $wd | Out-Null
   }
 }
 
 while ($true) {
   if (Test-Path $signalFile) {
     try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
+    $unhealthySince = $null
     Stop-Chrome9222
     Start-Sleep -Seconds 2
     Start-Chrome9222
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 5
+    continue
   }
 
-  $mine = Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -match "chrome|msedge") -and
-    ($_.CommandLine -match "remote-debugging-port=9222")
+  if (Test-Cdp9222Healthy) {
+    $unhealthySince = $null
+  } else {
+    $profileProcs = @(Get-Chrome9222ProfileProcesses)
+    if ($profileProcs.Count -eq 0) {
+      $unhealthySince = $null
+      Start-Chrome9222
+    } elseif (-not $unhealthySince) {
+      $unhealthySince = Get-Date
+    } elseif (((Get-Date) - $unhealthySince).TotalSeconds -ge 45) {
+      $unhealthySince = $null
+      Stop-Chrome9222
+      Start-Sleep -Seconds 2
+      Start-Chrome9222
+    }
   }
-  if (-not $mine) { Start-Chrome9222 }
+
   Start-Sleep -Seconds 8
 }

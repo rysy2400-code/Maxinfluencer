@@ -353,6 +353,7 @@ async function processTask(task, platformSlug) {
 
   const publishKeywordNote = async ({
     status,
+    searchFoundCount = null,
     extractedCount = null,
     matchedCount = null,
     browsedCount = null,
@@ -368,6 +369,10 @@ async function processTask(task, platformSlug) {
           keyword: taskKeyword || payload.keyword || "",
           platform: taskPlatformSlug,
           reasonText: keywordReason || "该关键词更贴近当前 campaign 的目标受众方向。",
+          searchFoundCount:
+            searchFoundCount == null || Number.isNaN(Number(searchFoundCount))
+              ? null
+              : Number(searchFoundCount),
           browsedCount:
             browsedCount == null || Number.isNaN(Number(browsedCount))
               ? null
@@ -544,6 +549,16 @@ async function processTask(task, platformSlug) {
       (x) => x && (x.profileDataReady || x.analysisReady || (typeof x.analysis === "string" && x.analysis.trim()))
     ).length;
     const searchCount = Number(result?.stats?.videoCount || result?.videos?.length || 0);
+    const searchChannelCount = Number(
+      result?.stats?.searchChannelCount ??
+        result?.stats?.influencerCount ??
+        result?.influencers?.length ??
+        0
+    );
+    const analyzedCount = Number(
+      result?.stats?.analyzedCount ??
+        influencers.filter((x) => typeof x?.isRecommended === "boolean").length
+    );
     await upsertKeywordRunResult({
       campaignId,
       sessionId,
@@ -567,8 +582,9 @@ async function processTask(task, platformSlug) {
     const browsedDone = await fetchTaskCandidateBrowsedCount(task.id);
     await publishKeywordNote({
       status: "finished",
+      searchFoundCount: searchChannelCount,
       browsedCount: browsedDone,
-      extractedCount: enrichedCount,
+      extractedCount: analyzedCount || enrichedCount,
       matchedCount: recommendedCount,
     });
     return;

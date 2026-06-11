@@ -837,6 +837,13 @@ function resolveVideoPublishCountry(item) {
 }
 
 function formatGmvStat(item) {
+  const display =
+    item?.gmvDisplay ??
+    item?.gmv_display ??
+    item?.affiliateMetrics?.gmvDisplay ??
+    null;
+  if (display != null && String(display).trim()) return String(display).trim();
+
   const raw = item?.gmv;
   if (raw == null || raw === "") return "—";
   const n = Number(raw);

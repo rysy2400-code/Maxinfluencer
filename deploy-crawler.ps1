@@ -250,7 +250,7 @@ $guard9222Content = @"
 `$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
 `$env:CHROME_9222_USER_DATA_DIR = "$($chromeDir9222.Replace("\", "\\"))"
 `$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
-`$env:CHROME_VISIBLE = "$($env:CHROME_VISIBLE)"
+`$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
 . "$($guard9222Source.Replace("\", "\\"))"
 "@
