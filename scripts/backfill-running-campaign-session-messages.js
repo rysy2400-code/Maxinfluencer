@@ -28,18 +28,19 @@ dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
 const dryRun = process.argv.includes("--dry-run");
 
-async function loadRunningCampaigns() {
+async function loadCampaignsWithSpecialRequestMessages() {
   const rows = await queryTikTok(
     `
     SELECT
       c.id AS campaignId,
       c.session_id AS sessionId,
+      c.status AS campaignStatus,
       s.title AS sessionTitle
     FROM tiktok_campaign c
     INNER JOIN tiktok_campaign_sessions s ON s.id = c.session_id
-    WHERE c.status = 'running'
-      AND c.session_id IS NOT NULL
+    WHERE c.session_id IS NOT NULL
       AND TRIM(c.session_id) <> ''
+      AND JSON_SEARCH(s.messages, 'one', '%【特殊请求%', NULL, '$[*].content') IS NOT NULL
     ORDER BY c.created_at ASC
   `
   );
@@ -64,14 +65,14 @@ function resolveCampaignDisplayName(sessionTitle) {
 }
 
 async function backfill() {
-  const campaigns = await loadRunningCampaigns();
+  const campaigns = await loadCampaignsWithSpecialRequestMessages();
   if (!campaigns.length) {
-    console.log("[BackfillSessionMessages] 无 status=running 的 campaign，跳过。");
+    console.log("[BackfillSessionMessages] 无含特殊请求消息的 campaign，跳过。");
     return;
   }
 
   console.log(
-    `[BackfillSessionMessages] 共 ${campaigns.length} 个进行中 campaign${dryRun ? "（dry-run）" : ""}。`
+    `[BackfillSessionMessages] 共 ${campaigns.length} 个含特殊请求的 campaign${dryRun ? "（dry-run）" : ""}。`
   );
 
   let sessionsUpdated = 0;

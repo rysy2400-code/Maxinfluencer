@@ -3832,7 +3832,7 @@ export default function HomePage() {
     // 使用更宽松的正则，允许空值和特殊字符，使用非贪婪匹配
     // 格式: [INFLUENCER:avatar:url:platform:id:name:followers:views:reason:isRecommended:analysis]
     const influencerRegex = /\[INFLUENCER:([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^\]]*?)\]/g;
-    const execInfluencerRegex = /\[EXEC:@([\w.\u4e00-\u9fa5]+)\]/g;
+    const execInfluencerRegex = /\[EXEC:@([\w.\u4e00-\u9fa5_-]+)\]/g;
     const parts = [];
     let lastIndex = 0;
     let partIndex = 0;

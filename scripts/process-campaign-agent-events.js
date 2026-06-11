@@ -29,6 +29,7 @@ import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbou
 import { buildInboundImageMarkers } from "../lib/influencer/inbound-attachment-urls.js";
 import {
   formatExecInfluencerMention,
+  isPlatformCreatorId,
   resolveTiktokUsernameForExecution,
 } from "../lib/execution/exec-influencer-mention.js";
 
@@ -329,9 +330,10 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
           typeof payload.tiktokUsername === "string"
             ? payload.tiktokUsername.trim().replace(/^@/, "")
             : "";
-        if (!tiktokUsername || /^\d+$/.test(tiktokUsername)) {
+        if (!tiktokUsername || isPlatformCreatorId(tiktokUsername)) {
           tiktokUsername =
             (await resolveTiktokUsernameForExecution(campaignId, influencerId)) ||
+            (await resolveTiktokUsernameForExecution(campaignId, tiktokUsername)) ||
             "";
         }
         const handleHint = tiktokUsername

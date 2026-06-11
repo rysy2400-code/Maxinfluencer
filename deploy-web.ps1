@@ -22,6 +22,10 @@ function Invoke-Npm {
   }
 }
 
+function Test-Port80Listening {
+  return [bool](netstat -ano | Select-String "0\.0\.0\.0:80\s+0\.0\.0\.0:0\s+LISTENING")
+}
+
 function Stop-OrphanNextOnPort80 {
   Write-Host "[deploy-web] Stopping orphan next processes listening on port 80..."
   try {
@@ -187,12 +191,20 @@ try {
   $env:NODE_OPTIONS = $prevNodeOpts
 }
 
-Write-Host "[deploy-web] pm2 start maxin-web via ecosystem..."
+Write-Host "[deploy-web] starting maxin-web (ensure script: pm2 or detached next)..."
 Stop-OrphanNextOnPort80
-pm2 start $ecosystemPath --only maxin-web --update-env
+$ensureScript = Join-Path $Root "scripts\ensure-maxin-web.ps1"
+if (-not (Test-Path $ensureScript)) {
+  throw "ensure script missing: $ensureScript"
+}
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ensureScript
 if ($LASTEXITCODE -ne 0) {
-  throw "pm2 start failed (exit $LASTEXITCODE). Try: pm2 kill  (stops PM2 daemon) then re-run deploy-web.ps1"
+  throw "ensure-maxin-web failed (exit $LASTEXITCODE). Check logs\ensure-maxin-web.log"
 }
 
-pm2 save
-Write-Host "[deploy-web] Done."
+Start-Sleep -Seconds 3
+if (-not (Test-Port80Listening)) {
+  throw "port 80 is not listening after ensure-maxin-web. Check logs\ensure-maxin-web.log"
+}
+
+Write-Host "[deploy-web] maxin-web online on port 80."
