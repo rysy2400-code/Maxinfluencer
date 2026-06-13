@@ -2,6 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
+import { ChatPaperclipIcon } from "./chat-paperclip-icon";
+import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
 import {
@@ -5871,12 +5873,13 @@ export default function HomePage() {
                 </div>
                 <textarea
                   ref={inputTextAreaRefMain}
+                  className="bin-chat-textarea"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onFocus={() => setInputFocused(true)}
                   onBlur={() => setInputFocused(false)}
                   rows={1}
-                  placeholder="发送消息给 Bin"
+                  placeholder="发送消息给Bin"
                   style={{
                     flex: 1,
                     resize: "none",
@@ -6166,56 +6169,20 @@ export default function HomePage() {
               style={{
                 flex: 1,
                 display: "flex",
-                alignItems: "center",
-                borderRadius: 12,
-                border: "1px solid #D1D5DB",
-                padding: "6px 8px 6px 12px",
+                alignItems: "flex-end",
+                borderRadius: 16,
+                border: "1px solid #E5E7EB",
+                padding: "8px 10px 8px 14px",
                 backgroundColor: "#FFFFFF"
               }}
             >
-              {isExecutionPhaseGlobal && currentSessionId && (
-                <>
-                  <input
-                    ref={importListFileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    style={{ display: "none" }}
-                    onChange={handleInfluencerListFileChange}
-                  />
-                  <button
-                    type="button"
-                    disabled={importListUploading || loading}
-                    onClick={() => importListFileInputRef.current?.click()}
-                    title="上传附件（Excel/CSV）；发送前可附加说明文字"
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      border: "1px solid #E5E7EB",
-                      backgroundColor: "#F9FAFB",
-                      color: "#4B5563",
-                      cursor:
-                        importListUploading || loading ? "not-allowed" : "pointer",
-                      flexShrink: 0,
-                      marginRight: 6,
-                      fontSize: 16,
-                      lineHeight: 1,
-                    }}
-                  >
-                    {importListUploading ? "…" : "📎"}
-                  </button>
-                </>
-              )}
               <textarea
                 ref={inputTextAreaRefFooter}
+                className="bin-chat-textarea"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 rows={1}
-                placeholder={
-                  isExecutionPhaseGlobal
-                    ? "发送消息给 Bin，或 📎 上传附件后点发送"
-                    : "发送消息给 Bin"
-                }
+                placeholder="发送消息给Bin"
                 style={{
                   flex: 1,
                   resize: "none",
@@ -6227,7 +6194,8 @@ export default function HomePage() {
                   fontFamily: "system-ui, -apple-system, sans-serif",
                   minHeight: 32,
                   maxHeight: 220,
-                  overflowY: "auto"
+                  overflowY: "auto",
+                  padding: "4px 0"
                 }}
                 onKeyDown={(e) => {
                   const isComposing =
@@ -6239,6 +6207,55 @@ export default function HomePage() {
                   }
                 }}
               />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  flexShrink: 0,
+                  marginLeft: 8,
+                  paddingBottom: 2
+                }}
+              >
+                {isExecutionPhaseGlobal && currentSessionId && (
+                  <>
+                    <input
+                      ref={importListFileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      style={{ display: "none" }}
+                      onChange={handleInfluencerListFileChange}
+                    />
+                    <button
+                      type="button"
+                      disabled={importListUploading || loading}
+                      onClick={() => importListFileInputRef.current?.click()}
+                      title="上传附件（Excel/CSV）"
+                      aria-label="上传附件"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 8,
+                        border: "none",
+                        backgroundColor: "transparent",
+                        color: importListUploading || loading ? "#D1D5DB" : "#6B7280",
+                        cursor:
+                          importListUploading || loading ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {importListUploading ? (
+                        <span style={{ fontSize: 14, lineHeight: 1 }}>…</span>
+                      ) : (
+                        <ChatPaperclipIcon size={20} />
+                      )}
+                    </button>
+                  </>
+                )}
               <button
                 type="submit"
                 disabled={
@@ -6271,6 +6288,7 @@ export default function HomePage() {
               >
                 <ChatSendUpIcon />
               </button>
+              </div>
             </div>
           </div>
         </form>
