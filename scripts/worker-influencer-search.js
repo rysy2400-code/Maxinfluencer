@@ -197,12 +197,15 @@ async function countProcessingOnWorkerIp() {
   const rows = await queryTikTok(
     `
     SELECT COUNT(*) AS c
-    FROM tiktok_influencer_search_task
-    WHERE status = 'processing'
-      AND worker_ip IS NOT NULL
-      AND worker_ip = ?
+    FROM (
+      SELECT id FROM tiktok_influencer_search_task
+      WHERE status = 'processing' AND worker_ip IS NOT NULL AND worker_ip = ?
+      UNION ALL
+      SELECT id FROM tiktok_influencer_import_task
+      WHERE status = 'processing' AND worker_ip IS NOT NULL AND worker_ip = ?
+    ) t
   `,
-    [CURRENT_WORKER_IP]
+    [CURRENT_WORKER_IP, CURRENT_WORKER_IP]
   );
   return Number(rows?.[0]?.c ?? rows?.[0]?.C ?? 0) || 0;
 }
@@ -642,6 +645,164 @@ async function processTask(task, platformSlug) {
   });
 }
 
+const IMPORT_WORKER_ID = `import-worker-${workerIpToken()}`;
+
+async function claimOnePendingImportTask() {
+  const slots = resolveSearchWorkerSlots();
+  if ((await countProcessingOnWorkerIp()) >= slots) return null;
+
+  const rows = await queryTikTok(
+    `
+    SELECT id, campaign_id, session_id, import_batch_id, payload,
+           skipped_duplicate_count, parse_error_count
+    FROM tiktok_influencer_import_task
+    WHERE status = 'pending'
+    ORDER BY priority DESC, id ASC
+    LIMIT 5
+  `,
+    []
+  );
+  if (!rows?.length) return null;
+
+  for (const row of rows) {
+    const updateResult = await queryTikTok(
+      `
+      UPDATE tiktok_influencer_import_task
+      SET status = 'processing',
+          worker_id = ?,
+          worker_host = ?,
+          worker_ip = ?,
+          attempt_count = attempt_count + 1,
+          started_at = COALESCE(started_at, NOW()),
+          last_progress_at = NOW(),
+          updated_at = NOW()
+      WHERE id = ? AND status = 'pending'
+    `,
+      [IMPORT_WORKER_ID, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, row.id]
+    );
+    if (updateResult && Number(updateResult.affectedRows || 0) > 0) {
+      return {
+        ...row,
+        payload: parseJsonOrObject(row.payload) || {},
+      };
+    }
+  }
+  return null;
+}
+
+async function markImportTaskStatus(id, status, errorMessage = null) {
+  await queryTikTok(
+    `
+    UPDATE tiktok_influencer_import_task
+    SET status = ?,
+        error_message = ?,
+        finished_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ?
+  `,
+    [status, errorMessage, id]
+  );
+}
+
+async function processImportTaskRow(task) {
+  const { processInfluencerImportTask } = await import(
+    "../lib/influencer/process-import-task.js"
+  );
+  try {
+    const result = await processInfluencerImportTask(task, {});
+    if (!result?.success) {
+      await markImportTaskStatus(task.id, "failed", "processInfluencerImportTask failed");
+    }
+  } catch (err) {
+    console.error(
+      `[worker-influencer-search] import task ${task.id} error:`,
+      err?.message || err
+    );
+    await markImportTaskStatus(
+      task.id,
+      "failed",
+      String(err?.message || err).slice(0, 500)
+    );
+  }
+}
+
+async function reclaimStuckProcessingImportTasks() {
+  const stuckMinutes = Math.min(
+    24 * 60,
+    Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 7)
+  );
+  const rows = await queryTikTok(
+    `
+    UPDATE tiktok_influencer_import_task
+    SET status = 'failed',
+        finished_at = NOW(),
+        error_message = ?,
+        updated_at = NOW()
+    WHERE status = 'processing'
+      AND last_progress_at IS NOT NULL
+      AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
+  `,
+    [`stuck_reclaimed(import_last_progress>${stuckMinutes}m)`]
+  );
+  return Number(rows?.affectedRows || 0);
+}
+
+async function importTaskLoop() {
+  const idleSleepMs = Math.max(
+    Number(process.env.SEARCH_WORKER_IDLE_SLEEP_MS || 3000) || 3000,
+    500
+  );
+  let lastReclaimMs = 0;
+
+  console.log(
+    `[worker-influencer-search][import] loop workerId=${IMPORT_WORKER_ID} ip=${CURRENT_WORKER_IP || "unknown"}`
+  );
+
+  for (;;) {
+    try {
+      if (Date.now() - lastReclaimMs > 60_000) {
+        lastReclaimMs = Date.now();
+        const n = await reclaimStuckProcessingImportTasks();
+        if (n > 0) {
+          console.warn(`[worker-influencer-search] reclaimed stuck import tasks: ${n}`);
+        }
+      }
+
+      const task = await claimOnePendingImportTask();
+      if (!task) {
+        await sleep(idleSleepMs);
+        continue;
+      }
+
+      console.log(
+        `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
+      );
+
+      await runInCdpLoop(
+        { platform: "tiktok", taskId: task.id, workerId: IMPORT_WORKER_ID, kind: "import" },
+        () => processImportTaskRow(task)
+      );
+
+      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
+        try {
+          await runExecutionHeartbeatTick(new Date());
+        } catch (hbErr) {
+          console.warn(
+            `[worker-influencer-search][import] heartbeat 失败：`,
+            hbErr?.message || hbErr
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[worker-influencer-search][import] loop error:`,
+        err?.message || err
+      );
+      await sleep(idleSleepMs);
+    }
+  }
+}
+
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -747,7 +908,10 @@ async function main() {
     return;
   }
 
-  await Promise.all(platforms.map((platformSlug) => platformLoop(platformSlug)));
+  await Promise.all([
+    ...platforms.map((platformSlug) => platformLoop(platformSlug)),
+    importTaskLoop(),
+  ]);
 }
 
 main()

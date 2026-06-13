@@ -1779,11 +1779,14 @@ export default function HomePage() {
   const [imageErrors, setImageErrors] = useState({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [importListUploading, setImportListUploading] = useState(false);
+  const [pendingChatAttachments, setPendingChatAttachments] = useState([]);
   const [inputFocused, setInputFocused] = useState(false);
   const [expandedThinking, setExpandedThinking] = useState({}); // 记录哪些消息的思考过程已展开
   const [thinkingMode, setThinkingMode] = useState({}); // 记录每个消息的思考模式：'simple' | 'detailed'
   const isDevelopment = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'); // 开发环境标识
   const messagesEndRef = useRef(null);
+  const importListFileInputRef = useRef(null);
   const shouldAutoScrollRef = useRef(true); // 是否应该自动滚动
   const chatContainerRef = useRef(null); // 聊天容器的引用
   const localStorageSaveTimerRef = useRef(null); // localStorage 保存节流定时器（避免流式更新时频繁 JSON.stringify 卡顿）
@@ -3275,30 +3278,103 @@ export default function HomePage() {
 
   async function handleSend(e) {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    const hasAttachments = pendingChatAttachments.length > 0;
+    if ((!input.trim() && !hasAttachments) || loading) return;
     if (!authChecked) return;
     const trimmed = input.trim();
     if (!authUser) {
-      pendingSendRef.current = trimmed;
+      pendingSendRef.current = trimmed || (hasAttachments ? "[attachments]" : "");
       setLoginOpen(true);
       return;
     }
-    await runChatSend(trimmed);
+    await runChatSend(trimmed, hasAttachments ? [...pendingChatAttachments] : undefined);
   }
 
-  async function runChatSend(trimmedContent) {
+  async function refreshCurrentSessionMessages() {
+    if (!currentSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${currentSessionId}`, {
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!data?.success || !data.session) return;
+      const loaded = Array.isArray(data.session.messages)
+        ? data.session.messages
+        : [];
+      const normalized = stripNonChatMessages(sortSessionMessagesByTime(loaded));
+      setMessages(normalized);
+      rememberSessionPersistBaseline(
+        sessionPersistSnapshotRef,
+        currentSessionId,
+        normalized,
+        data.session.context || context
+      );
+    } catch (err) {
+      console.warn("[HomePage] refresh session messages failed:", err);
+    }
+  }
+
+  async function handleInfluencerListFileChange(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!authUser) {
+      setLoginOpen(true);
+      return;
+    }
+    if (!isExecutionPhaseGlobal || !currentSessionId) {
+      window.alert("请在 Campaign 执行阶段上传附件。");
+      return;
+    }
+    setImportListUploading(true);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      const res = await fetch(
+        `/api/sessions/${encodeURIComponent(currentSessionId)}/chat-attachments`,
+        { method: "POST", body: fd, credentials: "include" }
+      );
+      const data = await res.json();
+      if (!data?.success) {
+        throw new Error(data?.error || "上传失败");
+      }
+      setPendingChatAttachments((prev) => [
+        ...prev,
+        {
+          type: "chat_attachment",
+          name: data.fileName || file.name,
+          storageKey: data.storageKey,
+        },
+      ]);
+    } catch (err) {
+      window.alert(err?.message || String(err));
+    } finally {
+      setImportListUploading(false);
+    }
+  }
+
+  async function runChatSend(trimmedContent, attachments) {
     // 用户发送消息时，启用自动滚动
     shouldAutoScrollRef.current = true;
 
+    const attachmentList = Array.isArray(attachments) ? attachments : undefined;
+    const displayContent =
+      String(trimmedContent || "").trim() ||
+      (attachmentList?.length
+        ? `上传附件：${attachmentList.map((a) => a?.name || "文件").join("、")}`
+        : "");
+
     const userMessage = {
       role: "user",
-      content: trimmedContent,
+      content: displayContent,
       createdAt: chatMessageCompletedAt(),
+      ...(attachmentList?.length ? { attachments: attachmentList } : {}),
     };
 
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     setInput("");
+    setPendingChatAttachments([]);
     setLoading(true);
     // 新一轮请求开始：允许本轮自动切一次「工作实况」
     workLiveAutoSwitchedRef.current = false;
@@ -5940,7 +6016,8 @@ export default function HomePage() {
                         <BinLogo size={22} />
                       </div>
                     )}
-                    {visibleContent && (
+                    {(visibleContent ||
+                      (Array.isArray(m.attachments) && m.attachments.length > 0)) && (
                       <div
                         style={{
                           padding: "12px 16px",
@@ -5959,7 +6036,23 @@ export default function HomePage() {
                           overflowWrap: "break-word"
                         }}
                       >
-                        {renderMessageContent(m.content)}
+                        {Array.isArray(m.attachments) &&
+                          m.attachments.map((att, attIdx) => (
+                            <div
+                              key={`${item.key}-att-${attIdx}`}
+                              style={{
+                                fontSize: 12,
+                                color: "#4B5563",
+                                marginBottom: visibleContent ? 8 : 0,
+                                padding: "6px 10px",
+                                backgroundColor: "#E5E7EB",
+                                borderRadius: 8,
+                              }}
+                            >
+                              📎 {att?.name || "红人名单.xlsx"}
+                            </div>
+                          ))}
+                        {visibleContent && renderMessageContent(m.content)}
                       </div>
                     )}
                     {/* 思考过程展示 - 精简版（类似 Manus / Cursor） */}
@@ -6015,6 +6108,53 @@ export default function HomePage() {
                 flexShrink: 0
               }}
             >
+              {pendingChatAttachments.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    marginBottom: 8,
+                  }}
+                >
+                  {pendingChatAttachments.map((att, idx) => (
+                    <span
+                      key={`${att.storageKey}-${idx}`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "4px 8px",
+                        borderRadius: 8,
+                        backgroundColor: "#F3F4F6",
+                        fontSize: 12,
+                        color: "#374151",
+                      }}
+                    >
+                      📎 {att.name || "附件"}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPendingChatAttachments((prev) =>
+                            prev.filter((_, i) => i !== idx)
+                          )
+                        }
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          color: "#9CA3AF",
+                          fontSize: 12,
+                          padding: 0,
+                        }}
+                        aria-label="移除附件"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div
                 style={{
                   display: "flex",
@@ -6033,12 +6173,49 @@ export default function HomePage() {
                 backgroundColor: "#FFFFFF"
               }}
             >
+              {isExecutionPhaseGlobal && currentSessionId && (
+                <>
+                  <input
+                    ref={importListFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    style={{ display: "none" }}
+                    onChange={handleInfluencerListFileChange}
+                  />
+                  <button
+                    type="button"
+                    disabled={importListUploading || loading}
+                    onClick={() => importListFileInputRef.current?.click()}
+                    title="上传附件（Excel/CSV）；发送前可附加说明文字"
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      border: "1px solid #E5E7EB",
+                      backgroundColor: "#F9FAFB",
+                      color: "#4B5563",
+                      cursor:
+                        importListUploading || loading ? "not-allowed" : "pointer",
+                      flexShrink: 0,
+                      marginRight: 6,
+                      fontSize: 16,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {importListUploading ? "…" : "📎"}
+                  </button>
+                </>
+              )}
               <textarea
                 ref={inputTextAreaRefFooter}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 rows={1}
-                placeholder="发送消息给 Bin"
+                placeholder={
+                  isExecutionPhaseGlobal
+                    ? "发送消息给 Bin，或 📎 上传附件后点发送"
+                    : "发送消息给 Bin"
+                }
                 style={{
                   flex: 1,
                   resize: "none",
@@ -6064,7 +6241,9 @@ export default function HomePage() {
               />
               <button
                 type="submit"
-                disabled={loading || !input.trim()}
+                disabled={
+                  loading || (!input.trim() && pendingChatAttachments.length === 0)
+                }
                 style={{
                   width: 32,
                   height: 32,
@@ -6074,9 +6253,18 @@ export default function HomePage() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  cursor: loading || !input.trim() ? "not-allowed" : "pointer",
-                  backgroundColor: loading || !input.trim() ? "#E5E7EB" : "#60A5FA",
-                  color: loading || !input.trim() ? "#9CA3AF" : "#FFFFFF",
+                  cursor:
+                    loading || (!input.trim() && pendingChatAttachments.length === 0)
+                      ? "not-allowed"
+                      : "pointer",
+                  backgroundColor:
+                    loading || (!input.trim() && pendingChatAttachments.length === 0)
+                      ? "#E5E7EB"
+                      : "#60A5FA",
+                  color:
+                    loading || (!input.trim() && pendingChatAttachments.length === 0)
+                      ? "#9CA3AF"
+                      : "#FFFFFF",
                   transition: "all 0.2s",
                   fontSize: 14
                 }}
