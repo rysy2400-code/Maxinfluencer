@@ -59,6 +59,7 @@ export async function POST(req, { params }) {
       success: true,
       storageKey,
       fileName,
+      sizeBytes: buffer.length,
       type: "chat_attachment",
     });
   } catch (err) {

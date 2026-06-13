@@ -1,8 +1,19 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  TAB_STORAGE_KEYS,
+  readTabItem,
+  writeTabItem,
+  removeTabItem,
+  clearTabChatPersistence,
+  migrateLegacyLocalStorageToTabOnce,
+  clearLegacyLocalChatPersistence,
+} from "./tab-session-storage";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 import { ChatPaperclipIcon } from "./chat-paperclip-icon";
+import { ChatAttachmentCard } from "./chat-attachment-card";
+import { isAttachmentOnlyUserMessage } from "./chat-file-utils";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
@@ -486,11 +497,11 @@ function SidebarAccountMenu({
   );
 }
 
-const STORAGE_KEY_MESSAGES = "maxinfluencer_chat_messages";
-const STORAGE_KEY_CONTEXT = "maxinfluencer_chat_context";
-const STORAGE_KEY_CURRENT_SESSION_ID = "maxinfluencer_current_session_id";
-const STORAGE_KEY_VERSION = "maxinfluencer_message_version";
-const MESSAGE_VERSION = "v2.1"; // v2.1: 聊天消息按时间排序 + 剔除工作实况占位
+const STORAGE_KEY_MESSAGES = TAB_STORAGE_KEYS.MESSAGES;
+const STORAGE_KEY_CONTEXT = TAB_STORAGE_KEYS.CONTEXT;
+const STORAGE_KEY_CURRENT_SESSION_ID = TAB_STORAGE_KEYS.CURRENT_SESSION_ID;
+const STORAGE_KEY_VERSION = TAB_STORAGE_KEYS.VERSION;
+const MESSAGE_VERSION = "v2.2"; // v2.2: 标签页级 sessionStorage，修复多 Campaign 串会话
 
 function cloneWelcomeMessages() {
   return [
@@ -503,16 +514,10 @@ function cloneWelcomeMessages() {
   ];
 }
 
-/** 清除本机持久化的聊天状态（换账号登录 / 会话 id 无效时避免沿用他人超长对话导致 POST 创建会话失败） */
+/** 清除本标签页持久化的聊天状态（换账号登录 / 会话 id 无效时避免沿用他人超长对话导致 POST 创建会话失败） */
 function clearChatPersistenceKeys() {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(STORAGE_KEY_MESSAGES);
-    localStorage.removeItem(STORAGE_KEY_CONTEXT);
-    localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
-  } catch {
-    /* ignore */
-  }
+  clearTabChatPersistence();
+  clearLegacyLocalChatPersistence();
 }
 
 function computeSessionPersistFingerprint(messages, context) {
@@ -1789,6 +1794,14 @@ export default function HomePage() {
   const isDevelopment = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'); // 开发环境标识
   const messagesEndRef = useRef(null);
   const importListFileInputRef = useRef(null);
+  /** 与 React state 同步，供异步聊天流判断当前是否在原会话视图 */
+  const currentSessionIdRef = useRef(null);
+  /** 进行中的聊天回合草稿（sessionId + messages），切换 Campaign 后仍保存到发起会话 */
+  const chatDraftRef = useRef(null);
+  /** 本轮 send 绑定的 sessionId（与 ref 同步，避免 setState 滞后导致 UI 不更新） */
+  const activeChatSessionRef = useRef(null);
+  /** 各 session 待发送附件（切换 Campaign 时保留，回到原会话可继续发送） */
+  const pendingAttachmentsBySessionRef = useRef(new Map());
   const shouldAutoScrollRef = useRef(true); // 是否应该自动滚动
   const chatContainerRef = useRef(null); // 聊天容器的引用
   const localStorageSaveTimerRef = useRef(null); // localStorage 保存节流定时器（避免流式更新时频繁 JSON.stringify 卡顿）
@@ -1898,6 +1911,15 @@ export default function HomePage() {
   const prevSidForSidebarRef = useRef(null);
 
   // 从「无会话」进入「有会话」时左侧栏默认展开
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    pendingAttachmentsBySessionRef.current.set(currentSessionId, pendingChatAttachments);
+  }, [currentSessionId, pendingChatAttachments]);
+
   useEffect(() => {
     if (authUser && currentSessionId != null && prevSidForSidebarRef.current == null) {
       setSidebarCollapsed(false);
@@ -2523,7 +2545,7 @@ export default function HomePage() {
     let intervalId = null;
 
     const pollSessionMessages = async () => {
-      if (cancelled || loadingRef.current) return;
+      if (cancelled || loadingRef.current || activeChatSessionRef.current) return;
       if (document.visibilityState !== "visible") return;
       try {
         const res = await fetch(
@@ -2608,7 +2630,7 @@ export default function HomePage() {
         setCurrentSessionId(null);
         try {
           if (typeof window !== "undefined") {
-            localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
+            removeTabItem(STORAGE_KEY_CURRENT_SESSION_ID);
           }
         } catch (_) {
           /* ignore */
@@ -2692,6 +2714,8 @@ export default function HomePage() {
         const res = await fetch(`/api/sessions/${currentSessionId}`, { credentials: "include" });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
+        if (loadingRef.current || activeChatSessionRef.current) return;
+        if (chatDraftRef.current?.sessionId === currentSessionId) return;
         if (res.ok && data.success && data.session) {
           const serverMessages = Array.isArray(data.session.messages)
             ? data.session.messages
@@ -2737,23 +2761,25 @@ export default function HomePage() {
     };
   }, [authChecked, authUser, currentSessionId]);
 
-  // 客户端挂载后从 localStorage 恢复数据，并加载草稿列表
+  // 客户端挂载后从 sessionStorage（标签页级）恢复数据，并加载草稿列表
   useEffect(() => {
     setMounted(true);
 
     if (typeof window !== "undefined") {
-      const savedVersion = localStorage.getItem(STORAGE_KEY_VERSION);
+      migrateLegacyLocalStorageToTabOnce();
+      clearLegacyLocalChatPersistence();
+
+      const savedVersion = readTabItem(STORAGE_KEY_VERSION);
       
       // 如果版本不匹配，清除旧数据并使用新的 defaultMessage
       if (savedVersion !== MESSAGE_VERSION) {
         console.log(`[HomePage] 消息版本不匹配 (${savedVersion} → ${MESSAGE_VERSION})，清除旧数据`);
         try {
-          localStorage.removeItem(STORAGE_KEY_MESSAGES);
-          localStorage.removeItem(STORAGE_KEY_CONTEXT);
-          localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
-          localStorage.setItem(STORAGE_KEY_VERSION, MESSAGE_VERSION);
+          clearTabChatPersistence();
+          clearLegacyLocalChatPersistence();
+          writeTabItem(STORAGE_KEY_VERSION, MESSAGE_VERSION);
         } catch (error) {
-          console.error('[HomePage] 清除 localStorage 失败:', error);
+          console.error('[HomePage] 清除 tab 存储失败:', error);
         }
         setMessages(defaultMessage);
         setContext({});
@@ -2762,7 +2788,7 @@ export default function HomePage() {
       
       // 恢复消息（带错误处理）
       try {
-        const savedMessages = localStorage.getItem(STORAGE_KEY_MESSAGES);
+        const savedMessages = readTabItem(STORAGE_KEY_MESSAGES);
         if (savedMessages) {
           try {
             const parsed = JSON.parse(savedMessages);
@@ -2771,12 +2797,7 @@ export default function HomePage() {
             }
           } catch (e) {
             console.error("[HomePage] 恢复消息失败:", e);
-            // 如果解析失败，清除损坏的数据
-            try {
-              localStorage.removeItem(STORAGE_KEY_MESSAGES);
-            } catch (clearError) {
-              console.error("[HomePage] 清除损坏的消息数据失败:", clearError);
-            }
+            removeTabItem(STORAGE_KEY_MESSAGES);
           }
         }
       } catch (error) {
@@ -2785,12 +2806,11 @@ export default function HomePage() {
 
       // 恢复上下文（带错误处理）
       try {
-        const savedContext = localStorage.getItem(STORAGE_KEY_CONTEXT);
+        const savedContext = readTabItem(STORAGE_KEY_CONTEXT);
         if (savedContext) {
           try {
             const parsed = JSON.parse(savedContext);
             if (parsed && typeof parsed === "object") {
-              // 确保 workflowState 存在，如果不存在则设置为 "idle"
               if (!parsed.workflowState) {
                 parsed.workflowState = "idle";
               }
@@ -2798,21 +2818,15 @@ export default function HomePage() {
             }
           } catch (e) {
             console.error("[HomePage] 恢复上下文失败:", e);
-            // 如果解析失败，清除损坏的数据
-            try {
-              localStorage.removeItem(STORAGE_KEY_CONTEXT);
-            } catch (clearError) {
-              console.error("[HomePage] 清除损坏的上下文数据失败:", clearError);
-            }
+            removeTabItem(STORAGE_KEY_CONTEXT);
           }
         }
       } catch (error) {
         console.error("[HomePage] 读取上下文数据失败:", error);
       }
 
-      // 恢复当前选中的会话 ID（与消息/上下文一并持久化；仅内存会导致刷新后侧栏消失）
       try {
-        const raw = localStorage.getItem(STORAGE_KEY_CURRENT_SESSION_ID);
+        const raw = readTabItem(STORAGE_KEY_CURRENT_SESSION_ID);
         if (raw) {
           const sid = String(raw).trim();
           if (sid.length > 0 && sid.length <= 128) {
@@ -2825,17 +2839,17 @@ export default function HomePage() {
     }
   }, []);
 
-  // 将当前会话 ID 写入 localStorage（须在客户端 mounted 之后，避免与首次恢复竞态清空）
+  // 将当前会话 ID 写入 sessionStorage（标签页级，避免多标签互相覆盖）
   useEffect(() => {
     if (typeof window === "undefined" || !mounted) return;
     try {
       if (currentSessionId) {
-        localStorage.setItem(STORAGE_KEY_CURRENT_SESSION_ID, String(currentSessionId));
+        writeTabItem(STORAGE_KEY_CURRENT_SESSION_ID, String(currentSessionId));
       } else {
-        localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
+        removeTabItem(STORAGE_KEY_CURRENT_SESSION_ID);
       }
     } catch (e) {
-      console.warn("[HomePage] 同步当前会话 ID 到 localStorage 失败:", e);
+      console.warn("[HomePage] 同步当前会话 ID 到 sessionStorage 失败:", e);
     }
   }, [currentSessionId, mounted]);
 
@@ -2908,37 +2922,29 @@ export default function HomePage() {
     }
   }, [currentSessionId, messages, context, loadCampaignSessions, loading]);
 
-  // 保存消息到 localStorage（带错误处理和存储限制）
+  // 保存消息到 sessionStorage（标签页级，带错误处理和存储限制）
   useEffect(() => {
     if (typeof window === "undefined" || !mounted) return;
 
-    // 先清掉上一次的定时器（messages 变化频率高，避免堆积）
     if (localStorageSaveTimerRef.current) {
       clearTimeout(localStorageSaveTimerRef.current);
       localStorageSaveTimerRef.current = null;
     }
 
-    // 流式输出期间 messages 变化频率极高，频繁 JSON.stringify 会造成 UI 卡顿/看起来“流式中断”
-    // 这里直接跳过，等 complete 后（loading=false）再保存一次即可
     if (loading) return;
 
-    // 节流：合并短时间内的多次更新
     localStorageSaveTimerRef.current = setTimeout(() => {
       try {
-        // 限制存储的消息数量（只保存最近的 50 条消息）
         const messagesToSave = stripNonChatMessages(sortSessionMessagesByTime(messages)).slice(-50);
         
-        // 清理消息中的大对象（截图等），避免超出配额
         const cleanedMessages = messagesToSave.map(msg => {
           const cleaned = { ...msg };
-          // 移除截图数据（太大，不需要持久化）
           if (cleaned.thinking?.screenshots) {
             cleaned.thinking = {
               ...cleaned.thinking,
-              screenshots: [] // 不保存截图到 localStorage
+              screenshots: []
             };
           }
-          // 移除 browserSteps（流式分析文本会非常大；真正的持久化依赖后端 session）
           if (cleaned.thinking?.browserSteps) {
             cleaned.thinking = {
               ...cleaned.thinking,
@@ -2956,19 +2962,17 @@ export default function HomePage() {
         
         const messagesJson = JSON.stringify(cleanedMessages);
         
-        // 检查数据大小（localStorage 限制通常是 5-10MB）
-        if (messagesJson.length > 4 * 1024 * 1024) { // 4MB 限制
+        if (messagesJson.length > 4 * 1024 * 1024) {
           console.warn('[HomePage] 消息数据过大，只保存最近的 30 条消息');
           const limitedMessages = cleanedMessages.slice(-30);
-          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
+          writeTabItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
         } else {
-          localStorage.setItem(STORAGE_KEY_MESSAGES, messagesJson);
+          writeTabItem(STORAGE_KEY_MESSAGES, messagesJson);
         }
       } catch (error) {
         if (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-          console.warn('[HomePage] localStorage 配额已满，尝试清理并只保存最近的 20 条消息');
+          console.warn('[HomePage] sessionStorage 配额已满，尝试清理并只保存最近的 20 条消息');
           try {
-            // 尝试清理并只保存最近的消息，移除所有截图以节省空间
             const limitedMessages = messages.slice(-20).map(msg => {
               const cleaned = { ...msg };
               if (cleaned.thinking?.screenshots) {
@@ -2979,20 +2983,13 @@ export default function HomePage() {
               }
               return cleaned;
             });
-            localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
+            writeTabItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
           } catch (retryError) {
-            console.error('[HomePage] 无法保存消息到 localStorage:', retryError);
-            // 如果还是失败，清除所有数据并重新开始
-            try {
-              localStorage.removeItem(STORAGE_KEY_MESSAGES);
-              localStorage.removeItem(STORAGE_KEY_CONTEXT);
-              localStorage.removeItem(STORAGE_KEY_CURRENT_SESSION_ID);
-            } catch (clearError) {
-              console.error('[HomePage] 无法清除 localStorage:', clearError);
-            }
+            console.error('[HomePage] 无法保存消息到 sessionStorage:', retryError);
+            clearChatPersistenceKeys();
           }
         } else {
-          console.error('[HomePage] 保存消息到 localStorage 失败:', error);
+          console.error('[HomePage] 保存消息到 sessionStorage 失败:', error);
         }
       }
     }, 400);
@@ -3005,23 +3002,22 @@ export default function HomePage() {
     };
   }, [messages, mounted, loading]);
 
-  // 保存上下文到 localStorage（带错误处理）
+  // 保存上下文到 sessionStorage（标签页级）
   useEffect(() => {
     if (typeof window !== "undefined" && mounted) {
       try {
         const contextJson = JSON.stringify(context);
-        localStorage.setItem(STORAGE_KEY_CONTEXT, contextJson);
+        writeTabItem(STORAGE_KEY_CONTEXT, contextJson);
       } catch (error) {
         if (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-          console.warn('[HomePage] localStorage 配额已满，无法保存上下文');
-          // 尝试清除旧数据
+          console.warn('[HomePage] sessionStorage 配额已满，无法保存上下文');
           try {
-            localStorage.removeItem(STORAGE_KEY_CONTEXT);
+            removeTabItem(STORAGE_KEY_CONTEXT);
           } catch (clearError) {
             console.error('[HomePage] 无法清除上下文数据:', clearError);
           }
         } else {
-          console.error('[HomePage] 保存上下文到 localStorage 失败:', error);
+          console.error('[HomePage] 保存上下文到 sessionStorage 失败:', error);
         }
       }
     }
@@ -3294,6 +3290,7 @@ export default function HomePage() {
 
   async function refreshCurrentSessionMessages() {
     if (!currentSessionId) return;
+    if (loadingRef.current || activeChatSessionRef.current) return;
     try {
       const res = await fetch(`/api/sessions/${currentSessionId}`, {
         credentials: "include",
@@ -3346,6 +3343,7 @@ export default function HomePage() {
           type: "chat_attachment",
           name: data.fileName || file.name,
           storageKey: data.storageKey,
+          sizeBytes: file.size ?? data.sizeBytes,
         },
       ]);
     } catch (err) {
@@ -3374,9 +3372,9 @@ export default function HomePage() {
     };
 
     const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
     setInput("");
     setPendingChatAttachments([]);
+    loadingRef.current = true;
     setLoading(true);
     // 新一轮请求开始：允许本轮自动切一次「工作实况」
     workLiveAutoSwitchedRef.current = false;
@@ -3403,6 +3401,7 @@ export default function HomePage() {
 
     // 与本轮请求绑定的会话 ID（新建会话时 setState 尚未生效，不能依赖闭包里的 currentSessionId）
     let sessionIdForChat = currentSessionId;
+    activeChatSessionRef.current = sessionIdForChat;
 
     try {
       // 如果还没有会话 ID，创建新会话
@@ -3428,6 +3427,8 @@ export default function HomePage() {
           }
           if (createData.success && createData.session?.id) {
             sessionIdForChat = createData.session.id;
+            activeChatSessionRef.current = sessionIdForChat;
+            currentSessionIdRef.current = sessionIdForChat;
             setCurrentSessionId(createData.session.id);
             await loadCampaignSessions();
           } else {
@@ -3462,6 +3463,40 @@ export default function HomePage() {
         });
         return;
       }
+
+      chatDraftRef.current = {
+        sessionId: sessionIdForChat,
+        messages: [...nextMessages, initialAssistantMessage],
+      };
+      activeChatSessionRef.current = sessionIdForChat;
+
+      const shouldApplyChatToUi = () =>
+        currentSessionIdRef.current === sessionIdForChat ||
+        activeChatSessionRef.current === sessionIdForChat;
+
+      const applyChatDraft = (updater) => {
+        const draft = chatDraftRef.current;
+        if (!draft || draft.sessionId !== sessionIdForChat) return null;
+        const updated =
+          typeof updater === "function" ? updater(draft.messages) : updater;
+        draft.messages = updated;
+        if (shouldApplyChatToUi()) {
+          setMessages(updated);
+        }
+        return updated;
+      };
+
+      const scheduleChatRoundPersist = (messagesSnapshot, contextSnapshot) => {
+        setTimeout(() => {
+          saveCurrentSession({
+            sessionId: sessionIdForChat,
+            messages: messagesSnapshot,
+            context: contextSnapshot,
+            reloadSessions: false,
+            force: true,
+          });
+        }, 1000);
+      };
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -3530,7 +3565,7 @@ export default function HomePage() {
                     }
                   }
                   // 更新思考过程（合并数据，保留 browserSteps、screenshots、influencerAnalyses）
-                  setMessages(prev => {
+                  applyChatDraft((prev) => {
                     const updated = [...prev];
                     if (updated[assistantMessageIndex]) {
                       const currentThinking = updated[assistantMessageIndex].thinking || {};
@@ -3567,7 +3602,10 @@ export default function HomePage() {
                   });
 
                   // 执行阶段下：收到实时步骤时，更新「工作实况」提醒，并自动切换一次到工作实况
-                  if (isExecutionPhaseGlobal) {
+                  if (
+                    isExecutionPhaseGlobal &&
+                    currentSessionIdRef.current === sessionIdForChat
+                  ) {
                     if (binComputerViewRef.current !== "live") {
                       setWorkLiveUnreadCount(prev => Math.min(prev + 1, 99));
                     }
@@ -3581,8 +3619,7 @@ export default function HomePage() {
                     }
                   }
                 } else if (data.type === "complete") {
-                  // 最终结果（合并 thinking，保留 browserSteps、screenshots、influencerAnalyses）
-                  setMessages(prev => {
+                  const finalMessages = applyChatDraft((prev) => {
                     const updated = [...prev];
                     if (updated[assistantMessageIndex]) {
                       const currentThinking = updated[assistantMessageIndex].thinking || {};
@@ -3606,12 +3643,11 @@ export default function HomePage() {
                     return updated;
                   });
 
-                  // 更新上下文
-                  if (data.data.context) {
-                    setContext(data.data.context);
+                  const nextCtx = data.data.context;
+                  if (nextCtx && currentSessionIdRef.current === sessionIdForChat) {
+                    setContext(nextCtx);
                   }
 
-                  const nextCtx = data.data.context;
                   const didModifyCampaign =
                     data.data.thinking?.toolCall?.toolName === "modify_campaign" ||
                     data.data.thinking?.subAgentResult?.action === "modify_campaign";
@@ -3620,7 +3656,11 @@ export default function HomePage() {
                     : resolvedCampaignId
                       ? String(resolvedCampaignId)
                       : null;
-                  if (cidForRefresh && (nextCtx?.campaignId || didModifyCampaign)) {
+                  if (
+                    cidForRefresh &&
+                    (nextCtx?.campaignId || didModifyCampaign) &&
+                    currentSessionIdRef.current === sessionIdForChat
+                  ) {
                     if (nextCtx?.campaignId) {
                       setResolvedCampaignId(cidForRefresh);
                       setResolvedCampaignStatus("running");
@@ -3635,24 +3675,21 @@ export default function HomePage() {
                       .catch(() => {});
                   }
 
-                  const ctxAfter = data.data.context;
+                  const ctxAfter = nextCtx;
                   if (
                     ctxAfter?.published ||
                     ctxAfter?.workflowState === "published" ||
                     ctxAfter?.campaignId
                   ) {
                     loadCampaignSessions({ silent: true }).catch(() => {});
-                    const sid = sessionIdForChat || currentSessionId;
-                    if (sid) {
-                      refreshSessionCampaignFromDb(sid).catch(() => {});
-                    }
+                    refreshSessionCampaignFromDb(sessionIdForChat).catch(() => {});
                   }
 
-                  // 消息发送完成后，更新会话（延迟保存，避免频繁请求）
-                  if (currentSessionId) {
-                    setTimeout(() => {
-                      saveCurrentSession({ reloadSessions: false });
-                    }, 1000);
+                  if (finalMessages) {
+                    scheduleChatRoundPersist(
+                      finalMessages,
+                      ctxAfter || context
+                    );
                   }
                 } else if (data.type === "error") {
                   throw new Error(data.data.error);
@@ -3668,7 +3705,7 @@ export default function HomePage() {
         const data = await res.json();
 
         if (data && data.reply) {
-          setMessages(prev => {
+          const finalMessages = applyChatDraft((prev) => {
             const updated = [...prev];
             if (updated[assistantMessageIndex]) {
               updated[assistantMessageIndex] = {
@@ -3681,7 +3718,7 @@ export default function HomePage() {
             return updated;
           });
 
-          if (data.context) {
+          if (data.context && currentSessionIdRef.current === sessionIdForChat) {
             setContext(data.context);
           }
 
@@ -3694,7 +3731,11 @@ export default function HomePage() {
             : resolvedCampaignId
               ? String(resolvedCampaignId)
               : null;
-          if (cidForRefresh && (nextCtx?.campaignId || didModifyCampaign)) {
+          if (
+            cidForRefresh &&
+            (nextCtx?.campaignId || didModifyCampaign) &&
+            currentSessionIdRef.current === sessionIdForChat
+          ) {
             if (nextCtx?.campaignId) {
               setResolvedCampaignId(cidForRefresh);
               setResolvedCampaignStatus("running");
@@ -3707,11 +3748,12 @@ export default function HomePage() {
                 if (d.success) setExecutionConfig(d);
               })
               .catch(() => {});
-            const sid = sessionIdForChat || currentSessionId;
-            if (sid) {
-              refreshSessionCampaignFromDb(sid).catch(() => {});
-            }
+            refreshSessionCampaignFromDb(sessionIdForChat).catch(() => {});
             loadCampaignSessions({ silent: true }).catch(() => {});
+          }
+
+          if (finalMessages) {
+            scheduleChatRoundPersist(finalMessages, nextCtx || context);
           }
         }
       }
@@ -3731,20 +3773,22 @@ export default function HomePage() {
       // 如果是网络错误且消息已有内容，可能是刷新导致的，不显示错误
       if (isNetworkError && hasContent) {
         console.log('[HomePage] 检测到网络错误，但消息已有内容（可能是刷新页面），不显示错误');
+        if (activeChatSessionRef.current === sessionIdForChat) {
+          activeChatSessionRef.current = null;
+        }
+        loadingRef.current = false;
         setLoading(false);
         return;
       }
       
       // 其他情况显示错误
-      setMessages(prev => {
+      const patchAssistantError = (prev) => {
         const updated = [...prev];
         if (updated[assistantMessageIndex]) {
-          // 检查是否已经有内容，如果有则不覆盖
-          const msgHasContent = updated[assistantMessageIndex].content || 
-                                (updated[assistantMessageIndex].thinking?.steps?.length > 0);
-          
+          const msgHasContent =
+            updated[assistantMessageIndex].content ||
+            (updated[assistantMessageIndex].thinking?.steps?.length > 0);
           if (!msgHasContent) {
-            // 只有完全没有内容时才显示错误
             updated[assistantMessageIndex] = {
               ...updated[assistantMessageIndex],
               content: `抱歉，服务暂时出现问题：${err.message}。请稍后再试。`,
@@ -3753,8 +3797,31 @@ export default function HomePage() {
           }
         }
         return updated;
-      });
+      };
+      const draft = chatDraftRef.current;
+      if (draft?.sessionId === sessionIdForChat) {
+        const updated = patchAssistantError(draft.messages);
+        draft.messages = updated;
+        if (
+          currentSessionIdRef.current === sessionIdForChat ||
+          activeChatSessionRef.current === sessionIdForChat
+        ) {
+          setMessages(updated);
+        }
+      } else {
+        setMessages(patchAssistantError);
+      }
     } finally {
+      if (
+        chatDraftRef.current?.sessionId &&
+        chatDraftRef.current.sessionId === sessionIdForChat
+      ) {
+        chatDraftRef.current = null;
+      }
+      if (activeChatSessionRef.current === sessionIdForChat) {
+        activeChatSessionRef.current = null;
+      }
+      loadingRef.current = false;
       setLoading(false);
     }
   }
@@ -4415,8 +4482,7 @@ export default function HomePage() {
       setMessages(defaultMessage);
       setContext({ workflowState: "idle" }); // 重置为初始状态
       setImageErrors({});
-      localStorage.removeItem(STORAGE_KEY_MESSAGES);
-      localStorage.removeItem(STORAGE_KEY_CONTEXT);
+      clearChatPersistenceKeys();
     }
   }
 
@@ -4452,6 +4518,7 @@ export default function HomePage() {
     const nextContext = createData.session.context || { workflowState: "idle" };
     setMessages(nextMessages);
     setContext(nextContext);
+    setPendingChatAttachments([]);
     rememberSessionPersistBaseline(
       sessionPersistSnapshotRef,
       createData.session.id,
@@ -4485,6 +4552,10 @@ export default function HomePage() {
     const prevMessages = messages;
     const prevContext = context;
 
+    if (prevSessionId) {
+      pendingAttachmentsBySessionRef.current.set(prevSessionId, pendingChatAttachments);
+    }
+
     try {
       const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
       const data = await response.json();
@@ -4502,6 +4573,9 @@ export default function HomePage() {
       setCurrentSessionId(sessionId);
       setMessages(normalized);
       setContext(loadedContext);
+      setPendingChatAttachments(
+        pendingAttachmentsBySessionRef.current.get(sessionId) || []
+      );
       setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
       rememberSessionPersistBaseline(
         sessionPersistSnapshotRef,
@@ -5994,6 +6068,12 @@ export default function HomePage() {
                 const m = item.message;
                 if (!isChatVisibleMessage(m)) return null;
                 const visibleContent = String(m.content || "").trim();
+                const attachmentOnly =
+                  m.role === "user" && isAttachmentOnlyUserMessage(m);
+                const showTextBubble = visibleContent && !attachmentOnly;
+                const messageAttachments = Array.isArray(m.attachments)
+                  ? m.attachments
+                  : [];
                 return (
                 <div
                   key={item.key}
@@ -6019,8 +6099,19 @@ export default function HomePage() {
                         <BinLogo size={22} />
                       </div>
                     )}
-                    {(visibleContent ||
-                      (Array.isArray(m.attachments) && m.attachments.length > 0)) && (
+                    {messageAttachments.length > 0 && m.role === "user" && (
+                      <div className="bin-chat-message-attachments">
+                        {messageAttachments.map((att, attIdx) => (
+                          <ChatAttachmentCard
+                            key={`${item.key}-att-${attIdx}`}
+                            attachment={att}
+                            variant="message"
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {(showTextBubble ||
+                      (messageAttachments.length > 0 && m.role === "assistant")) && (
                       <div
                         style={{
                           padding: "12px 16px",
@@ -6035,27 +6126,20 @@ export default function HomePage() {
                           lineHeight: 1.6,
                           border: "1px solid #E5E7EB",
                           boxShadow: "none",
-                          wordBreak: "break-word", // 防止长链接/长词溢出
+                          wordBreak: "break-word",
                           overflowWrap: "break-word"
                         }}
                       >
-                        {Array.isArray(m.attachments) &&
-                          m.attachments.map((att, attIdx) => (
-                            <div
+                        {messageAttachments.length > 0 &&
+                          m.role === "assistant" &&
+                          messageAttachments.map((att, attIdx) => (
+                            <ChatAttachmentCard
                               key={`${item.key}-att-${attIdx}`}
-                              style={{
-                                fontSize: 12,
-                                color: "#4B5563",
-                                marginBottom: visibleContent ? 8 : 0,
-                                padding: "6px 10px",
-                                backgroundColor: "#E5E7EB",
-                                borderRadius: 8,
-                              }}
-                            >
-                              📎 {att?.name || "红人名单.xlsx"}
-                            </div>
+                              attachment={att}
+                              variant="message"
+                            />
                           ))}
-                        {visibleContent && renderMessageContent(m.content)}
+                        {showTextBubble && renderMessageContent(m.content)}
                       </div>
                     )}
                     {/* 思考过程展示 - 精简版（类似 Manus / Cursor） */}
@@ -6111,187 +6195,86 @@ export default function HomePage() {
                 flexShrink: 0
               }}
             >
-              {pendingChatAttachments.length > 0 && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 6,
-                    marginBottom: 8,
-                  }}
-                >
-                  {pendingChatAttachments.map((att, idx) => (
-                    <span
-                      key={`${att.storageKey}-${idx}`}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "4px 8px",
-                        borderRadius: 8,
-                        backgroundColor: "#F3F4F6",
-                        fontSize: 12,
-                        color: "#374151",
-                      }}
-                    >
-                      📎 {att.name || "附件"}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPendingChatAttachments((prev) =>
-                            prev.filter((_, i) => i !== idx)
-                          )
-                        }
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          cursor: "pointer",
-                          color: "#9CA3AF",
-                          fontSize: 12,
-                          padding: 0,
-                        }}
-                        aria-label="移除附件"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "flex-end"
-                }}
-              >
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                alignItems: "flex-end",
-                borderRadius: 16,
-                border: "1px solid #E5E7EB",
-                padding: "8px 10px 8px 14px",
-                backgroundColor: "#FFFFFF"
-              }}
-            >
-              <textarea
-                ref={inputTextAreaRefFooter}
-                className="bin-chat-textarea"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                rows={1}
-                placeholder="发送消息给Bin"
-                style={{
-                  flex: 1,
-                  resize: "none",
-                  border: "none",
-                  fontSize: 14,
-                  backgroundColor: "transparent",
-                  color: "#1F2937",
-                  outline: "none",
-                  fontFamily: "system-ui, -apple-system, sans-serif",
-                  minHeight: 32,
-                  maxHeight: 220,
-                  overflowY: "auto",
-                  padding: "4px 0"
-                }}
-                onKeyDown={(e) => {
-                  const isComposing =
-                    e.nativeEvent?.isComposing || e.isComposing || e.keyCode === 229;
-                  if (isComposing) return;
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend(e);
-                  }
-                }}
-              />
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                  flexShrink: 0,
-                  marginLeft: 8,
-                  paddingBottom: 2
-                }}
-              >
-                {isExecutionPhaseGlobal && currentSessionId && (
-                  <>
-                    <input
-                      ref={importListFileInputRef}
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      style={{ display: "none" }}
-                      onChange={handleInfluencerListFileChange}
-                    />
-                    <button
-                      type="button"
-                      disabled={importListUploading || loading}
-                      onClick={() => importListFileInputRef.current?.click()}
-                      title="上传附件（Excel/CSV）"
-                      aria-label="上传附件"
-                      style={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: 8,
-                        border: "none",
-                        backgroundColor: "transparent",
-                        color: importListUploading || loading ? "#D1D5DB" : "#6B7280",
-                        cursor:
-                          importListUploading || loading ? "not-allowed" : "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 0,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {importListUploading ? (
-                        <span style={{ fontSize: 14, lineHeight: 1 }}>…</span>
-                      ) : (
-                        <ChatPaperclipIcon size={20} />
+              <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+                <div className="bin-chat-composer">
+                  {pendingChatAttachments.length > 0 && (
+                    <div className="bin-chat-composer__attachments">
+                      {pendingChatAttachments.map((att, idx) => (
+                        <ChatAttachmentCard
+                          key={`${att.storageKey}-${idx}`}
+                          attachment={att}
+                          variant="composer"
+                          onRemove={() =>
+                            setPendingChatAttachments((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <textarea
+                    ref={inputTextAreaRefFooter}
+                    className="bin-chat-composer__textarea bin-chat-textarea"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    rows={1}
+                    placeholder="发送消息给Bin"
+                    onKeyDown={(e) => {
+                      const isComposing =
+                        e.nativeEvent?.isComposing || e.isComposing || e.keyCode === 229;
+                      if (isComposing) return;
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend(e);
+                      }
+                    }}
+                  />
+                  <div className="bin-chat-composer__toolbar">
+                    <div className="bin-chat-composer__actions">
+                      {isExecutionPhaseGlobal && currentSessionId && (
+                        <>
+                          <input
+                            ref={importListFileInputRef}
+                            type="file"
+                            accept=".xlsx,.xls,.csv"
+                            style={{ display: "none" }}
+                            onChange={handleInfluencerListFileChange}
+                          />
+                          <button
+                            type="button"
+                            className="bin-chat-composer__icon-btn"
+                            disabled={importListUploading || loading}
+                            onClick={() => importListFileInputRef.current?.click()}
+                            title="上传附件（Excel/CSV）"
+                            aria-label="上传附件"
+                          >
+                            {importListUploading ? (
+                              <span style={{ fontSize: 14, lineHeight: 1 }}>…</span>
+                            ) : (
+                              <ChatPaperclipIcon size={20} />
+                            )}
+                          </button>
+                        </>
                       )}
-                    </button>
-                  </>
-                )}
-              <button
-                type="submit"
-                disabled={
-                  loading || (!input.trim() && pendingChatAttachments.length === 0)
-                }
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 999,
-                  border: "none",
-                  marginLeft: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor:
-                    loading || (!input.trim() && pendingChatAttachments.length === 0)
-                      ? "not-allowed"
-                      : "pointer",
-                  backgroundColor:
-                    loading || (!input.trim() && pendingChatAttachments.length === 0)
-                      ? "#E5E7EB"
-                      : "#60A5FA",
-                  color:
-                    loading || (!input.trim() && pendingChatAttachments.length === 0)
-                      ? "#9CA3AF"
-                      : "#FFFFFF",
-                  transition: "all 0.2s",
-                  fontSize: 14
-                }}
-              >
-                <ChatSendUpIcon />
-              </button>
+                      <button
+                        type="submit"
+                        className={`bin-chat-composer__send-btn ${
+                          loading || (!input.trim() && pendingChatAttachments.length === 0)
+                            ? "bin-chat-composer__send-btn--disabled"
+                            : "bin-chat-composer__send-btn--enabled"
+                        }`}
+                        disabled={
+                          loading || (!input.trim() && pendingChatAttachments.length === 0)
+                        }
+                      >
+                        <ChatSendUpIcon />
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </form>
+            </form>
             </div>
           </div>
         )}

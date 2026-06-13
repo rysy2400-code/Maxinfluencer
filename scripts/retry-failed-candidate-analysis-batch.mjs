@@ -38,6 +38,8 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const limitArg = args.find((a) => a.startsWith("--limit="));
   const concurrencyArg = args.find((a) => a.startsWith("--concurrency="));
+  const campaignArg = args.find((a) => a.startsWith("--campaign="));
+  const statusArg = args.find((a) => a.startsWith("--status="));
   return {
     dryRun: args.includes("--dry-run"),
     limit: limitArg ? Math.max(1, parseInt(limitArg.split("=")[1], 10) || 0) : 0,
@@ -45,6 +47,14 @@ function parseArgs() {
       1,
       Math.min(30, parseInt(concurrencyArg?.split("=")[1] || process.env.RETRY_ANALYSIS_CONCURRENCY || "10", 10) || 10)
     ),
+    campaignId: campaignArg ? campaignArg.split("=").slice(1).join("=").trim() : "",
+    statuses: statusArg
+      ? statusArg
+          .split("=")[1]
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : ["running"],
   };
 }
 
@@ -108,7 +118,16 @@ function buildInfluencerFromRow(row, tiktokRow, globalRow) {
   };
 }
 
-async function fetchFailureRows(limit) {
+async function fetchFailureRows(limit, { campaignId, statuses }) {
+  const statusList = statuses.length ? statuses : ["running"];
+  const statusPlaceholders = statusList.map(() => "?").join(", ");
+  const params = [...statusList];
+  let campaignFilter = "";
+  if (campaignId) {
+    campaignFilter = " AND camp.id = ?";
+    params.push(campaignId);
+  }
+
   const sql = `
     SELECT
       c.id AS candidate_id,
@@ -128,7 +147,7 @@ async function fetchFailureRows(limit) {
       camp.status AS campaign_status
     FROM tiktok_campaign camp
     JOIN tiktok_campaign_influencer_candidates c ON c.campaign_id = camp.id
-    WHERE camp.status = 'running'
+    WHERE camp.status IN (${statusPlaceholders})
       AND c.analyzed_at IS NOT NULL
       AND (
         c.analysis_summary IS NULL OR c.analysis_summary = ''
@@ -137,10 +156,11 @@ async function fetchFailureRows(limit) {
         OR c.analysis_summary = '分析失败'
         OR c.analysis_summary LIKE '分析失败:%'
       )
+      ${campaignFilter}
     ORDER BY c.analyzed_at DESC
     ${limit > 0 ? `LIMIT ${Number(limit)}` : ""}
   `;
-  return queryTikTok(sql);
+  return queryTikTok(sql, params);
 }
 
 async function loadTikTokInfluencer(username) {
@@ -349,8 +369,13 @@ async function main() {
   }
 
   console.log("[retry-batch] loading failure rows…");
-  const rows = await fetchFailureRows(opts.limit);
-  console.log(`[retry-batch] found ${rows.length} failures (concurrency=${opts.concurrency}, dryRun=${opts.dryRun})`);
+  const rows = await fetchFailureRows(opts.limit, {
+    campaignId: opts.campaignId,
+    statuses: opts.statuses,
+  });
+  console.log(
+    `[retry-batch] found ${rows.length} failures (campaign=${opts.campaignId || "all"}, statuses=${opts.statuses.join(",")}, concurrency=${opts.concurrency}, dryRun=${opts.dryRun})`
+  );
 
   const started = Date.now();
   const results = await runPool(rows, opts.concurrency, (row) => processOne(row, opts));
