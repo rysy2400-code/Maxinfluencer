@@ -112,28 +112,92 @@ if (sample) {
 
     if (sample.videoId && sample.username) {
       const videoUrl = `https://www.tiktok.com/@${sample.username}/video/${sample.videoId}`;
-      const htmlLoc = await page.evaluate(async (url) => {
-        const res = await fetch(url, {
-          credentials: "include",
-          headers: { accept: "text/html,application/xhtml+xml" },
-        });
-        const html = await res.text();
-        const marker = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">';
-        const start = html.indexOf(marker);
-        if (start < 0) return { ok: res.ok, loc: null, hasUniversal: false };
-        const jsonStart = start + marker.length;
-        const jsonEnd = html.indexOf("</script>", jsonStart);
-        const data = JSON.parse(html.slice(jsonStart, jsonEnd));
-        const item =
-          data?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct ||
-          data?.__DEFAULT_SCOPE__?.["webapp.reflow.video.detail"]?.itemInfo?.itemStruct;
-        return {
-          ok: res.ok,
-          hasUniversal: true,
-          loc: item?.locationCreated ?? null,
-        };
-      }, videoUrl);
-      console.log("[probe] html fetch location=", htmlLoc);
+      for (const [label, fn] of [
+        ["html_fetch", async (page) => page.evaluate(async (url) => {
+          const res = await fetch(url, {
+            credentials: "include",
+            headers: {
+              accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "accept-language": navigator.language,
+              referer: "https://www.tiktok.com/",
+              "sec-fetch-dest": "document",
+              "sec-fetch-mode": "navigate",
+              "sec-fetch-site": "same-origin",
+            },
+          });
+          const html = await res.text();
+          const marker = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">';
+          const start = html.indexOf(marker);
+          if (start < 0) {
+            return { ok: res.ok, status: res.status, hasUniversal: false, len: html.length, head: html.slice(0, 120) };
+          }
+          const jsonStart = start + marker.length;
+          const jsonEnd = html.indexOf("</script>", jsonStart);
+          const data = JSON.parse(html.slice(jsonStart, jsonEnd));
+          const item =
+            data?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct ||
+            data?.__DEFAULT_SCOPE__?.["webapp.reflow.video.detail"]?.itemInfo?.itemStruct;
+          return { ok: res.ok, status: res.status, hasUniversal: true, loc: item?.locationCreated ?? null };
+        }, videoUrl)],
+        ["api_nav", async (page) => {
+          const { fetchTiktokApiViaNavigation } = await import(
+            "../lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js"
+          );
+          const { tiktokMakeRequest: _ignore, ...client } = await import(
+            "../lib/tools/influencer-functions/tiktok/tiktok-api-client.js"
+          );
+          const { bootstrapTiktokWebSession, tiktokMakeRequest: mkReq } = client;
+          await bootstrapTiktokWebSession(page);
+          const session = page._ttSessionParams;
+          const qs = new URLSearchParams({ ...(session || {}), itemId: sample.videoId });
+          if (page._ttMsToken) qs.set("msToken", page._ttMsToken);
+          const base = `https://www.tiktok.com/api/post/item_detail/?${qs.toString()}`;
+          const signed = await page.evaluate((u) => {
+            const s = window.byted_acrawler?.frontierSign?.(u);
+            const x = s?.["X-Bogus"] || s?.X_Bogus;
+            return x ? `${u}&X-Bogus=${encodeURIComponent(x)}` : u;
+          }, base);
+          const json = await fetchTiktokApiViaNavigation(page, signed);
+          const item = json?.itemInfo?.itemStruct;
+          return { status: json?.status_code, loc: item?.locationCreated ?? null, keys: item ? Object.keys(item).slice(0, 12) : [] };
+        }],
+      ]) {
+        try {
+          const out = await fn(page);
+          console.log(`[probe] ${label}=`, out);
+        } catch (e) {
+          console.log(`[probe] ${label} err=`, e.message);
+        }
+      }
     }
+  });
+
+  console.log("\n=== 9222 html fetch ===");
+  await withSession(searchEndpoint, async (page) => {
+    const videoUrl = `https://www.tiktok.com/@${sample.username}/video/${sample.videoId}`;
+    const out = await page.evaluate(async (url) => {
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: {
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          referer: "https://www.tiktok.com/",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin",
+        },
+      });
+      const html = await res.text();
+      const marker = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">';
+      const start = html.indexOf(marker);
+      if (start < 0) return { ok: res.ok, hasUniversal: false, len: html.length };
+      const jsonStart = start + marker.length;
+      const jsonEnd = html.indexOf("</script>", jsonStart);
+      const data = JSON.parse(html.slice(jsonStart, jsonEnd));
+      const item =
+        data?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct ||
+        data?.__DEFAULT_SCOPE__?.["webapp.reflow.video.detail"]?.itemInfo?.itemStruct;
+      return { ok: res.ok, hasUniversal: true, loc: item?.locationCreated ?? null };
+    }, videoUrl);
+    console.log("[probe] 9222 html=", out);
   });
 }
