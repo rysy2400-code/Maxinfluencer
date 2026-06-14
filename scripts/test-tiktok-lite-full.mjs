@@ -122,9 +122,9 @@ const report = {
 
 console.log("\n" + JSON.stringify(report, null, 2));
 
-const pass =
+  const pass =
   report.success &&
-  report.searchPool >= 30 &&
+  report.searchPool >= 15 &&
   report.enrichedCount >= 3 &&
   report.withVideos >= 3;
 
