@@ -105,6 +105,9 @@ async function probeNodeFetchWithCdpCookies(endpoint, label) {
     let cookies = {};
     if (typeof page.getTiktokCookies === "function") {
       cookies = await page.getTiktokCookies();
+    } else if (typeof page.context === "function" && page.context()?.cookies) {
+      const all = await page.context().cookies(["https://www.tiktok.com"]);
+      for (const c of all) cookies[c.name] = c.value;
     } else {
       cookies = await page.evaluate(() => {
         const out = {};
@@ -156,6 +159,39 @@ async function probeNodeFetchWithCdpCookies(endpoint, label) {
   }
 }
 
+async function probeDomAfterGoto(endpoint, label) {
+  const { acquireTiktokApiSession } = await import(
+    "../lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js"
+  );
+  const session = await acquireTiktokApiSession(null, {
+    endpointKey: endpoint,
+    forceNewTab: false,
+  });
+  try {
+    const { page } = session;
+    await page.goto(videoUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(4000);
+    const dom = await page.evaluate((vid) => {
+      const uni = document.querySelector(
+        'script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]'
+      );
+      if (!uni?.textContent) return { hasUniversal: false, locationCreated: null };
+      const data = JSON.parse(uni.textContent);
+      const item =
+        data?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct;
+      return {
+        hasUniversal: true,
+        locationCreated: item?.locationCreated ?? null,
+        id: item?.id ?? null,
+        match: item && String(item.id) === String(vid),
+      };
+    }, videoId);
+    return { label, endpoint, method: "page.goto + DOM (reference)", ...dom };
+  } finally {
+    await session.dispose();
+  }
+}
+
 console.log(`\n[probe] video=${videoUrl}\n`);
 
 const endpoints = [
@@ -179,6 +215,14 @@ for (const [label, endpoint] of endpoints) {
       method: "node fetch + CDP cookies",
       error: e.message,
     });
+  }
+}
+
+for (const [label, endpoint] of endpoints) {
+  try {
+    results.push(await probeDomAfterGoto(endpoint, label));
+  } catch (e) {
+    results.push({ label, endpoint, method: "page.goto + DOM", error: e.message });
   }
 }
 
