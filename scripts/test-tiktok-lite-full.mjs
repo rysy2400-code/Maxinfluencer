@@ -26,6 +26,9 @@ process.env.COUNTRY_BATCH_STOP_ON_ZERO = "true";
 process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "true";
 process.env.ENRICH_BATCH_SIZE = process.env.ENRICH_BATCH_SIZE || "20";
 process.env.ENRICH_BATCH_ZERO_STREAK = "1";
+process.env.TT_LITE_SEARCH_MIN_POOL = process.env.TT_LITE_SEARCH_MIN_POOL || "80";
+process.env.TT_LITE_ALLOW_NAV = process.env.TT_LITE_ALLOW_NAV || "1";
+process.env.TT_LITE_COUNTRY_CDP = process.env.TT_LITE_COUNTRY_CDP || process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
 process.env.CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
 process.env.CDP_ENDPOINT_ENRICH = process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223";
 
