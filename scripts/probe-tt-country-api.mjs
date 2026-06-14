@@ -17,8 +17,10 @@ const {
   fetchPostItemList,
   fetchSearchItemFull,
   resolveVideoLocationCreated,
-  tiktokMakeRequest,
 } = await import("../lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js");
+const { tiktokMakeRequest } = await import(
+  "../lib/tools/influencer-functions/tiktok/tiktok-api-client.js"
+);
 const { extractVideosFromSearchAPI } = await import(
   "../lib/tools/influencer-functions/extract-search-results-cdp.js"
 );
@@ -107,5 +109,31 @@ if (sample) {
       searchLocation: sample.locationCreated || null,
     });
     console.log("[probe] resolveVideoLocationCreated=", loc);
+
+    if (sample.videoId && sample.username) {
+      const videoUrl = `https://www.tiktok.com/@${sample.username}/video/${sample.videoId}`;
+      const htmlLoc = await page.evaluate(async (url) => {
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: { accept: "text/html,application/xhtml+xml" },
+        });
+        const html = await res.text();
+        const marker = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">';
+        const start = html.indexOf(marker);
+        if (start < 0) return { ok: res.ok, loc: null, hasUniversal: false };
+        const jsonStart = start + marker.length;
+        const jsonEnd = html.indexOf("</script>", jsonStart);
+        const data = JSON.parse(html.slice(jsonStart, jsonEnd));
+        const item =
+          data?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct ||
+          data?.__DEFAULT_SCOPE__?.["webapp.reflow.video.detail"]?.itemInfo?.itemStruct;
+        return {
+          ok: res.ok,
+          hasUniversal: true,
+          loc: item?.locationCreated ?? null,
+        };
+      }, videoUrl);
+      console.log("[probe] html fetch location=", htmlLoc);
+    }
   });
 }
