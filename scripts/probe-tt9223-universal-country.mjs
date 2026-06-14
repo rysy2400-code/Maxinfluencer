@@ -63,6 +63,12 @@ async function probeBrowserFetch(endpoint, label) {
     }, videoUrl);
 
     const parsed = parseLocationFromHtml(raw.html);
+    const hints = {
+      hasUniversalStr: raw.html.includes("__UNIVERSAL_DATA_FOR_REHYDRATION__"),
+      hasLocationCreatedStr: /"locationCreated"\s*:\s*"([A-Z]{2})"/.test(raw.html),
+      locationCreatedMatch:
+        raw.html.match(/"locationCreated"\s*:\s*"([A-Z]{2})"/)?.[1] ?? null,
+    };
     const helperLoc = await fetchLocationCreatedFromVideoHtmlRequest(
       page,
       username,
@@ -78,6 +84,7 @@ async function probeBrowserFetch(endpoint, label) {
       htmlLen: raw.len,
       ...parsed,
       helperLoc,
+      ...hints,
     };
   } finally {
     await session.dispose();
@@ -125,6 +132,13 @@ async function probeNodeFetchWithCdpCookies(endpoint, label) {
     });
     const html = await res.text();
     const parsed = parseLocationFromHtml(html);
+    const hints = {
+      hasUniversalStr: html.includes("__UNIVERSAL_DATA_FOR_REHYDRATION__"),
+      hasSigi: html.includes("SIGI_STATE"),
+      hasLocationCreatedStr: /"locationCreated"\s*:\s*"([A-Z]{2})"/.test(html),
+      locationCreatedMatch:
+        html.match(/"locationCreated"\s*:\s*"([A-Z]{2})"/)?.[1] ?? null,
+    };
     return {
       label,
       endpoint,
@@ -135,6 +149,7 @@ async function probeNodeFetchWithCdpCookies(endpoint, label) {
       cookieCount: Object.keys(cookies).length,
       hasMsToken: !!(cookies.msToken || cookies.mstoken),
       ...parsed,
+      ...hints,
     };
   } finally {
     await session.dispose();
