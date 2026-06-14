@@ -1,0 +1,8 @@
+$ErrorActionPreference = "SilentlyContinue"
+$env:CHROME_EXE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+$env:CHROME_9222_USER_DATA_DIR = "C:\maxinfluencer\.chrome-cdp-9222"
+$env:CDP_RESTART_SIGNAL_FILE = "C:\maxinfluencer\signals\restart-chrome-9222.flag"
+$env:CHROME_VISIBLE = "1"
+$env:CHROME_9222_URL = "https://www.instagram.com/"
+$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"
+. "C:\maxinfluencer\scripts\guard-chrome-9222.ps1"

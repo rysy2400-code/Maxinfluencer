@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 # Search crawler deploy script (Windows VM).
 # Goals:
 # 1) git pull + npm ci（与仅 SSH 执行本脚本的 CI 一致，无需在 Action 里单独 pull）
-# 2) Start and guard CDP browser on 9222 (9223 decommissioned; enrich uses 9222).
+# 2) Start and guard CDP browsers: 9222 (search/login) + 9223 (TikTok enrich, no login).
 # 3) Start and guard search worker + worker-health-heartbeat（计划任务守护）。
 #
 # 若本脚本自身在 pull 后被更新，会子进程重新执行一遍（避免 PowerShell 仍跑内存里的旧脚本体）。
@@ -199,7 +199,7 @@ $workerLanIp = $workerIdentity.LanIp
 $workerId = $workerIdentity.WorkerId
 Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, lan=$workerLanIp, host=$workerHost) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
-$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { $searchCdpEndpoint }
+$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
 
 # 152.32.192.65 曾用 parallel+2 slots，CDP 易超时；现与其它爬虫机一致：serial + 1 slot。
 $parallelCrawlerIps = @()
@@ -242,6 +242,8 @@ $launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { 
 
 $guard9222 = Join-Path $scriptsDir "run-guard-chrome-9222.ps1"
 $guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
+$guard9223 = Join-Path $scriptsDir "run-guard-chrome-9223.ps1"
+$guard9223Source = Join-Path $scriptsDir "guard-chrome-9223.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
@@ -253,6 +255,23 @@ $guard9222Content = @"
 `$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
 . "$($guard9222Source.Replace("\", "\\"))"
+"@
+
+$chromeDir9223 = "C:\maxinfluencer\.chrome-cdp-9223"
+if (-not (Test-Path $chromeDir9223)) { New-Item -ItemType Directory -Path $chromeDir9223 | Out-Null }
+$chromeRestartSignal9223 = "C:\maxinfluencer\signals\restart-chrome-9223.flag"
+$chromeRestartSignal9223Dir = Split-Path $chromeRestartSignal9223 -Parent
+if (-not (Test-Path $chromeRestartSignal9223Dir)) { New-Item -ItemType Directory -Path $chromeRestartSignal9223Dir -Force | Out-Null }
+
+$guard9223Content = @"
+`$ErrorActionPreference = "SilentlyContinue"
+`$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
+`$env:CHROME_9223_USER_DATA_DIR = "$($chromeDir9223.Replace("\", "\\"))"
+`$env:CDP_9223_RESTART_SIGNAL_FILE = "$($chromeRestartSignal9223.Replace("\", "\\"))"
+`$env:CHROME_9223_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
+`$env:CHROME_9223_URL = "https://www.tiktok.com"
+`$env:CHROME_9223_PROXY_SERVER = "http://127.0.0.1:7897"
+. "$($guard9223Source.Replace("\", "\\"))"
 "@
 
 $guardCrawlerContent = @"
@@ -334,6 +353,7 @@ while (`$true) {
 "@
 
 Set-Content -Path $guard9222 -Value $guard9222Content -Encoding ASCII
+Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
@@ -353,16 +373,19 @@ try {
 Write-CrawlerWorkerRuntimeMarker -ProjectRoot $Root -PublicIp $workerIp
 
 Stop-StaleCdpBrowsers
-Disable-Cdp9223Guard
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
+Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
 
-Start-Sleep -Seconds 4
+Start-Sleep -Seconds 6
 $ok9222 = Test-Cdp -Port 9222
+$ok9223 = Test-Cdp -Port 9223
 $crawlerProcess = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search\.js" }
 
 Write-Host "[deploy-crawler] CDP 9222: $ok9222"
+Write-Host "[deploy-crawler] CDP 9223: $ok9223"
+Write-Host "[deploy-crawler] CDP_ENDPOINT_ENRICH default: $enrichCdpEndpoint"
 Write-Host "[deploy-crawler] Crawler process count: $($crawlerProcess.Count)"
 if ($crawlerProcess.Count -gt 1) {
   Write-Warning "Multiple search workers detected; guard will trim to one on next cycle."

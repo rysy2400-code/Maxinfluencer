@@ -1,0 +1,8 @@
+$ErrorActionPreference = "SilentlyContinue"
+$env:CHROME_EXE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+$env:CHROME_9223_USER_DATA_DIR = "C:\maxinfluencer\.chrome-cdp-9223"
+$env:CDP_9223_RESTART_SIGNAL_FILE = "C:\maxinfluencer\signals\restart-chrome-9223.flag"
+$env:CHROME_9223_VISIBLE = "1"
+$env:CHROME_9223_URL = "https://www.tiktok.com"
+$env:CHROME_9223_PROXY_SERVER = "http://127.0.0.1:7897"
+. "C:\maxinfluencer\scripts\guard-chrome-9223.ps1"
