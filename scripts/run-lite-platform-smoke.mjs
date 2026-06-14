@@ -28,8 +28,8 @@ const enrichMax = Math.min(Math.max(Number(process.argv[5] || 10), 1), 20);
 process.env.SEARCH_MAX_POOL_SIZE = String(searchMax);
 process.env.CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
 if (platform === "tiktok") {
-  process.env.TT_LITE_ENRICH_CDP =
-    process.env.TT_LITE_ENRICH_CDP || process.env.CDP_ENDPOINT;
+  process.env.CDP_ENDPOINT_ENRICH =
+    process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223";
 }
 
 const PLATFORM_META = {
@@ -38,7 +38,7 @@ const PLATFORM_META = {
     label: "TikTok",
     platforms: ["TikTok"],
     searchCdp: "9222（登录，API 搜索）",
-    enrichCdp: "9222（登录态 Lite API，无 @profile 导航）",
+    enrichCdp: "9223（signed API，无页面导航）",
   },
   instagram: {
     slug: "instagram",
@@ -74,7 +74,7 @@ async function ensureCdp(url, label) {
 
 const ok9222 = await ensureCdp(process.env.CDP_ENDPOINT, "CDP 9222");
 let ok9223 = true;
-if (platform === "tiktok" && process.env.CDP_ENDPOINT_ENRICH) {
+if (platform === "tiktok") {
   ok9223 = await ensureCdp(process.env.CDP_ENDPOINT_ENRICH, "CDP 9223");
 }
 if (!ok9222 || !ok9223) process.exit(2);
