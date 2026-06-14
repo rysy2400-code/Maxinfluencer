@@ -1,0 +1,1246 @@
+{
+  "summary": {
+    "total": 9,
+    "success": 18,
+    "failed": 0,
+    "skipped": 0,
+    "timestamp": "2026-05-31T10:40:49.939Z"
+  },
+  "logs": [
+    {
+      "timestamp": "2026-05-31T10:33:57.474Z",
+      "progress": "1/9",
+      "username": "pennyboydfinds",
+      "profileUrl": "https://www.tiktok.com/@pennyboydfinds",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Lucky Penny",
+          "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/e3a063fd8c71527e8387d0732027bdcf~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=112b8fb6&x-expires=1780394400&x-signature=nXF714mRtan6jmIhnZkFY1vdSXE%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "Why chase luck at the casino when the best finds are right here? 🎲🛍️\n📩 Business inquiries: liljayswager@gmail.com",
+          "email": "liljayswager@gmail.com",
+          "followers": {
+            "count": 6,
+            "display": "6"
+          },
+          "following": {
+            "count": 0,
+            "display": "0"
+          },
+          "likes": {
+            "count": 13,
+            "display": "13"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 2,
+            "display": "2"
+          }
+        },
+        "videos": {
+          "count": 2,
+          "sample": [
+            {
+              "videoId": "7643904755399511310",
+              "videoUrl": "https://www.tiktok.com/@pennyboydfinds/video/7643904755399511310",
+              "description": "Why therabreath is my favorite mouthwash 🦷 #therabreath #mouthwash ...",
+              "views": {
+                "count": 212,
+                "display": "212"
+              },
+              "likes": {
+                "count": 8,
+                "display": "8"
+              },
+              "comments": {
+                "count": 1,
+                "display": "1"
+              },
+              "favorites": null
+            },
+            {
+              "videoId": "7643900338923244813",
+              "videoUrl": "https://www.tiktok.com/@pennyboydfinds/video/7643900338923244813",
+              "description": "Ladies it’s very important that you floss! 🦷 ##dental##dentalhygienist...",
+              "views": {
+                "count": 186,
+                "display": "186"
+              },
+              "likes": {
+                "count": 5,
+                "display": "5"
+              },
+              "comments": null,
+              "favorites": null
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 2,
+          "avgViews": 199,
+          "avgLikes": 7,
+          "avgComments": 1,
+          "avgFavorites": null
+        },
+        "missingData": {
+          "email": null,
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Lucky Penny",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/e3a063fd8c71527e8387d0732027bdcf~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=d60425ed&x-expires=1780394400&x-signature=aXm%2FJ3lW8JOIQGqdqrBd3PB4yI4%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Lucky Penny",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/e3a063fd8c71527e8387d0732027bdcf~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=112b8fb6&x-expires=1780394400&x-signature=nXF714mRtan6jmIhnZkFY1vdSXE%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 6,
+          "display": "6"
+        },
+        "bio": "Why chase luck at the casino when the best finds are right here? 🎲🛍️\n📩 Business inquiries: liljayswager@gmail.com",
+        "verified": false,
+        "views": {
+          "avg": 199,
+          "display": "199"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 7,
+          "avgComments": 1
+        },
+        "following": null,
+        "postsCount": 2
+      },
+      "dbSave": {
+        "success": true,
+        "id": 107853,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": false,
+        "reason": "handle_not_matched",
+        "gmv": null,
+        "unitsSold": null,
+        "creatorOecuid": null
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:35:07.943Z",
+      "progress": "2/9",
+      "username": "statusmarz",
+      "profileUrl": "https://www.tiktok.com/@statusmarz",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Statusmarz",
+          "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/1b60fbc2edf6310830d4e3692a508009~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=14616d54&x-expires=1780394400&x-signature=kyN4cZgFQRPsxPSIcHghbD%2FM8Hs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "Smell better. Look sharp. Live confident🔥 \n\nInstagram📸:@Statusmarz\n\nProducts👇",
+          "email": null,
+          "followers": {
+            "count": 22300,
+            "display": "22300"
+          },
+          "following": {
+            "count": 221,
+            "display": "221"
+          },
+          "likes": {
+            "count": 329700,
+            "display": "329700"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 175,
+            "display": "175"
+          }
+        },
+        "videos": {
+          "count": 34,
+          "sample": [
+            {
+              "videoId": "7501083606186609951",
+              "videoUrl": "https://www.tiktok.com/@statusmarz/video/7501083606186609951",
+              "description": "My secret No. 1 to smelling good as a man 101 👀 #mensgrooming #hygiene #bodycareroutine #selfcareti...",
+              "views": {
+                "count": 1300000,
+                "display": "1.3M"
+              },
+              "likes": {
+                "count": 84300,
+                "display": "84.3K"
+              },
+              "comments": {
+                "count": 864,
+                "display": "864"
+              },
+              "favorites": {
+                "count": 39000,
+                "display": "39.0K"
+              }
+            },
+            {
+              "videoId": "7507841457743465758",
+              "videoUrl": "https://www.tiktok.com/@statusmarz/video/7507841457743465758",
+              "description": "My secret to smelling good on vacation 🌴 as a man 101 👀#mensgrooming #hygiene #bodycareroutine #se...",
+              "views": {
+                "count": 562400,
+                "display": "562.4K"
+              },
+              "likes": {
+                "count": 27200,
+                "display": "27.2K"
+              },
+              "comments": {
+                "count": 288,
+                "display": "288"
+              },
+              "favorites": {
+                "count": 8882,
+                "display": "8.9K"
+              }
+            },
+            {
+              "videoId": "7643288017884548383",
+              "videoUrl": "https://www.tiktok.com/@statusmarz/video/7643288017884548383",
+              "description": "Eliminate dry chapped and cracked skin with this #DrySkin #SkinCare #Skin #hygiene #Lotion @Aquaphor...",
+              "views": {
+                "count": 1113,
+                "display": "1.1K"
+              },
+              "likes": {
+                "count": 30,
+                "display": "30"
+              },
+              "comments": {
+                "count": 2,
+                "display": "2"
+              },
+              "favorites": {
+                "count": 4,
+                "display": "4"
+              }
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 34,
+          "avgViews": 63397,
+          "avgLikes": 3452,
+          "avgComments": 39,
+          "avgFavorites": 1467
+        },
+        "missingData": {
+          "email": "邮箱未在 bio 中找到（如果用户没有在 bio 中提供邮箱，则为 null）",
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Statusmarz",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/1b60fbc2edf6310830d4e3692a508009~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=14616d54&x-expires=1780394400&x-signature=kyN4cZgFQRPsxPSIcHghbD%2FM8Hs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Statusmarz",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/1b60fbc2edf6310830d4e3692a508009~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=14616d54&x-expires=1780394400&x-signature=kyN4cZgFQRPsxPSIcHghbD%2FM8Hs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 22300,
+          "display": "22300"
+        },
+        "bio": "Smell better. Look sharp. Live confident🔥 \n\nInstagram📸:@Statusmarz\n\nProducts👇",
+        "verified": false,
+        "views": {
+          "avg": 63397,
+          "display": "63.4K"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 3452,
+          "avgComments": 39
+        },
+        "following": 221,
+        "postsCount": 175
+      },
+      "dbSave": {
+        "success": true,
+        "id": 99068,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": true,
+        "reason": null,
+        "gmv": 249.04,
+        "unitsSold": 13,
+        "creatorOecuid": "7495296048465677062"
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:35:46.510Z",
+      "progress": "3/9",
+      "username": "quinoko420",
+      "profileUrl": "https://www.tiktok.com/@quinoko420",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Q",
+          "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/3fd6ef5320c2af5341a3e6977d09da4b~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=da2fd904&x-expires=1780394400&x-signature=0%2B4wVY9PNbVIs6M%2FYwFsYrEvOrg%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "😶‍🌫️quinton🫪\nsatx•nyc\n24\nmarried",
+          "email": null,
+          "followers": {
+            "count": 17,
+            "display": "17"
+          },
+          "following": {
+            "count": 22,
+            "display": "22"
+          },
+          "likes": {
+            "count": 1434,
+            "display": "1434"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 40,
+            "display": "40"
+          }
+        },
+        "videos": {
+          "count": 40,
+          "sample": [
+            {
+              "videoId": "7444205171841699115",
+              "videoUrl": "https://www.tiktok.com/@quinoko420/video/7444205171841699115",
+              "description": "subtitles messed up towards the end #smokingloon #steak #broccoli #wine #2xspeed ...",
+              "views": {
+                "count": 21,
+                "display": "21"
+              },
+              "likes": {
+                "count": 1,
+                "display": "1"
+              },
+              "comments": null,
+              "favorites": null
+            },
+            {
+              "videoId": "7645892557104303374",
+              "videoUrl": "https://www.tiktok.com/@quinoko420/video/7645892557104303374",
+              "description": "can we talk about how the corgi predicted each game to the T #corgi #spurs #game7 ...",
+              "views": {
+                "count": 855,
+                "display": "855"
+              },
+              "likes": {
+                "count": 94,
+                "display": "94"
+              },
+              "comments": {
+                "count": 1,
+                "display": "1"
+              },
+              "favorites": null
+            },
+            {
+              "videoId": "7645884457538391309",
+              "videoUrl": "https://www.tiktok.com/@quinoko420/video/7645884457538391309",
+              "description": "#timotheechalamet #sanantoniospurs #honking ...",
+              "views": {
+                "count": 218,
+                "display": "218"
+              },
+              "likes": {
+                "count": 4,
+                "display": "4"
+              },
+              "comments": null,
+              "favorites": null
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 40,
+          "avgViews": 1029,
+          "avgLikes": 29,
+          "avgComments": 1,
+          "avgFavorites": 1
+        },
+        "missingData": {
+          "email": "邮箱未在 bio 中找到（如果用户没有在 bio 中提供邮箱，则为 null）",
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Q",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/3fd6ef5320c2af5341a3e6977d09da4b~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=da2fd904&x-expires=1780394400&x-signature=0%2B4wVY9PNbVIs6M%2FYwFsYrEvOrg%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Q",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/3fd6ef5320c2af5341a3e6977d09da4b~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=da2fd904&x-expires=1780394400&x-signature=0%2B4wVY9PNbVIs6M%2FYwFsYrEvOrg%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 17,
+          "display": "17"
+        },
+        "bio": "😶‍🌫️quinton🫪\nsatx•nyc\n24\nmarried",
+        "verified": false,
+        "views": {
+          "avg": 1029,
+          "display": "1.0K"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 29,
+          "avgComments": 1
+        },
+        "following": 22,
+        "postsCount": 40
+      },
+      "dbSave": {
+        "success": true,
+        "id": 107481,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": false,
+        "reason": "not_found",
+        "gmv": null,
+        "unitsSold": null,
+        "creatorOecuid": null
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:36:18.988Z",
+      "progress": "4/9",
+      "username": "therabreath",
+      "profileUrl": "https://www.tiktok.com/@therabreath",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "TheraBreath",
+          "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/7314310616838062126~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=a5a72424&x-expires=1780394400&x-signature=w1PEias9M2W2%2BcJbNqAO2pr2Ecg%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "The TikTok Mouthwash\n🚨 CLICK THE LINK 🚨\nIt's Swishy Time!\nShop US🇺🇸 & CA🇨🇦",
+          "email": null,
+          "followers": {
+            "count": 681700,
+            "display": "681700"
+          },
+          "following": {
+            "count": 4482,
+            "display": "4482"
+          },
+          "likes": {
+            "count": 4000000,
+            "display": "4000000"
+          },
+          "verified": true,
+          "postsCount": {
+            "count": 1345,
+            "display": "1345"
+          }
+        },
+        "videos": {
+          "count": 50,
+          "sample": [
+            {
+              "videoId": "7615348397939150093",
+              "videoUrl": "https://www.tiktok.com/@therabreath/video/7615348397939150093",
+              "description": "Your routine = upgraded✨👀 Check out our fresh new products drops! 🧡 #therabreath #eucalyptus #ther...",
+              "views": {
+                "count": 538800,
+                "display": "538.8K"
+              },
+              "likes": {
+                "count": 206,
+                "display": "206"
+              },
+              "comments": {
+                "count": 17,
+                "display": "17"
+              },
+              "favorites": {
+                "count": 35,
+                "display": "35"
+              }
+            },
+            {
+              "videoId": "7603124873338162446",
+              "videoUrl": "https://www.tiktok.com/@therabreath/video/7603124873338162446",
+              "description": "The science behind TheraBreath Toothpaste✨ Let’s brush up on the facts🪥🦷 • #therabreath #SwishyTim...",
+              "views": {
+                "count": 7600000,
+                "display": "7.6M"
+              },
+              "likes": {
+                "count": 16900,
+                "display": "16.9K"
+              },
+              "comments": {
+                "count": 213,
+                "display": "213"
+              },
+              "favorites": {
+                "count": 4913,
+                "display": "4.9K"
+              }
+            },
+            {
+              "videoId": "7464630952694648110",
+              "videoUrl": "https://www.tiktok.com/@therabreath/video/7464630952694648110",
+              "description": "Wondering which TheraBreath Oral Rinse is right for you? Use this guide to match your oral care need...",
+              "views": {
+                "count": 6200000,
+                "display": "6.2M"
+              },
+              "likes": {
+                "count": 1450,
+                "display": "1.4K"
+              },
+              "comments": {
+                "count": 83,
+                "display": "83"
+              },
+              "favorites": {
+                "count": 626,
+                "display": "626"
+              }
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 50,
+          "avgViews": 1368958,
+          "avgLikes": 986,
+          "avgComments": 12,
+          "avgFavorites": 198
+        },
+        "missingData": {
+          "email": "邮箱未在 bio 中找到（如果用户没有在 bio 中提供邮箱，则为 null）",
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "TheraBreath",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/7314310616838062126~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=54f3b1be&x-expires=1780394400&x-signature=O67fOykH%2F0BtRBH7umCwLBaMp3Q%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": true
+      },
+      "afterData": {
+        "displayName": "TheraBreath",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/7314310616838062126~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=a5a72424&x-expires=1780394400&x-signature=w1PEias9M2W2%2BcJbNqAO2pr2Ecg%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 681700,
+          "display": "681700"
+        },
+        "bio": "The TikTok Mouthwash\n🚨 CLICK THE LINK 🚨\nIt's Swishy Time!\nShop US🇺🇸 & CA🇨🇦",
+        "verified": true,
+        "views": {
+          "avg": 1368958,
+          "display": "1.4M"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 986,
+          "avgComments": 12
+        },
+        "following": 4482,
+        "postsCount": 1345
+      },
+      "dbSave": {
+        "success": true,
+        "id": 103699,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": true,
+        "reason": null,
+        "gmv": 191.3,
+        "unitsSold": 6,
+        "creatorOecuid": "7494013812469040399"
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:36:51.209Z",
+      "progress": "5/9",
+      "username": "selina.dasilvaaa",
+      "profileUrl": "https://www.tiktok.com/@selina.dasilvaaa",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": null,
+          "avatarUrl": null,
+          "bio": null,
+          "email": null,
+          "followers": null,
+          "following": null,
+          "likes": null,
+          "verified": false,
+          "postsCount": null
+        },
+        "videos": {
+          "count": 0,
+          "sample": []
+        },
+        "statistics": {
+          "videoCount": 0,
+          "avgViews": null,
+          "avgLikes": null,
+          "avgComments": null,
+          "avgFavorites": null
+        },
+        "missingData": {
+          "email": "邮箱未在 bio 中找到（如果用户没有在 bio 中提供邮箱，则为 null）",
+          "favorites": null
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "selina.dasilvaaa",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-maliva-avt-0068/39499b67a94d1102f1cc073b268bd048~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=1d3c2709&x-expires=1780394400&x-signature=AvUpCg9K%2BrZ5%2FoCG%2Fo7xfZcSj2I%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "selina.dasilvaaa",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-maliva-avt-0068/39499b67a94d1102f1cc073b268bd048~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=1d3c2709&x-expires=1780394400&x-signature=AvUpCg9K%2BrZ5%2FoCG%2Fo7xfZcSj2I%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false,
+        "views": null,
+        "engagement": {
+          "rate": null,
+          "avgLikes": null,
+          "avgComments": null
+        },
+        "following": null,
+        "postsCount": null
+      },
+      "dbSave": {
+        "success": true,
+        "id": 105968,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": false,
+        "reason": "handle_not_matched",
+        "gmv": null,
+        "unitsSold": null,
+        "creatorOecuid": null
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:38:27.961Z",
+      "progress": "6/9",
+      "username": "for.this.season",
+      "profileUrl": "https://www.tiktok.com/@for.this.season",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Destiny Broom",
+          "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/96f661a1ba027622296ef231813a7a73~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=2c183a2f&x-expires=1780394400&x-signature=gvxXhZV86T%2FE4%2F%2BGm7U3u%2F%2B64dY%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "Wife 💍\nMama x 3 💙🩷🩷\nNurse practitioner 🩺\nUGC Creator 📸\nDBroomugc@gmail.com 💌",
+          "email": "dbroomugc@gmail.com",
+          "followers": {
+            "count": 1226,
+            "display": "1226"
+          },
+          "following": {
+            "count": 1217,
+            "display": "1217"
+          },
+          "likes": {
+            "count": 7539,
+            "display": "7539"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 300,
+            "display": "300"
+          }
+        },
+        "videos": {
+          "count": 50,
+          "sample": [
+            {
+              "videoId": "7644956975704460574",
+              "videoUrl": "https://www.tiktok.com/@for.this.season/video/7644956975704460574",
+              "description": "The me from nearly 2 years ago would be mind blown that one day she could be charging $300/video for...",
+              "views": {
+                "count": 221,
+                "display": "221"
+              },
+              "likes": {
+                "count": 9,
+                "display": "9"
+              },
+              "comments": {
+                "count": 2,
+                "display": "2"
+              },
+              "favorites": null
+            },
+            {
+              "videoId": "7643951507011833119",
+              "videoUrl": "https://www.tiktok.com/@for.this.season/video/7643951507011833119",
+              "description": "@TheraBreath icy mint mouthwash is where it’s at! 🥶 #therabreath #oralcare #ugc #ugccreator #ugccom...",
+              "views": {
+                "count": 205,
+                "display": "205"
+              },
+              "likes": {
+                "count": 8,
+                "display": "8"
+              },
+              "comments": null,
+              "favorites": null
+            },
+            {
+              "videoId": "7643620454367808798",
+              "videoUrl": "https://www.tiktok.com/@for.this.season/video/7643620454367808798",
+              "description": "Don’t forget about Tubby Todd’s site-wide S A L E 💸. @Tubby Todd #tubbytodd #baby #babyshampoo #bat...",
+              "views": {
+                "count": 177,
+                "display": "177"
+              },
+              "likes": {
+                "count": 6,
+                "display": "6"
+              },
+              "comments": null,
+              "favorites": null
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 50,
+          "avgViews": 1766,
+          "avgLikes": 28,
+          "avgComments": 2,
+          "avgFavorites": 1
+        },
+        "missingData": {
+          "email": null,
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Destiny Broom",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/96f661a1ba027622296ef231813a7a73~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=2c183a2f&x-expires=1780394400&x-signature=gvxXhZV86T%2FE4%2F%2BGm7U3u%2F%2B64dY%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Destiny Broom",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/96f661a1ba027622296ef231813a7a73~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=2c183a2f&x-expires=1780394400&x-signature=gvxXhZV86T%2FE4%2F%2BGm7U3u%2F%2B64dY%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 1226,
+          "display": "1226"
+        },
+        "bio": "Wife 💍\nMama x 3 💙🩷🩷\nNurse practitioner 🩺\nUGC Creator 📸\nDBroomugc@gmail.com 💌",
+        "verified": false,
+        "views": {
+          "avg": 1766,
+          "display": "1.8K"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 28,
+          "avgComments": 2
+        },
+        "following": 1217,
+        "postsCount": 300
+      },
+      "dbSave": {
+        "success": true,
+        "id": 107874,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": true,
+        "reason": null,
+        "gmv": 16.61,
+        "unitsSold": 3,
+        "creatorOecuid": "7494430659215199070"
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:39:15.660Z",
+      "progress": "7/9",
+      "username": "shelbyram",
+      "profileUrl": "https://www.tiktok.com/@shelbyram",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Shelby Ramirez",
+          "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/b5aeb66aff110d98deaf8942664e93e8~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=75ccea27&x-expires=1780394400&x-signature=IMVpkzooIYAgPElftQPH9kPvXk8%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "obsessed w fun fits & helping women become paid ugc creators ☺️🤳✨\nmom x2 | dallas \n💌 ramirez.shelby@icloud.com 💌",
+          "email": "ramirez.shelby@icloud.com",
+          "followers": {
+            "count": 13900,
+            "display": "13900"
+          },
+          "following": {
+            "count": 491,
+            "display": "491"
+          },
+          "likes": {
+            "count": 292200,
+            "display": "292200"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 1553,
+            "display": "1553"
+          }
+        },
+        "videos": {
+          "count": 30,
+          "sample": [
+            {
+              "videoId": "7645765007401061662",
+              "videoUrl": "https://www.tiktok.com/@shelbyram/video/7645765007401061662",
+              "description": "& the sad thing is that most people are going to miss the opportunity that’s right in front of them!...",
+              "views": {
+                "count": 380,
+                "display": "380"
+              },
+              "likes": {
+                "count": 30,
+                "display": "30"
+              },
+              "comments": {
+                "count": 1,
+                "display": "1"
+              },
+              "favorites": null
+            },
+            {
+              "videoId": "7645689963748674846",
+              "videoUrl": "https://www.tiktok.com/@shelbyram/video/7645689963748674846",
+              "description": "It’s not always perfectly balanced but it is always SO worth it. 💛  thankful for UGC and this life!...",
+              "views": {
+                "count": 348,
+                "display": "348"
+              },
+              "likes": {
+                "count": 25,
+                "display": "25"
+              },
+              "comments": {
+                "count": 3,
+                "display": "3"
+              },
+              "favorites": null
+            },
+            {
+              "videoId": "7645445523230526750",
+              "videoUrl": "https://www.tiktok.com/@shelbyram/video/7645445523230526750",
+              "description": "Time spend waiting is time wasted you could be making money !!!!  Comment LEARN for everything you n...",
+              "views": {
+                "count": 499,
+                "display": "499"
+              },
+              "likes": {
+                "count": 60,
+                "display": "60"
+              },
+              "comments": {
+                "count": 4,
+                "display": "4"
+              },
+              "favorites": {
+                "count": 2,
+                "display": "2"
+              }
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 30,
+          "avgViews": 644,
+          "avgLikes": 65,
+          "avgComments": 6,
+          "avgFavorites": 5
+        },
+        "missingData": {
+          "email": null,
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Shelby Ramirez",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/b5aeb66aff110d98deaf8942664e93e8~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=75ccea27&x-expires=1780394400&x-signature=IMVpkzooIYAgPElftQPH9kPvXk8%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Shelby Ramirez",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast8-avt-0068-tx2/b5aeb66aff110d98deaf8942664e93e8~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=75ccea27&x-expires=1780394400&x-signature=IMVpkzooIYAgPElftQPH9kPvXk8%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 13900,
+          "display": "13900"
+        },
+        "bio": "obsessed w fun fits & helping women become paid ugc creators ☺️🤳✨\nmom x2 | dallas \n💌 ramirez.shelby@icloud.com 💌",
+        "verified": false,
+        "views": {
+          "avg": 644,
+          "display": "644"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 65,
+          "avgComments": 6
+        },
+        "following": 491,
+        "postsCount": 1553
+      },
+      "dbSave": {
+        "success": true,
+        "id": 106513,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": true,
+        "reason": null,
+        "gmv": 0,
+        "unitsSold": 0,
+        "creatorOecuid": "7494980964743153676"
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:39:59.004Z",
+      "progress": "8/9",
+      "username": "salamxismail",
+      "profileUrl": "https://www.tiktok.com/@salamxismail",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "S&I | Lifestyle & Travel ✈️",
+          "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-maliva-avt-0068/b17836c4ab0f9a4c409c06d5a96d6651~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=09439a52&x-expires=1780394400&x-signature=wNUbt0O6bc3p%2FjP1EPM4lrddobI%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": "Couple creators\nLuxury lifestyle • Aesthetic moments\nContact : salamxismail@gmail.com",
+          "email": "salamxismail@gmail.com",
+          "followers": {
+            "count": 165900,
+            "display": "165900"
+          },
+          "following": {
+            "count": 17,
+            "display": "17"
+          },
+          "likes": {
+            "count": 2700000,
+            "display": "2700000"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 34,
+            "display": "34"
+          }
+        },
+        "videos": {
+          "count": 32,
+          "sample": [
+            {
+              "videoId": "7637193306363022612",
+              "videoUrl": "https://www.tiktok.com/@salamxismail/video/7637193306363022612",
+              "description": "En tant que dentiste 🦷, je choisis des produits en lesquels j’ai confiance — et TheraBreath Deep Cl...",
+              "views": {
+                "count": 8200000,
+                "display": "8.2M"
+              },
+              "likes": {
+                "count": 3788,
+                "display": "3.8K"
+              },
+              "comments": {
+                "count": 32,
+                "display": "32"
+              },
+              "favorites": {
+                "count": 502,
+                "display": "502"
+              }
+            },
+            {
+              "videoId": "7604552828782152981",
+              "videoUrl": "https://www.tiktok.com/@salamxismail/video/7604552828782152981",
+              "description": "Magic really exists in Disney Paris! Book your experience with  @GetYourGuide @getyourguidecommunity...",
+              "views": {
+                "count": 4071,
+                "display": "4.1K"
+              },
+              "likes": {
+                "count": 80,
+                "display": "80"
+              },
+              "comments": null,
+              "favorites": {
+                "count": 6,
+                "display": "6"
+              }
+            },
+            {
+              "videoId": "7597798707257527572",
+              "videoUrl": "https://www.tiktok.com/@salamxismail/video/7597798707257527572",
+              "description": "@Staypineapple Hotels   #staypineapple #bostonhotel #hotelsinboston ...",
+              "views": {
+                "count": 4993,
+                "display": "5.0K"
+              },
+              "likes": {
+                "count": 54,
+                "display": "54"
+              },
+              "comments": {
+                "count": 1,
+                "display": "1"
+              },
+              "favorites": {
+                "count": 2,
+                "display": "2"
+              }
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 32,
+          "avgViews": 306089,
+          "avgLikes": 1607,
+          "avgComments": 18,
+          "avgFavorites": 647
+        },
+        "missingData": {
+          "email": null,
+          "favorites": null
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "S&I | Lifestyle & Travel ✈️",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-maliva-avt-0068/b17836c4ab0f9a4c409c06d5a96d6651~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=e54e6342&x-expires=1780394400&x-signature=W7ObUsY%2FSiEgIPbXjiyrBcWZcGM%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "S&I | Lifestyle & Travel ✈️",
+        "avatarUrl": "https://p16-common-sign.tiktokcdn-us.com/tos-maliva-avt-0068/b17836c4ab0f9a4c409c06d5a96d6651~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=09439a52&x-expires=1780394400&x-signature=wNUbt0O6bc3p%2FjP1EPM4lrddobI%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 165900,
+          "display": "165900"
+        },
+        "bio": "Couple creators\nLuxury lifestyle • Aesthetic moments\nContact : salamxismail@gmail.com",
+        "verified": false,
+        "views": {
+          "avg": 306089,
+          "display": "306.1K"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 1607,
+          "avgComments": 18
+        },
+        "following": 17,
+        "postsCount": 34
+      },
+      "dbSave": {
+        "success": true,
+        "id": 107889,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": false,
+        "reason": "handle_not_matched",
+        "gmv": null,
+        "unitsSold": null,
+        "creatorOecuid": null
+      }
+    },
+    {
+      "timestamp": "2026-05-31T10:40:38.411Z",
+      "progress": "9/9",
+      "username": "costcochristina",
+      "profileUrl": "https://www.tiktok.com/@costcochristina",
+      "success": true,
+      "extractedData": {
+        "userInfo": {
+          "displayName": "Costco Top Picks Christina",
+          "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/889eae0850f460878e5bd06090fa1ab5~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=0749b9d2&x-expires=1780394400&x-signature=giFooYBk5a4Hba3aBxcNSie6yNs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+          "bio": null,
+          "email": null,
+          "followers": {
+            "count": 139300,
+            "display": "139300"
+          },
+          "following": {
+            "count": 14,
+            "display": "14"
+          },
+          "likes": {
+            "count": 238300,
+            "display": "238300"
+          },
+          "verified": false,
+          "postsCount": {
+            "count": 111,
+            "display": "111"
+          }
+        },
+        "videos": {
+          "count": 48,
+          "sample": [
+            {
+              "videoId": "7645809650729782542",
+              "videoUrl": "https://www.tiktok.com/@costcochristina/video/7645809650729782542",
+              "description": "if your hair's been looking tired, maryruth's liquid multivitamin + hair growth might be the move. g...",
+              "views": {
+                "count": 197,
+                "display": "197"
+              },
+              "likes": {
+                "count": 6,
+                "display": "6"
+              },
+              "comments": null,
+              "favorites": {
+                "count": 1,
+                "display": "1"
+              }
+            },
+            {
+              "videoId": "7645763253775125773",
+              "videoUrl": "https://www.tiktok.com/@costcochristina/video/7645763253775125773",
+              "description": "if your hair's been giving up on you, maryruth's liquid multivitamin might actually change the game ...",
+              "views": {
+                "count": 284,
+                "display": "284"
+              },
+              "likes": {
+                "count": 6,
+                "display": "6"
+              },
+              "comments": null,
+              "favorites": null
+            },
+            {
+              "videoId": "7645685883873611022",
+              "videoUrl": "https://www.tiktok.com/@costcochristina/video/7645685883873611022",
+              "description": "if your hair's been giving up on you, mary ruth's liquid multivitamin might be the plot twist you ne...",
+              "views": {
+                "count": 401,
+                "display": "401"
+              },
+              "likes": {
+                "count": 7,
+                "display": "7"
+              },
+              "comments": null,
+              "favorites": {
+                "count": 2,
+                "display": "2"
+              }
+            }
+          ]
+        },
+        "statistics": {
+          "videoCount": 48,
+          "avgViews": 514,
+          "avgLikes": 15,
+          "avgComments": 1,
+          "avgFavorites": 2
+        },
+        "missingData": {
+          "email": "邮箱未在 bio 中找到（如果用户没有在 bio 中提供邮箱，则为 null）",
+          "favorites": "部分视频的收藏数未提取到"
+        }
+      },
+      "error": null,
+      "beforeData": {
+        "displayName": "Costco Top Picks Christina",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/889eae0850f460878e5bd06090fa1ab5~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=0749b9d2&x-expires=1780394400&x-signature=giFooYBk5a4Hba3aBxcNSie6yNs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 0,
+          "display": "0"
+        },
+        "bio": null,
+        "verified": false
+      },
+      "afterData": {
+        "displayName": "Costco Top Picks Christina",
+        "avatarUrl": "https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/889eae0850f460878e5bd06090fa1ab5~tplv-tiktokx-cropcenter:720:720.jpeg?dr=9640&refresh_token=0749b9d2&x-expires=1780394400&x-signature=giFooYBk5a4Hba3aBxcNSie6yNs%3D&t=4d5b0474&ps=13740610&shp=a5d48078&shcp=81f88b70&idc=useast8",
+        "followers": {
+          "count": 139300,
+          "display": "139300"
+        },
+        "bio": null,
+        "verified": false,
+        "views": {
+          "avg": 514,
+          "display": "514"
+        },
+        "engagement": {
+          "rate": null,
+          "avgLikes": 15,
+          "avgComments": 1
+        },
+        "following": 14,
+        "postsCount": 111
+      },
+      "dbSave": {
+        "success": true,
+        "id": 107894,
+        "message": "保存成功"
+      },
+      "affiliateFetch": {
+        "ok": true,
+        "reason": null,
+        "gmv": 0,
+        "unitsSold": 0,
+        "creatorOecuid": "7494290440690828846"
+      }
+    }
+  ]
+}

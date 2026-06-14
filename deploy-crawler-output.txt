@@ -1,0 +1,44 @@
+[deploy-crawler] Fetch + pull main...
+M	scripts/guard-chrome-9222.ps1
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+From https://github.com/rysy2400-code/Maxinfluencer
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+[deploy-crawler] npm ci...
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated next@14.2.5: This version has a security vulnerability. Please upgrade to a patched version. See https://nextjs.org/blog/security-update-2025-12-11 for more details.
+
+added 294 packages, and audited 295 packages in 24s
+
+130 packages are looking for funding
+  run `npm fund` for details
+
+12 vulnerabilities (1 low, 6 moderate, 4 high, 1 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues possible (including breaking changes), run:
+  npm audit fix --force
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+[deploy-crawler] worker_ip(source=myip.ipip.net, lan=10.61.164.186, host=10-61-164-186) -> using=152.32.252.45
+[deploy-crawler] worker parallel: slots=1 cdp9222=serial (ip=152.32.252.45)
+[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=120000, SEARCH_TASK_STUCK_RECLAIM_MINUTES=7
+错误: 系统找不到指定的文件。
+错误: 系统找不到指定的文件。
+[deploy-crawler] CDP 9223 decommissioned (guard removed, stale processes stopped).
+成功: 计划任务 "maxin-guard-chrome-9222" 已经被成功终止。
+成功: 尝试运行 "maxin-guard-chrome-9222"。
+成功: 计划任务 "maxin-guard-crawler-search" 已经被成功终止。
+成功: 尝试运行 "maxin-guard-crawler-search"。
+成功: 计划任务 "maxin-guard-worker-health" 已经被成功终止。
+成功: 尝试运行 "maxin-guard-worker-health"。
+[deploy-crawler] CDP 9222: True
+[deploy-crawler] Crawler process count: 
+[deploy-crawler] Done.
