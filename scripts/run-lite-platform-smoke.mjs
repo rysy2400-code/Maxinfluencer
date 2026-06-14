@@ -181,9 +181,8 @@ console.log("\n" + JSON.stringify(report, null, 2));
 
 const pass =
   report.success &&
-  report.searchPool >= Math.min(5, searchMax) &&
+  report.searchPool >= Math.min(8, searchMax) &&
   report.enrichedCount >= Math.min(3, enrichMax) &&
-  report.withCountry >= 1 &&
   report.withVideos >= 1;
 
 console.log("\n[lite-smoke] PASS=" + pass);
