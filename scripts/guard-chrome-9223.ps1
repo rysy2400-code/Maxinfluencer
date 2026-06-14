@@ -36,6 +36,8 @@ if (-not $visible) {
 
 $profileDirPattern = [Regex]::Escape($chromeDir)
 $unhealthySince = $null
+$lastStartAt = $null
+$startGraceSec = if ($env:CHROME_GUARD_START_GRACE_SEC) { [int]$env:CHROME_GUARD_START_GRACE_SEC } else { 90 }
 
 function Test-Cdp9223Healthy {
   try {
@@ -63,17 +65,26 @@ function Start-Chrome9223 {
   if (Test-Path $chrome) {
     $wd = Split-Path $chrome -Parent
     Start-Process -FilePath $chrome -ArgumentList $chromeArgList -WorkingDirectory $wd | Out-Null
+    $script:lastStartAt = Get-Date
   }
 }
 
 while ($true) {
   if (Test-Path $signalFile) {
     try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
+    if (Test-Cdp9223Healthy) {
+      Start-Sleep -Seconds 8
+      continue
+    }
+    if ($lastStartAt -and (((Get-Date) - $lastStartAt).TotalSeconds -lt $startGraceSec)) {
+      Start-Sleep -Seconds 8
+      continue
+    }
     $unhealthySince = $null
     Stop-Chrome9223
     Start-Sleep -Seconds 2
     Start-Chrome9223
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 10
     continue
   }
 
@@ -84,13 +95,17 @@ while ($true) {
     if ($profileProcs.Count -eq 0) {
       $unhealthySince = $null
       Start-Chrome9223
+      Start-Sleep -Seconds 10
+    } elseif ($lastStartAt -and (((Get-Date) - $lastStartAt).TotalSeconds -lt $startGraceSec)) {
+      # 启动宽限期
     } elseif (-not $unhealthySince) {
       $unhealthySince = Get-Date
-    } elseif (((Get-Date) - $unhealthySince).TotalSeconds -ge 45) {
+    } elseif (((Get-Date) - $unhealthySince).TotalSeconds -ge 120) {
       $unhealthySince = $null
       Stop-Chrome9223
       Start-Sleep -Seconds 2
       Start-Chrome9223
+      Start-Sleep -Seconds 10
     }
   }
 
