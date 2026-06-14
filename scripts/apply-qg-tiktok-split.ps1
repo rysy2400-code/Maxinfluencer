@@ -90,23 +90,13 @@ if (Test-Path $ProfilesPath) {
   [System.IO.File]::WriteAllText($ProfilesPath, $py, $utf8)
 }
 
-$mihomo = "C:\Program Files\Clash Verge\verge-mihomo.exe"
-& $mihomo -t -f $YamlPath 2>&1 | Select-Object -Last 1
-if ($LASTEXITCODE -ne 0) { exit 1 }
-Write-Host "[apply] yaml valid"
-
-Get-Process verge-mihomo -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-Start-Process $mihomo -ArgumentList @("-f", $YamlPath, "-d", $ConfigDir) -WindowStyle Hidden
-Start-Sleep -Seconds 6
-
-# restart GUI so 代理 page reloads merge
-$clashGui = "C:\Program Files\Clash Verge\clash-verge.exe"
-if (Test-Path $clashGui) {
-  Get-Process clash-verge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
-  Start-Process $clashGui -WindowStyle Minimized
-  Start-Sleep -Seconds 10
+# 爬虫机请优先用 ensure-clash-qg-tiktok.ps1（独立 mihomo 配置，不依赖 Verge merge）。
+$ensure = Join-Path (Split-Path $PSScriptRoot -Parent) "scripts\ensure-clash-qg-tiktok.ps1"
+if (Test-Path $ensure) {
+  Write-Host "[apply] delegating to ensure-clash-qg-tiktok.ps1"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ensure
+  exit $LASTEXITCODE
 }
 
+Write-Host "[apply] merge/yaml updated; run ensure-clash-qg-tiktok.ps1 on crawler VMs"
 Write-Host "[apply] done"

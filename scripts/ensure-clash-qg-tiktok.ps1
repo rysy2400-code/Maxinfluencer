@@ -1,0 +1,176 @@
+# 爬虫机专用：生成独立 mihomo 配置（规则内联，不依赖 Clash Verge merge / 订阅）
+# TikTok -> 青果隧道；Instagram/YouTube -> DIRECT
+param(
+  [string]$ProjectRoot = "C:\maxinfluencer",
+  [string]$AuthKey = $env:QG_AUTH_KEY,
+  [string]$AuthPwd = $env:QG_AUTH_PWD,
+  [string]$TunnelHost = $(if ($env:QG_TUNNEL_HOST) { $env:QG_TUNNEL_HOST } else { "overseas-us.tunnel.qg.net" }),
+  [int]$TunnelPort = $(if ($env:QG_TUNNEL_PORT) { [int]$env:QG_TUNNEL_PORT } else { 16364 }),
+  [string]$TikTokChannel = $(if ($env:QG_TUNNEL_CHANNEL_TT) { $env:QG_TUNNEL_CHANNEL_TT } else { "tiktok9222" }),
+  [int]$StickySeconds = $(if ($env:QG_TUNNEL_STICKY_SEC) { [int]$env:QG_TUNNEL_STICKY_SEC } else { 600 }),
+  [int]$MixedPort = $(if ($env:CLASH_MIXED_PORT) { [int]$env:CLASH_MIXED_PORT } else { 7897 }),
+  [switch]$SkipTikTokProbe,
+  [switch]$AllowVergeGui
+)
+
+$ErrorActionPreference = "Stop"
+$MihomoExe = "C:\Program Files\Clash Verge\verge-mihomo.exe"
+$VergeGui = "C:\Program Files\Clash Verge\clash-verge.exe"
+$ProxyName = "QgTunnel-TikTok"
+$configDir = Join-Path $ProjectRoot "config"
+$configPath = Join-Path $configDir "crawler-clash.yaml"
+$mihomoDataDir = Join-Path $configDir "mihomo-runtime"
+
+function Import-DotEnv {
+  param([string]$Root)
+  foreach ($name in @(".env", ".env.local")) {
+    $path = Join-Path $Root $name
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    Get-Content -LiteralPath $path | ForEach-Object {
+      $line = $_.Trim()
+      if (-not $line -or $line.StartsWith("#")) { return }
+      $idx = $line.IndexOf("=")
+      if ($idx -lt 1) { return }
+      $key = $line.Substring(0, $idx).Trim()
+      $val = $line.Substring($idx + 1).Trim()
+      if ($val.Length -ge 2) {
+        $q0 = $val[0]; $qn = $val[$val.Length - 1]
+        if (($q0 -eq [char]34 -and $qn -eq [char]34) -or ($q0 -eq [char]39 -and $qn -eq [char]39)) {
+          $val = $val.Substring(1, $val.Length - 2)
+        }
+      }
+      if ($key) { Set-Item -Path "Env:$key" -Value $val }
+    }
+  }
+}
+
+function Test-ProxyListening {
+  param([int]$Port)
+  return [bool](netstat -an | Select-String "127.0.0.1:$Port\s+.*LISTENING")
+}
+
+function Test-TikTokSearchViaProxy {
+  param(
+    [string]$Proxy = "http://127.0.0.1:7897",
+    [int]$TimeoutSec = 40
+  )
+  $url = "https://www.tiktok.com/search/video?q=deploy_probe"
+  $raw = & curl.exe -sI --http1.1 --max-time $TimeoutSec -x $Proxy $url 2>&1
+  $text = ($raw | Out-String)
+  if ($text -match "Location:\s*https://www\.tiktok\.com/hk/about") {
+    return @{ ok = $false; reason = "hk_about_redirect"; raw = $text }
+  }
+  if ($text -match "HTTP/1\.1 200 OK" -or $text -match "HTTP/2 200") {
+    return @{ ok = $true; reason = "200_ok"; raw = $text }
+  }
+  if ($text -match "HTTP/1\.1 302" -and $text -notmatch "/hk/about") {
+    return @{ ok = $true; reason = "302_non_hk"; raw = $text }
+  }
+  if ($text -match "HTTP/1\.1 200 Connection established" -and $text -match "HTTP/1\.1 200") {
+    return @{ ok = $true; reason = "200_after_connect"; raw = $text }
+  }
+  return @{ ok = $false; reason = "unexpected_response"; raw = $text }
+}
+
+if (Test-Path $ProjectRoot) { Import-DotEnv -Root $ProjectRoot }
+if (-not $AuthKey) { $AuthKey = $env:QG_AUTH_KEY }
+if (-not $AuthPwd) { $AuthPwd = $env:QG_AUTH_PWD }
+if (-not $AuthKey) { $AuthKey = "O9QJT6VG" }
+if (-not $AuthPwd) { throw "QG_AUTH_PWD is required (set in .env or environment)" }
+
+$username = "$AuthKey-S-$TikTokChannel-T-$StickySeconds"
+if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
+if (-not (Test-Path $mihomoDataDir)) { New-Item -ItemType Directory -Path $mihomoDataDir | Out-Null }
+
+$yaml = @"
+# Auto-generated for crawler VMs. TikTok via QG tunnel; IG/YT direct.
+mixed-port: $MixedPort
+allow-lan: false
+mode: rule
+log-level: warning
+ipv6: false
+external-controller: 127.0.0.1:9090
+unified-delay: true
+
+proxies:
+  - name: $ProxyName
+    type: http
+    server: $TunnelHost
+    port: $TunnelPort
+    username: "$username"
+    password: "$AuthPwd"
+
+rules:
+  - DOMAIN-SUFFIX,tiktok.com,$ProxyName
+  - DOMAIN-SUFFIX,tiktokcdn.com,$ProxyName
+  - DOMAIN-SUFFIX,tiktokv.com,$ProxyName
+  - DOMAIN-SUFFIX,instagram.com,DIRECT
+  - DOMAIN-SUFFIX,cdninstagram.com,DIRECT
+  - DOMAIN-KEYWORD,instagram,DIRECT
+  - DOMAIN-SUFFIX,youtube.com,DIRECT
+  - DOMAIN-SUFFIX,googlevideo.com,DIRECT
+  - DOMAIN-SUFFIX,ytimg.com,DIRECT
+  - MATCH,DIRECT
+"@
+
+Set-Content -Path $configPath -Value $yaml -Encoding UTF8
+Write-Host "[clash] wrote $configPath (user=$username)"
+
+if (-not (Test-Path $MihomoExe)) {
+  throw "verge-mihomo not found: $MihomoExe (install Clash Verge Rev)"
+}
+
+& $MihomoExe -t -f $configPath -d $mihomoDataDir 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "[clash] $_" }
+if ($LASTEXITCODE -ne 0) { throw "crawler-clash.yaml validation failed" }
+
+# 停止 Verge GUI / 错误 mihomo / 历史修复脚本，避免抢回订阅配置
+Get-Process clash-verge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
+Get-CimInstance Win32_Process | Where-Object {
+  ($_.Name -eq "powershell.exe" -or $_.Name -eq "cmd.exe") -and
+  $_.CommandLine -match "fix-clash-qg-yaml|restore-clash-qg-us|patch-clash-qg|test-proxy-sites\.cmd"
+} | ForEach-Object {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+
+Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch [regex]::Escape($configPath)
+} | ForEach-Object {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+Start-Sleep -Seconds 1
+
+Get-Process verge-mihomo -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+Start-Process -FilePath $MihomoExe -ArgumentList @("-f", $configPath, "-d", $mihomoDataDir) -WindowStyle Hidden
+Write-Host "[clash] started verge-mihomo"
+
+$ready = $false
+for ($i = 0; $i -lt 20; $i++) {
+  if (Test-ProxyListening -Port $MixedPort) { $ready = $true; break }
+  Start-Sleep -Seconds 1
+}
+if (-not $ready) { throw "mixed-port $MixedPort not listening after 20s" }
+Write-Host "[clash] port $MixedPort LISTENING"
+
+$ig = & curl.exe -sI --http1.1 --max-time 20 -x "http://127.0.0.1:$MixedPort" https://www.instagram.com/ 2>&1 | Out-String
+if ($ig -notmatch "HTTP/1\.1 200" -and $ig -notmatch "HTTP/2 200") {
+  Write-Warning "[clash] Instagram probe did not return 200 (may still be ok for DIRECT)"
+}
+
+if ($SkipTikTokProbe) {
+  Write-Host "[clash] SKIP_TIKTOK_PROBE"
+  exit 0
+}
+
+$tt = Test-TikTokSearchViaProxy -Proxy "http://127.0.0.1:$MixedPort"
+if (-not $tt.ok) {
+  Write-Host "[clash] TIKTOK_SEARCH_FAIL reason=$($tt.reason)"
+  ($tt.raw | Out-String).Split("`n") | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+  exit 1
+}
+
+Write-Host "[clash] TIKTOK_SEARCH_OK reason=$($tt.reason)"
+exit 0

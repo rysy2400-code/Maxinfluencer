@@ -175,6 +175,36 @@ if ($deployCrawlerSelfHashAtStart -and $deployCrawlerSelfHashAfterPull -and ($de
 Write-Host "[deploy-crawler] npm ci..."
 npm ci
 
+$ensureClashScript = Join-Path $scriptsDir "ensure-clash-qg-tiktok.ps1"
+$disableVergeScript = Join-Path $scriptsDir "disable-clash-verge-on-crawler.ps1"
+$guardClashScript = Join-Path $scriptsDir "guard-clash-mihomo.ps1"
+$runGuardClashScript = Join-Path $scriptsDir "run-guard-clash-mihomo.ps1"
+$skipClashProbe = $false
+if ($env:CRAWLER_SKIP_CLASH_PROBE) {
+  $v = "$($env:CRAWLER_SKIP_CLASH_PROBE)".ToLowerInvariant()
+  $skipClashProbe = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes")
+}
+if (-not $skipClashProbe) {
+  if (Test-Path $disableVergeScript) {
+    Write-Host "[deploy-crawler] disable Clash Verge GUI/subscriptions on crawler..."
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $disableVergeScript -ProjectRoot $Root -SkipEnsureClash
+  }
+  if (Test-Path $ensureClashScript) {
+    Write-Host "[deploy-crawler] ensure clash (Qg tunnel) + TikTok search probe..."
+    $clashArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ensureClashScript, "-ProjectRoot", $Root)
+    & powershell.exe @clashArgs
+    if ($LASTEXITCODE -ne 0) {
+      throw "Clash/TikTok probe failed. Set QG_AUTH_PWD in .env and re-run deploy, or set CRAWLER_SKIP_CLASH_PROBE=1 to bypass (not recommended)."
+    }
+    Write-Host "[deploy-crawler] clash OK (7897 + TikTok search probe passed)."
+  }
+} else {
+  Write-Warning "[deploy-crawler] CRAWLER_SKIP_CLASH_PROBE=1: skipped clash/TikTok verification."
+}
+
+$scraperMode = if ($env:SCRAPER_MODE) { "$($env:SCRAPER_MODE)".Trim() } else { "lite" }
+Write-Host "[deploy-crawler] SCRAPER_MODE=$scraperMode (lite=API直调，standard=整页滚动)"
+
 $chromeExe = Get-ChromeExe
 if (-not $chromeExe) { throw "Chrome/Edge executable not found." }
 $nodeExe = Get-NodeExe
@@ -293,6 +323,7 @@ $guardCrawlerContent = @"
 `$env:CDP_9222_LOCK_TIMEOUT_MS = "$cdp9222LockTimeoutMs"
 `$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
+`$env:SCRAPER_MODE = "$scraperMode"
 while (`$true) {
   try {
     `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback
@@ -357,6 +388,12 @@ Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
+$guardClashContent = @"
+`$ErrorActionPreference = "SilentlyContinue"
+. "$($guardClashScript.Replace("\", "\\"))"
+"@
+Set-Content -Path $runGuardClashScript -Value $guardClashContent -Encoding ASCII
+
 # 重要：worker/health 进程在启动后不会自动继承新的 env。
 # 这里强制结束旧进程，让 guard 以最新 worker_ip 重新拉起（幂等：杀完再起，不会叠多个）。
 try {
@@ -373,6 +410,7 @@ try {
 Write-CrawlerWorkerRuntimeMarker -ProjectRoot $Root -PublicIp $workerIp
 
 Stop-StaleCdpBrowsers
+Ensure-Schtask -TaskName "maxin-guard-clash-mihomo" -ScriptPath $runGuardClashScript
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
 Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
