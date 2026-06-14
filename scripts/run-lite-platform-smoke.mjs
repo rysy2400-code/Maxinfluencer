@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /**
- * 单平台 Lite 冒烟：搜索 20 人 + enrich/分析 10 人
- * 用法: node scripts/run-lite-platform-smoke.mjs tiktok "pool cleaner"
+ * Lite 全流程冒烟：关键词搜索 + 国家 + enrich + 画像分析
+ *
+ * 用法:
+ *   node scripts/run-lite-platform-smoke.mjs tiktok "pool cleaner" 20 10
+ *   node scripts/run-lite-platform-smoke.mjs instagram "home decor" 20 10
+ *   node scripts/run-lite-platform-smoke.mjs youtube "cat litter review" 20 10
  */
 import dotenv from "dotenv";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,84 +16,75 @@ const root = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(root, ".env") });
 dotenv.config({ path: path.join(root, ".env.local") });
 
-const platform = String(process.argv[2] || "tiktok").toLowerCase();
-const keyword = process.argv[3] || (platform === "youtube" ? "cat litter review" : "pool cleaner");
-const searchPool = Math.min(Number(process.argv[4] || 20), 40);
-const maxEnrich = Math.min(Number(process.argv[5] || 10), 20);
-
 process.env.SCRAPER_MODE = "lite";
-process.env.LITE_DISABLE_SCREENSHOTS = "true";
-process.env.ENRICH_BATCH_POLICY = "false";
-process.env.SEARCH_MAX_POOL_SIZE = String(searchPool);
-process.env.CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
-process.env.CDP_ENDPOINT_ENRICH = process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223";
+process.env.LITE_DISABLE_SCREENSHOTS = process.env.LITE_DISABLE_SCREENSHOTS || "true";
+process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "false";
 
-const PLATFORM_CFG = {
+const platform = String(process.argv[2] || "tiktok").toLowerCase();
+const keyword = process.argv[3] || "pool cleaner";
+const searchMax = Math.min(Math.max(Number(process.argv[4] || 20), 5), 50);
+const enrichMax = Math.min(Math.max(Number(process.argv[5] || 10), 1), 20);
+
+process.env.SEARCH_MAX_POOL_SIZE = String(searchMax);
+process.env.CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
+if (platform === "tiktok") {
+  process.env.CDP_ENDPOINT_ENRICH = process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223";
+}
+
+const PLATFORM_META = {
   tiktok: {
     slug: "tiktok",
+    label: "TikTok",
     platforms: ["TikTok"],
-    countries: ["US", "GB", "CA"],
-    need9223: true,
+    searchCdp: "9222（登录，API 搜索）",
+    enrichCdp: "9223（不登录，API enrich）",
   },
   instagram: {
     slug: "instagram",
+    label: "Instagram",
     platforms: ["Instagram"],
-    countries: ["US", "GB"],
-    need9223: false,
+    searchCdp: "9222（登录，GraphQL）",
+    enrichCdp: "9222（Lite API）",
   },
   youtube: {
     slug: "youtube",
+    label: "YouTube",
     platforms: ["YouTube"],
-    countries: ["US", "GB"],
-    need9223: false,
+    searchCdp: "9222（登录，InnerTube）",
+    enrichCdp: "9222（Lite API）",
   },
 };
 
-const cfg = PLATFORM_CFG[platform];
-if (!cfg) {
-  console.error(`unknown platform: ${platform}`);
+const meta = PLATFORM_META[platform];
+if (!meta) {
+  console.error(`Unknown platform: ${platform}`);
   process.exit(2);
 }
 
-async function cdpOk(url) {
+async function ensureCdp(url, label) {
   try {
     const r = await fetch(`${url}/json/version`);
     return r.ok;
   } catch {
+    console.error(`[lite-smoke] ${label} down: ${url}`);
     return false;
   }
 }
 
-const navLog = [];
-function trackNavigation(label, url) {
-  const u = String(url || "");
-  if (!u || u === "about:blank") return;
-  const isApiOnly =
-    u.includes("/api/") ||
-    u.includes("/youtubei/v1/") ||
-    u.includes("graphql") ||
-    u.includes("/i/api/");
-  const entry = { label, url: u.slice(0, 200), apiOnly: isApiOnly };
-  navLog.push(entry);
-  if (!isApiOnly && !u.includes("tiktok.com/favicon")) {
-    console.warn(`[nav] ${label}: ${u.slice(0, 120)}`);
-  }
+const ok9222 = await ensureCdp(process.env.CDP_ENDPOINT, "CDP 9222");
+let ok9223 = true;
+if (platform === "tiktok") {
+  ok9223 = await ensureCdp(process.env.CDP_ENDPOINT_ENRICH, "CDP 9223");
 }
-
-if (!(await cdpOk(process.env.CDP_ENDPOINT))) {
-  console.error(`CDP 9222 down: ${process.env.CDP_ENDPOINT}`);
-  process.exit(2);
-}
-if (cfg.need9223 && !(await cdpOk(process.env.CDP_ENDPOINT_ENRICH))) {
-  console.error(`CDP 9223 down: ${process.env.CDP_ENDPOINT_ENRICH}`);
-  process.exit(2);
-}
+if (!ok9222 || !ok9223) process.exit(2);
 
 console.log("=".repeat(72));
-console.log(`[lite-smoke] platform=${platform} keyword="${keyword}" pool=${searchPool} enrich=${maxEnrich}`);
+console.log(
+  `[lite-smoke] platform=${meta.label} keyword="${keyword}" searchMax=${searchMax} enrichMax=${enrichMax}`
+);
 console.log(`  SCRAPER_MODE=${process.env.SCRAPER_MODE}`);
-console.log(`  search CDP: ${process.env.CDP_ENDPOINT}`);
-if (cfg.need9223) console.log(`  enrich CDP: ${process.env.CDP_ENDPOINT_ENRICH}`);
+console.log(`  search: ${meta.searchCdp}`);
+console.log(`  enrich: ${meta.enrichCdp}`);
 console.log("=".repeat(72));
 
 const t0 = Date.now();
@@ -101,86 +95,96 @@ const { searchAndExtractInfluencers } = await import(
 const result = await searchAndExtractInfluencers(
   {
     keywords: { search_queries: [keyword] },
-    platform: cfg.slug,
-    platforms: cfg.platforms,
-    countries: cfg.countries,
-    campaignInfo: { platform: cfg.platforms, targetCountries: cfg.countries },
-    productInfo: { productName: `Lite smoke ${platform}` },
-    influencerProfile: { followerRange: "10K-500K", contentStyle: "product review" },
+    platform: meta.slug,
+    platforms: meta.platforms,
+    campaignInfo: {
+      platform: meta.platforms,
+      targetCountries: ["US", "GB", "CA", "AU"],
+    },
+    countries: ["US", "GB", "CA", "AU"],
+    productInfo: { productName: `${meta.label} Lite smoke test` },
+    influencerProfile: {
+      followerRange: "10K-500K",
+      contentStyle: "product review lifestyle",
+    },
   },
   {
-    maxResults: searchPool,
-    maxEnrichCount: maxEnrich,
+    maxResults: searchMax,
+    maxEnrichCount: enrichMax,
     enrichProfileData: true,
-    platform: cfg.slug,
+    platform: meta.slug,
   }
 );
 
 const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
 const influencers = result?.influencers || [];
-
-const report = {
-  platform,
-  keyword,
-  searchPool,
-  maxEnrich,
-  elapsedSec: Number(elapsedSec),
-  success: false,
-  searchCount: influencers.length,
-  channels: influencers.slice(0, maxEnrich).map((inf) => ({
-    username: inf.username,
-    country: inf.video_publish_country ?? inf.profile_data?.videoPublishCountry ?? inf.profile_data?.userInfo?.country ?? null,
-    followers: inf.profile_data?.userInfo?.followers?.display ?? inf.followers?.display ?? null,
-    email: inf.profile_data?.userInfo?.email ?? inf.email ?? null,
-    bio: inf.profile_data?.userInfo?.bio ? String(inf.profile_data.userInfo.bio).slice(0, 80) : null,
-    videos: inf.profile_data?.videos?.length ?? inf.videos?.length ?? 0,
-    avgViews: inf.profile_data?.statistics?.avgViews ?? null,
-    recommended: inf.isRecommended ?? null,
-    matchScore: inf.matchScore ?? inf.analysisScore ?? null,
-    extractionSource: inf.profile_data?.extractionSource ?? inf.profile_data?.extractMode ?? null,
-    secUid: inf.tiktokSecUid || inf.secUid || null,
-    enrichError: inf.profile_data?.error ?? inf.enrich_error ?? null,
-  })),
-  navigationWarnings: navLog.filter((n) => !n.apiOnly).length,
-};
-
-const enrichedOk = report.channels.filter(
-  (c) => (c.videos || 0) > 0 && !c.enrichError
-).length;
-const withCountry = report.channels.filter((c) => c.country).length;
-const withEmail = report.channels.filter((c) => c.email).length;
-const withAnalysis = report.channels.filter((c) => c.recommended != null || c.matchScore != null).length;
-
-report.success =
-  result?.success &&
-  report.searchCount >= Math.min(5, searchPool) &&
-  enrichedOk >= Math.min(3, maxEnrich);
-
-const logsDir = path.join(root, "logs");
-if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-const outPath = path.join(
-  logsDir,
-  `lite-smoke-${platform}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`
+const enriched = influencers.filter(
+  (r) =>
+    r.profile_data?.videos?.length ||
+    r.videos?.length ||
+    r.profile_data?.userInfo?.followers ||
+    r.matchAnalysis ||
+    r.recommended != null
 );
-fs.writeFileSync(outPath, JSON.stringify(report, null, 2), "utf-8");
 
-console.log("\n--- 结果摘要 ---");
-console.log(`平台: ${platform}`);
-console.log(`关键词: ${keyword}`);
-console.log(`搜索红人数: ${report.searchCount}`);
-console.log(`enrich 成功(有视频): ${enrichedOk}/${maxEnrich}`);
-console.log(`有国家: ${withCountry}/${report.channels.length}`);
-console.log(`有邮箱: ${withEmail}/${report.channels.length}`);
-console.log(`有画像分析: ${withAnalysis}/${report.channels.length}`);
-console.log(`耗时: ${elapsedSec}s`);
-console.log(`成功: ${report.success}`);
-
-for (const c of report.channels) {
-  console.log(
-    `  @${c.username} country=${c.country || "-"} videos=${c.videos} email=${c.email || "-"} ` +
-      `recommended=${c.recommended} source=${c.extractionSource || "-"} err=${c.enrichError || "-"}`
+function pickCountry(r) {
+  return (
+    r.video_publish_country ??
+    r.profile_data?.videoPublishCountry ??
+    r.profile_data?.userInfo?.country ??
+    r.profile_data?.aboutCountry ??
+    null
   );
 }
-console.log(`\n报告: ${outPath}`);
 
-process.exit(report.success ? 0 : 1);
+function pickEmail(r) {
+  return (
+    r.profile_data?.userInfo?.email ??
+    r.profile_data?.email ??
+    r.email ??
+    null
+  );
+}
+
+const report = {
+  platform: meta.slug,
+  keyword,
+  elapsedSec: Number(elapsedSec),
+  success: !!result?.success,
+  searchPool: influencers.length,
+  enrichedCount: enriched.length,
+  withCountry: enriched.filter((r) => pickCountry(r)).length,
+  withVideos: enriched.filter(
+    (r) => (r.profile_data?.videos?.length || r.videos?.length || 0) > 0
+  ).length,
+  withEmail: enriched.filter((r) => pickEmail(r)).length,
+  withMatchAnalysis: enriched.filter((r) => r.matchAnalysis || r.recommended != null).length,
+  samples: enriched.slice(0, 5).map((r) => ({
+    username: r.username,
+    country: pickCountry(r),
+    followers:
+      r.profile_data?.userInfo?.followers?.display ??
+      r.followers?.display ??
+      r.followers ??
+      null,
+    videos: r.profile_data?.videos?.length ?? r.videos?.length ?? 0,
+    email: pickEmail(r),
+    recommended: r.recommended ?? r.matchAnalysis?.recommended ?? null,
+    score: r.matchScore ?? r.matchAnalysis?.score ?? null,
+    extractMode: r.profile_data?.extractMode ?? r.extractMode ?? null,
+    error: r.profile_data?.error ?? r.enrichError ?? null,
+  })),
+  stats: result?.stats ?? null,
+};
+
+console.log("\n" + JSON.stringify(report, null, 2));
+
+const pass =
+  report.success &&
+  report.searchPool >= Math.min(5, searchMax) &&
+  report.enrichedCount >= Math.min(3, enrichMax) &&
+  report.withCountry >= 1 &&
+  report.withVideos >= 1;
+
+console.log("\n[lite-smoke] PASS=" + pass);
+process.exit(pass ? 0 : 1);
