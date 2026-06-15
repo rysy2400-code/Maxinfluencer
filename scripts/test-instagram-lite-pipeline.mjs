@@ -18,7 +18,8 @@ dotenv.config({ path: path.join(root, ".env.local") });
 process.env.SCRAPER_MODE = "lite";
 process.env.LITE_DISABLE_SCREENSHOTS = process.env.LITE_DISABLE_SCREENSHOTS || "true";
 process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "false";
-process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "40";
+process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "80";
+process.env.IG_LITE_SEARCH_MAX_PAGES = process.env.IG_LITE_SEARCH_MAX_PAGES || "12";
 process.env.IG_LITE_SEARCH_DELAY_MS = process.env.IG_LITE_SEARCH_DELAY_MS || "120";
 process.env.LITE_IG_ENRICH_CONCURRENCY = process.env.LITE_IG_ENRICH_CONCURRENCY || "1";
 
@@ -84,14 +85,14 @@ const result = await searchAndExtractInfluencers(
     keywords: { search_queries: [keyword] },
     platform: "instagram",
     platforms: ["Instagram"],
-    campaignInfo: { platform: ["Instagram"] },
+    campaignInfo: { platform: ["Instagram"], countries: ["US"] },
     productInfo: { productName: "Lite pipeline test" },
     influencerProfile: enrichNoAnalyze
       ? null
       : { followerRange: "10K-500K", contentStyle: "lifestyle review" },
   },
   {
-    maxResults: maxEnrich + 10,
+    maxResults: maxEnrich + 5,
     maxEnrichCount: maxEnrich,
     enrichProfileData: true,
     platform: "instagram",
@@ -143,7 +144,13 @@ liteReport.success =
   result.success &&
   influencers.length > 0 &&
   liteReport.channels.length >= Math.min(maxEnrich, 1) &&
-  liteReport.channels.every((c) => (c.videos || 0) >= MIN_REELS_OK);
+  liteReport.channels.every((c) => {
+    const reels = c.videos || 0;
+    if (reels >= MIN_REELS_OK) return true;
+    // 国家不符被预筛跳过时允许 0 条 Reels
+    if (reels === 0 && c.country && c.country !== "US") return true;
+    return false;
+  });
 const ok = liteReport.success;
 
 const logsDir = path.join(root, "logs");

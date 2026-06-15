@@ -541,6 +541,50 @@ async function processTask(task, platformSlug) {
   }
 
   if (result?.success && Array.isArray(result.influencers)) {
+    const isEmptySearch =
+      result.skippedReason === "no_search_results" ||
+      (Number(
+        result?.stats?.searchChannelCount ?? result?.stats?.influencerCount ?? 0
+      ) === 0 &&
+        (result.influencers?.length ?? 0) === 0);
+
+    if (isEmptySearch) {
+      console.log(
+        `[worker-influencer-search] 任务完成（搜索无结果）id=${task.id}, campaign=${campaignId}`
+      );
+      await markTaskStatus(task.id, "succeeded", null);
+      await upsertKeywordRunResult({
+        campaignId,
+        sessionId,
+        runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+        taskId: task.id,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
+        keywordType: taskKeywordType,
+        platform: taskPlatformSlug,
+        workerId: platformWorkerId,
+        workerHost: CURRENT_WORKER_HOST,
+        workerIp: CURRENT_WORKER_IP,
+        metrics: {
+          searchCount: 0,
+          enrichSuccessCount: 0,
+          analyzeRecommendedCount: 0,
+          insertCandidateCount: 0,
+          failCount: 0,
+          skipReason: "no_search_results",
+          elapsedMs: Date.now() - taskStartMs,
+        },
+      });
+      await publishKeywordNote({
+        status: "finished",
+        searchFoundCount: 0,
+        browsedCount: 0,
+        extractedCount: 0,
+        matchedCount: 0,
+        note: "搜索无结果，已跳过",
+      });
+      return;
+    }
+
     console.log(
       `[worker-influencer-search] 任务完成 id=${task.id}, campaign=${campaignId}, analyzed=${result.influencers.length}`
     );

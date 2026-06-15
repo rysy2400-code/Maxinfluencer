@@ -254,6 +254,8 @@ $searchTaskStuckReclaimMinutes = if ($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES -and
 } else {
   "7"
 }
+$searchWorkerPlatforms = if ($env:SEARCH_WORKER_PLATFORMS) { "$($env:SEARCH_WORKER_PLATFORMS)".Trim() } else { "instagram,youtube" }
+Write-Host "[deploy-crawler] SEARCH_WORKER_PLATFORMS=$searchWorkerPlatforms"
 Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAnalysisTimeoutMs, SEARCH_TASK_STUCK_RECLAIM_MINUTES=$searchTaskStuckReclaimMinutes"
 
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
@@ -324,6 +326,7 @@ $guardCrawlerContent = @"
 `$env:DEEPSEEK_ANALYSIS_TIMEOUT_MS = "$deepseekAnalysisTimeoutMs"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 `$env:SCRAPER_MODE = "$scraperMode"
+`$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
 while (`$true) {
   try {
     `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback

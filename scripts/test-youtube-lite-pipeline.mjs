@@ -23,13 +23,29 @@ dotenv.config({ path: path.join(root, ".env.local") });
 process.env.SCRAPER_MODE = "lite";
 process.env.LITE_DISABLE_SCREENSHOTS = process.env.LITE_DISABLE_SCREENSHOTS || "true";
 process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "false";
-process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "40";
-process.env.YT_LITE_CONTINUATION_DELAY_MS = process.env.YT_LITE_CONTINUATION_DELAY_MS || "40";
-process.env.YT_LITE_SESSION_SETTLE_MS = process.env.YT_LITE_SESSION_SETTLE_MS || "1200";
+process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "80";
+process.env.YT_LITE_SEARCH_MAX_PAGES = process.env.YT_LITE_SEARCH_MAX_PAGES || "20";
+process.env.LITE_YT_ENRICH_CONCURRENCY = process.env.LITE_YT_ENRICH_CONCURRENCY || "1";
 
 const keyword = process.argv[2] || "cat litter review";
 const maxEnrich = Math.min(Number(process.argv[3] || 3), 8);
 const enrichNoAnalyze = process.env.ENRICH_NO_ANALYZE === "1";
+
+function buildLlmSamplePreview(inf) {
+  const profileData = inf.profile_data || {};
+  const videos = profileData.videos || [];
+  const statistics = profileData.statistics || {};
+  return {
+    avgLikes: statistics.avgLikes ?? null,
+    avgComments: statistics.avgComments ?? null,
+    profileVideoSamples: videos.slice(0, 5).map((v) => ({
+      videoId: v.videoId,
+      views: v.views?.count ?? null,
+      likes: v.likes?.count ?? null,
+      comments: v.comments?.count ?? null,
+    })),
+  };
+}
 
 /** Standard 模式单任务耗时/流量基线（来自现有实现参数推算，非本次实测） */
 const STANDARD_BASELINE = {
@@ -120,7 +136,7 @@ const result = await searchAndExtractInfluencers(
     keywords: { search_queries: [keyword] },
     platform: "youtube",
     platforms: ["YouTube"],
-    campaignInfo: { platform: ["YouTube"] },
+    campaignInfo: { platform: ["YouTube"], countries: ["US"] },
     productInfo: { productName: "Lite pipeline test" },
     influencerProfile: enrichNoAnalyze
       ? null
@@ -130,7 +146,7 @@ const result = await searchAndExtractInfluencers(
         },
   },
   {
-    maxResults: maxEnrich + 10,
+    maxResults: maxEnrich + 5,
     maxEnrichCount: maxEnrich,
     enrichProfileData: true,
     platform: "youtube",
@@ -152,8 +168,11 @@ const liteReport = {
     country: inf.video_publish_country ?? inf.profile_data?.userInfo?.country ?? null,
     videos: inf.profile_data?.videos?.length ?? inf.videos?.length ?? 0,
     followers: inf.profile_data?.userInfo?.followers?.display ?? inf.followers?.display,
+    avgLikes: inf.profile_data?.statistics?.avgLikes ?? null,
+    avgComments: inf.profile_data?.statistics?.avgComments ?? null,
     recommended: inf.isRecommended,
     extractionSource: inf.profile_data?.extractionSource ?? null,
+    llmSamplePreview: buildLlmSamplePreview(inf),
   })),
   traffic: {
     note: "流量统计需在 innertube 会话页挂载；此处记录任务总耗时与输出质量",
@@ -173,7 +192,8 @@ const liteReport = {
 liteReport.success =
   result.success &&
   influencers.length > 0 &&
-  liteReport.channels.some((c) => (c.videos || 0) > 0);
+  liteReport.channels.some((c) => (c.videos || 0) > 0) &&
+  liteReport.channels.some((c) => (c.avgLikes || 0) > 0);
 const ok = liteReport.success;
 
 const logsDir = path.join(root, "logs");
@@ -190,8 +210,14 @@ console.log(`成功: ${ok}`);
 console.log(`红人数: ${influencers.length}`);
 for (const c of liteReport.channels) {
   console.log(
-    `  @${c.username} country=${c.country || "(空)"} videos=${c.videos} followers=${c.followers || "?"} source=${c.extractionSource || "?"}`
+    `  @${c.username} country=${c.country || "(空)"} videos=${c.videos} avgLikes=${c.avgLikes ?? "n/a"} avgComments=${c.avgComments ?? "n/a"} followers=${c.followers || "?"}`
   );
+  const sample = c.llmSamplePreview?.profileVideoSamples?.[0];
+  if (sample) {
+    console.log(
+      `    LLM样本首条: ${sample.videoId} views=${sample.views} likes=${sample.likes} comments=${sample.comments}`
+    );
+  }
 }
 
 console.log("\n--- vs Standard 基线（无需重跑原版）---");
