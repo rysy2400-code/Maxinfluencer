@@ -1802,7 +1802,11 @@ export default function HomePage() {
   const activeChatSessionRef = useRef(null);
   /** 各 session 待发送附件（切换 Campaign 时保留，回到原会话可继续发送） */
   const pendingAttachmentsBySessionRef = useRef(new Map());
+  /** 各 session 输入框文字草稿（切换 Campaign 时保留，回到原会话可继续编辑） */
+  const inputDraftBySessionRef = useRef(new Map());
   const shouldAutoScrollRef = useRef(true); // 是否应该自动滚动
+  /** 刷新/切换会话后强制滚到底部（绕过「用户不在底部」检测） */
+  const forceScrollToBottomRef = useRef(true);
   const chatContainerRef = useRef(null); // 聊天容器的引用
   const localStorageSaveTimerRef = useRef(null); // localStorage 保存节流定时器（避免流式更新时频繁 JSON.stringify 卡顿）
   const sseDebugRef = useRef({ influencerCount: 0, analyzing: null, lastDetailLen: 0 }); // SSE 调试用（仅本地）
@@ -1919,6 +1923,11 @@ export default function HomePage() {
     if (!currentSessionId) return;
     pendingAttachmentsBySessionRef.current.set(currentSessionId, pendingChatAttachments);
   }, [currentSessionId, pendingChatAttachments]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    inputDraftBySessionRef.current.set(currentSessionId, input);
+  }, [currentSessionId, input]);
 
   useEffect(() => {
     if (authUser && currentSessionId != null && prevSidForSidebarRef.current == null) {
@@ -2725,6 +2734,8 @@ export default function HomePage() {
               ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
               : cloneWelcomeMessages();
           setMessages(normalized);
+          forceScrollToBottomRef.current = true;
+          shouldAutoScrollRef.current = true;
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
           if (data.session.context && typeof data.session.context === "object") {
             setContext(data.session.context);
@@ -3254,24 +3265,25 @@ export default function HomePage() {
 
   // 智能自动滚动：只在用户发送消息或AI开始新回复时滚动，不在步骤更新时滚动
   useEffect(() => {
-    // 只在应该自动滚动时执行
-    if (shouldAutoScrollRef.current && messagesEndRef.current) {
-      // 检查用户是否手动滚动到了顶部（查看历史消息）
-      if (chatContainerRef.current) {
-        const container = chatContainerRef.current;
-        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 200; // 距离底部200px内
-        // 如果用户不在底部附近，说明在查看历史消息，不自动滚动
-        if (!isNearBottom) {
-          return;
-        }
-      }
-      // 延迟一点执行滚动，确保DOM已更新
-      setTimeout(() => {
-        if (messagesEndRef.current && shouldAutoScrollRef.current) {
-          messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-        }
-      }, 50);
+    const shouldForce = forceScrollToBottomRef.current;
+    if (!shouldAutoScrollRef.current && !shouldForce) return;
+    if (!messagesEndRef.current) return;
+
+    // 非强制滚动时：用户手动上滑查看历史则不自动滚到底
+    if (!shouldForce && chatContainerRef.current) {
+      const container = chatContainerRef.current;
+      const isNearBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 200;
+      if (!isNearBottom) return;
     }
+
+    const scrollBehavior = shouldForce ? "auto" : "smooth";
+    setTimeout(() => {
+      if (!messagesEndRef.current) return;
+      if (!shouldAutoScrollRef.current && !forceScrollToBottomRef.current) return;
+      messagesEndRef.current.scrollIntoView({ behavior: scrollBehavior });
+      forceScrollToBottomRef.current = false;
+    }, 50);
   }, [messages]);
 
   async function handleSend(e) {
@@ -3313,9 +3325,7 @@ export default function HomePage() {
     }
   }
 
-  async function handleInfluencerListFileChange(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+  async function uploadChatAttachmentFile(file) {
     if (!file) return;
     if (!authUser) {
       setLoginOpen(true);
@@ -3323,6 +3333,15 @@ export default function HomePage() {
     }
     if (!isExecutionPhaseGlobal || !currentSessionId) {
       window.alert("请在 Campaign 执行阶段上传附件。");
+      return;
+    }
+    const lower = String(file.name || "").toLowerCase();
+    if (
+      !lower.endsWith(".xlsx") &&
+      !lower.endsWith(".xls") &&
+      !lower.endsWith(".csv")
+    ) {
+      window.alert("仅支持 .xlsx / .xls / .csv");
       return;
     }
     setImportListUploading(true);
@@ -3351,6 +3370,24 @@ export default function HomePage() {
     } finally {
       setImportListUploading(false);
     }
+  }
+
+  async function handleInfluencerListFileChange(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    await uploadChatAttachmentFile(file);
+  }
+
+  function handleChatComposerDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  async function handleChatComposerDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const file = e.dataTransfer?.files?.[0];
+    await uploadChatAttachmentFile(file);
   }
 
   async function runChatSend(trimmedContent, attachments) {
@@ -4516,9 +4553,16 @@ export default function HomePage() {
     setCurrentSessionId(createData.session.id);
     const nextMessages = createData.session.messages || defaultMessage;
     const nextContext = createData.session.context || { workflowState: "idle" };
+    if (currentSessionId) {
+      inputDraftBySessionRef.current.set(currentSessionId, input);
+      pendingAttachmentsBySessionRef.current.set(currentSessionId, pendingChatAttachments);
+    }
     setMessages(nextMessages);
     setContext(nextContext);
     setPendingChatAttachments([]);
+    setInput("");
+    forceScrollToBottomRef.current = true;
+    shouldAutoScrollRef.current = true;
     rememberSessionPersistBaseline(
       sessionPersistSnapshotRef,
       createData.session.id,
@@ -4554,6 +4598,7 @@ export default function HomePage() {
 
     if (prevSessionId) {
       pendingAttachmentsBySessionRef.current.set(prevSessionId, pendingChatAttachments);
+      inputDraftBySessionRef.current.set(prevSessionId, input);
     }
 
     try {
@@ -4576,6 +4621,9 @@ export default function HomePage() {
       setPendingChatAttachments(
         pendingAttachmentsBySessionRef.current.get(sessionId) || []
       );
+      setInput(inputDraftBySessionRef.current.get(sessionId) || "");
+      forceScrollToBottomRef.current = true;
+      shouldAutoScrollRef.current = true;
       setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
       rememberSessionPersistBaseline(
         sessionPersistSnapshotRef,
@@ -6196,7 +6244,11 @@ export default function HomePage() {
               }}
             >
               <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-                <div className="bin-chat-composer">
+                <div
+                  className="bin-chat-composer"
+                  onDragOver={handleChatComposerDragOver}
+                  onDrop={handleChatComposerDrop}
+                >
                   {pendingChatAttachments.length > 0 && (
                     <div className="bin-chat-composer__attachments">
                       {pendingChatAttachments.map((att, idx) => (
