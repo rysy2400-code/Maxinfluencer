@@ -718,6 +718,31 @@ function workNoteMergeKey(note) {
   return `kw:${kw}@${t}`;
 }
 
+/** 工作笔记列表按时间升序并截断（API 全量替换用） */
+function sortKeywordWorkNotesChronological(notes) {
+  const list = Array.isArray(notes) ? [...notes] : [];
+  list.sort(
+    (a, b) =>
+      new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
+  );
+  return list.slice(-60);
+}
+
+/** 同 campaign 内合并工作笔记增量（SSE 推送用） */
+function mergeKeywordWorkNotesList(existing, incoming) {
+  const map = new Map();
+  for (const n of Array.isArray(existing) ? existing : []) {
+    const key = workNoteMergeKey(n);
+    if (key) map.set(key, n);
+  }
+  for (const n of Array.isArray(incoming) ? incoming : []) {
+    const key = workNoteMergeKey(n);
+    if (!key) continue;
+    map.set(key, { ...map.get(key), ...n });
+  }
+  return sortKeywordWorkNotesChronological([...map.values()]);
+}
+
 /** 工作笔记展示：日期 + 时间（今天/昨天/具体日期 + 24h 时分秒） */
 function formatWorkNoteDateTime(isoTime) {
   if (!isoTime) return "—";
@@ -1897,6 +1922,8 @@ export default function HomePage() {
   const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
   const resolveCampaignRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
+  /** 当前 keywordWorkNotes 归属的 campaignId，切换 campaign 时置 null 以防跨 campaign 合并 */
+  const keywordWorkNotesCampaignRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState(null);
@@ -2118,6 +2145,8 @@ export default function HomePage() {
       setExecutionStatus(null);
       setExecutionConfig(null);
       setExecutionError(null);
+      setKeywordWorkNotes([]);
+      keywordWorkNotesCampaignRef.current = null;
     }
 
     try {
@@ -2449,7 +2478,9 @@ export default function HomePage() {
       return;
     }
 
-    const url = `/api/sessions/${currentSessionId}/work-live`;
+    const boundSessionId = currentSessionId;
+    const boundCampaignId = resolvedCampaignId;
+    const url = `/api/sessions/${boundSessionId}/work-live`;
     const es = new EventSource(url);
     workLiveEventSourceRef.current = es;
 
@@ -2518,21 +2549,21 @@ export default function HomePage() {
           pendingThinking = data.data || {};
           scheduleThinkingFlush();
         } else if (data.type === "work_note_keyword_summary" && data.data) {
+          if (
+            boundCampaignId &&
+            keywordWorkNotesCampaignRef.current !== boundCampaignId
+          ) {
+            return;
+          }
           const note = data.data;
           setKeywordWorkNotes((prev) => {
-            const merged = [...(Array.isArray(prev) ? prev : [])];
-            const key = workNoteMergeKey(note);
-            const idx = merged.findIndex((x) => workNoteMergeKey(x) === key);
-            if (idx >= 0) {
-              merged[idx] = { ...merged[idx], ...note };
-            } else {
-              merged.push(note);
+            if (
+              boundCampaignId &&
+              keywordWorkNotesCampaignRef.current !== boundCampaignId
+            ) {
+              return prev;
             }
-            merged.sort(
-              (a, b) =>
-                new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
-            );
-            return merged.slice(-60);
+            return mergeKeywordWorkNotesList(prev, [note]);
           });
           setWorkLiveThinking((prev) =>
             patchWorkLiveThinkingState(prev, (currentThinking) => {
@@ -2602,7 +2633,7 @@ export default function HomePage() {
         workLiveEventSourceRef.current = null;
       }
     };
-  }, [isExecutionPhaseGlobal, currentSessionId]);
+  }, [isExecutionPhaseGlobal, currentSessionId, resolvedCampaignId]);
 
   // 执行阶段：工作实况数据独立存放，不写入聊天 messages，避免空 assistant 占位导致孤立头像
   useEffect(() => {
@@ -3226,9 +3257,13 @@ export default function HomePage() {
     const campaignId = resolvedCampaignId;
 
     if (!campaignId || !isExecutionPhaseGlobal) {
+      keywordWorkNotesCampaignRef.current = null;
       setKeywordWorkNotes([]);
       return;
     }
+
+    keywordWorkNotesCampaignRef.current = campaignId;
+    setKeywordWorkNotes([]);
 
     let cancelled = false;
 
@@ -3240,26 +3275,15 @@ export default function HomePage() {
           throw new Error(data.error || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        if (cancelled || !data?.success) return;
+        if (
+          cancelled ||
+          !data?.success ||
+          keywordWorkNotesCampaignRef.current !== campaignId
+        ) {
+          return;
+        }
         const incoming = Array.isArray(data.notes) ? data.notes : [];
-        setKeywordWorkNotes((prev) => {
-          const map = new Map();
-          for (const n of Array.isArray(prev) ? prev : []) {
-            const key = workNoteMergeKey(n);
-            if (key) map.set(key, n);
-          }
-          for (const n of incoming) {
-            const key = workNoteMergeKey(n);
-            if (!key) continue;
-            map.set(key, { ...map.get(key), ...n });
-          }
-          const merged = [...map.values()];
-          merged.sort(
-            (a, b) =>
-              new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
-          );
-          return merged.slice(-60);
-        });
+        setKeywordWorkNotes(sortKeywordWorkNotesChronological(incoming));
       } catch (e) {
         if (!cancelled) {
           console.error("[HomePage] 获取工作笔记历史失败:", e);
