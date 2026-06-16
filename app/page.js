@@ -1924,6 +1924,8 @@ export default function HomePage() {
   const resolveCampaignSessionRef = useRef(null);
   /** 当前 keywordWorkNotes 归属的 campaignId，切换 campaign 时置 null 以防跨 campaign 合并 */
   const keywordWorkNotesCampaignRef = useRef(null);
+  /** 当前 keywordWorkNotes 归属的 sessionId，与 campaignId 双校验 */
+  const keywordWorkNotesSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState(null);
@@ -2227,6 +2229,13 @@ export default function HomePage() {
     }
     refreshSessionCampaignFromDb(currentSessionId);
   }, [currentSessionId, refreshSessionCampaignFromDb, publishedSessions]);
+
+  // 切换 session 时立即清空工作笔记，避免 resolvedCampaignId 滞后期间仍展示/回填上一份 campaign
+  useEffect(() => {
+    keywordWorkNotesSessionRef.current = currentSessionId;
+    keywordWorkNotesCampaignRef.current = null;
+    setKeywordWorkNotes([]);
+  }, [currentSessionId]);
 
   useEffect(() => {
     binComputerViewRef.current = binComputerView;
@@ -2550,16 +2559,18 @@ export default function HomePage() {
           scheduleThinkingFlush();
         } else if (data.type === "work_note_keyword_summary" && data.data) {
           if (
-            boundCampaignId &&
-            keywordWorkNotesCampaignRef.current !== boundCampaignId
+            keywordWorkNotesSessionRef.current !== boundSessionId ||
+            (boundCampaignId &&
+              keywordWorkNotesCampaignRef.current !== boundCampaignId)
           ) {
             return;
           }
           const note = data.data;
           setKeywordWorkNotes((prev) => {
             if (
-              boundCampaignId &&
-              keywordWorkNotesCampaignRef.current !== boundCampaignId
+              keywordWorkNotesSessionRef.current !== boundSessionId ||
+              (boundCampaignId &&
+                keywordWorkNotesCampaignRef.current !== boundCampaignId)
             ) {
               return prev;
             }
@@ -3255,14 +3266,16 @@ export default function HomePage() {
   // 在「执行阶段」预加载工作笔记历史（先历史后实时）
   useEffect(() => {
     const campaignId = resolvedCampaignId;
+    const boundSessionId = currentSessionId;
 
-    if (!campaignId || !isExecutionPhaseGlobal) {
+    if (!campaignId || !boundSessionId || !isExecutionPhaseGlobal) {
       keywordWorkNotesCampaignRef.current = null;
       setKeywordWorkNotes([]);
       return;
     }
 
     keywordWorkNotesCampaignRef.current = campaignId;
+    keywordWorkNotesSessionRef.current = boundSessionId;
     setKeywordWorkNotes([]);
 
     let cancelled = false;
@@ -3278,7 +3291,8 @@ export default function HomePage() {
         if (
           cancelled ||
           !data?.success ||
-          keywordWorkNotesCampaignRef.current !== campaignId
+          keywordWorkNotesCampaignRef.current !== campaignId ||
+          keywordWorkNotesSessionRef.current !== boundSessionId
         ) {
           return;
         }
@@ -3298,7 +3312,7 @@ export default function HomePage() {
       cancelled = true;
       clearInterval(pollTimer);
     };
-  }, [resolvedCampaignId, isExecutionPhaseGlobal]);
+  }, [resolvedCampaignId, currentSessionId, isExecutionPhaseGlobal]);
 
   const refreshExecutionStatusQuiet = useCallback(async () => {
     const cid = resolvedCampaignId;
@@ -4748,6 +4762,19 @@ export default function HomePage() {
   const handleSwitchSession = async (sessionId, opts = {}) => {
     const skipSave = Boolean(opts.skipSave);
     if (sessionId === currentSessionId) return;
+
+    setKeywordWorkNotes([]);
+    keywordWorkNotesCampaignRef.current = null;
+    keywordWorkNotesSessionRef.current = sessionId;
+
+    const pub = publishedSessions.find((s) => s.id === sessionId);
+    if (
+      pub?.campaignId &&
+      isExecutionUiCampaignStatus(pub.campaignStatus || "running")
+    ) {
+      setResolvedCampaignId(String(pub.campaignId));
+      setResolvedCampaignStatus(pub.campaignStatus || "running");
+    }
 
     const prevSessionId = currentSessionId;
     const prevMessages = messages;
@@ -6636,7 +6663,6 @@ export default function HomePage() {
               {/* 显示右侧 Agent 工作区域：根据 workflowState 在「发布阶段」和「执行阶段」之间切换布局 */}
               {(() => {
                 const isExecutionPhase = isExecutionPhaseGlobal;
-                const lastMessage = messages[messages.length - 1];
 
                 // 执行总览数据来自 report-config / work-notes / execution-status，不依赖 lastMessage.thinking
                 if (isExecutionPhase && binComputerView === "overview") {
@@ -6699,13 +6725,9 @@ export default function HomePage() {
                   const reportTime = report?.reportTime || null;
                   const contentPreference = report?.contentPreference || null;
                   const includeMetrics = report?.includeMetrics || [];
-                  const fallbackNotes = Array.isArray(lastMessage?.thinking?.workNotes)
-                    ? lastMessage.thinking.workNotes
+                  const workNoteItems = Array.isArray(keywordWorkNotes)
+                    ? keywordWorkNotes
                     : [];
-                  const workNoteItems =
-                    Array.isArray(keywordWorkNotes) && keywordWorkNotes.length > 0
-                      ? keywordWorkNotes
-                      : fallbackNotes;
 
                   return (
                     <div
@@ -7255,6 +7277,7 @@ export default function HomePage() {
 
                 const { browserSteps, screenshots, influencerAnalyses } =
                   panelWorkLiveThinking || {};
+                const lastMessage = messages[messages.length - 1];
 
                 // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
                 
