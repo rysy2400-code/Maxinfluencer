@@ -70,6 +70,7 @@ async function fetchUnknownYoutubeInfluencers(campaignId, max) {
 
   let rows = [];
   if (since) {
+    const sinceStr = new Date(since).toISOString().slice(0, 19).replace("T", " ");
     rows = await queryTikTok(
       `
       SELECT username, tiktok_user_id AS channel_id, video_publish_country, profile_url, last_crawled_at
@@ -78,9 +79,9 @@ async function fetchUnknownYoutubeInfluencers(campaignId, max) {
         AND (video_publish_country IS NULL OR video_publish_country = '')
         AND last_crawled_at >= ?
       ORDER BY last_crawled_at DESC
-      LIMIT ?
+      LIMIT ${Math.min(max * 3, 60)}
       `,
-      [since, max * 3]
+      [sinceStr]
     );
   }
 
@@ -92,9 +93,8 @@ async function fetchUnknownYoutubeInfluencers(campaignId, max) {
       WHERE profile_url LIKE '%youtube.com%'
         AND (video_publish_country IS NULL OR video_publish_country = '')
       ORDER BY last_crawled_at DESC
-      LIMIT ?
-      `,
-      [max * 3]
+      LIMIT ${Math.min(max * 3, 60)}
+      `
     );
     const seen = new Set(rows.map((r) => r.username));
     for (const r of more) {
