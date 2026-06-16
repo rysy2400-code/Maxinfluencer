@@ -58,3 +58,43 @@ test("merge self does not grow orphan count", () => {
   );
   assert.ok(merged.length <= msgs.length);
 });
+
+test("merge keeps repeated user commands with different createdAt", () => {
+  const oldPause = {
+    role: "user",
+    content: "暂停",
+    createdAt: "2026-06-16T09:00:00.000Z",
+  };
+  const resume = {
+    role: "user",
+    content: "恢复",
+    createdAt: "2026-06-16T10:00:00.000Z",
+  };
+  const binResume = {
+    role: "assistant",
+    name: "Bin",
+    content: "Campaign 状态已更新为「进行中」。",
+    createdAt: "2026-06-16T10:00:01.000Z",
+  };
+  const newPause = {
+    role: "user",
+    content: "暂停",
+    createdAt: "2026-06-16T10:05:00.000Z",
+  };
+  const binPause = {
+    role: "assistant",
+    name: "Bin",
+    content: "Campaign 状态已更新为「已暂停」。",
+    createdAt: "2026-06-16T10:05:01.000Z",
+  };
+
+  const remote = [oldPause, resume, binResume];
+  const local = [oldPause, resume, binResume, newPause, binPause];
+  const merged = mergeSessionMessages(local, remote);
+
+  assert.equal(
+    merged.filter((m) => m.role === "user" && m.content === "暂停").length,
+    2
+  );
+  assert.ok(merged.some((m) => m.createdAt === newPause.createdAt));
+});
