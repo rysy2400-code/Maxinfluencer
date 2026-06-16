@@ -8,7 +8,10 @@ import {
   removeTabItem,
   clearTabChatPersistence,
   migrateLegacyLocalStorageToTabOnce,
+  migrateGlobalTabMessagesToSessionScopedOnce,
   clearLegacyLocalChatPersistence,
+  readSessionScopedItem,
+  writeSessionScopedItem,
 } from "./tab-session-storage";
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 import { ChatPaperclipIcon } from "./chat-paperclip-icon";
@@ -502,7 +505,7 @@ const STORAGE_KEY_MESSAGES = TAB_STORAGE_KEYS.MESSAGES;
 const STORAGE_KEY_CONTEXT = TAB_STORAGE_KEYS.CONTEXT;
 const STORAGE_KEY_CURRENT_SESSION_ID = TAB_STORAGE_KEYS.CURRENT_SESSION_ID;
 const STORAGE_KEY_VERSION = TAB_STORAGE_KEYS.VERSION;
-const MESSAGE_VERSION = "v2.2"; // v2.2: 标签页级 sessionStorage，修复多 Campaign 串会话
+const MESSAGE_VERSION = "v2.3"; // v2.3: messages/context 按 sessionId 分桶，防止跨 Campaign 串对话
 
 function cloneWelcomeMessages() {
   return [
@@ -540,6 +543,22 @@ function isSessionPersistDirty(snapshotRef, sessionId, messages, context) {
   const snap = snapshotRef.current;
   if (!sessionId || snap.sessionId !== sessionId) return true;
   return snap.fingerprint !== computeSessionPersistFingerprint(messages, context);
+}
+
+async function fetchSessionBundleFromServer(sessionId) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success || !data.session) {
+    throw new Error(data.error || data.message || `HTTP ${res.status}`);
+  }
+  const loadedMessages = Array.isArray(data.session.messages)
+    ? data.session.messages
+    : cloneWelcomeMessages();
+  const normalized = stripNonChatMessages(sortSessionMessagesByTime(loadedMessages));
+  const loadedContext = data.session.context || { workflowState: "idle" };
+  return { messages: normalized, context: loadedContext };
 }
 
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
@@ -1846,6 +1865,10 @@ export default function HomePage() {
   const importListFileInputRef = useRef(null);
   /** 与 React state 同步，供异步聊天流判断当前是否在原会话视图 */
   const currentSessionIdRef = useRef(null);
+  /** messages/context 当前绑定的 sessionId，须与 currentSessionId 一致才允许发送/保存 */
+  const messagesBoundSessionIdRef = useRef(null);
+  /** 切换 Campaign 进行中，禁止发送以免串会话 */
+  const sessionSwitchingRef = useRef(false);
   /** 进行中的聊天回合草稿（sessionId + messages），切换 Campaign 后仍保存到发起会话 */
   const chatDraftRef = useRef(null);
   /** 本轮 send 绑定的 sessionId（与 ref 同步，避免 setState 滞后导致 UI 不更新） */
@@ -2615,7 +2638,11 @@ export default function HomePage() {
         if (cancelled || !res.ok || !data.success) return;
         const remote = data.session?.messages;
         if (!Array.isArray(remote)) return;
-        setMessages((prev) => stripNonChatMessages(mergeSessionMessages(prev, remote)));
+        if (messagesBoundSessionIdRef.current !== sessionId) return;
+        setMessages((prev) => {
+          if (messagesBoundSessionIdRef.current !== sessionId) return prev;
+          return stripNonChatMessages(mergeSessionMessages(prev, remote));
+        });
       } catch (e) {
         console.warn("[HomePage] 轮询会话消息失败:", e);
       }
@@ -2784,6 +2811,7 @@ export default function HomePage() {
               ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
               : cloneWelcomeMessages();
           setMessages(normalized);
+          messagesBoundSessionIdRef.current = currentSessionId;
           forceScrollToBottomRef.current = true;
           shouldAutoScrollRef.current = true;
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
@@ -2806,12 +2834,14 @@ export default function HomePage() {
           return;
         }
         clearChatPersistenceKeys();
+        messagesBoundSessionIdRef.current = null;
         setCurrentSessionId(null);
         setMessages(cloneWelcomeMessages());
         setContext({ workflowState: "idle" });
       } catch {
         if (cancelled) return;
         clearChatPersistenceKeys();
+        messagesBoundSessionIdRef.current = null;
         setCurrentSessionId(null);
         setMessages(cloneWelcomeMessages());
         setContext({ workflowState: "idle" });
@@ -2832,9 +2862,9 @@ export default function HomePage() {
 
       const savedVersion = readTabItem(STORAGE_KEY_VERSION);
       
-      // 如果版本不匹配，清除旧数据并使用新的 defaultMessage
+      // 如果版本不匹配，清除旧数据；v2.3 起 messages/context 按 session 分桶，不再恢复全局 messages
       if (savedVersion !== MESSAGE_VERSION) {
-        console.log(`[HomePage] 消息版本不匹配 (${savedVersion} → ${MESSAGE_VERSION})，清除旧数据`);
+        console.log(`[HomePage] 消息版本不匹配 (${savedVersion} → ${MESSAGE_VERSION})，清除旧 tab 缓存`);
         try {
           clearTabChatPersistence();
           clearLegacyLocalChatPersistence();
@@ -2842,48 +2872,11 @@ export default function HomePage() {
         } catch (error) {
           console.error('[HomePage] 清除 tab 存储失败:', error);
         }
+        messagesBoundSessionIdRef.current = null;
         setMessages(defaultMessage);
-        setContext({});
-        return;
-      }
-      
-      // 恢复消息（带错误处理）
-      try {
-        const savedMessages = readTabItem(STORAGE_KEY_MESSAGES);
-        if (savedMessages) {
-          try {
-            const parsed = JSON.parse(savedMessages);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setMessages(stripNonChatMessages(sortSessionMessagesByTime(parsed)));
-            }
-          } catch (e) {
-            console.error("[HomePage] 恢复消息失败:", e);
-            removeTabItem(STORAGE_KEY_MESSAGES);
-          }
-        }
-      } catch (error) {
-        console.error("[HomePage] 读取消息数据失败:", error);
-      }
-
-      // 恢复上下文（带错误处理）
-      try {
-        const savedContext = readTabItem(STORAGE_KEY_CONTEXT);
-        if (savedContext) {
-          try {
-            const parsed = JSON.parse(savedContext);
-            if (parsed && typeof parsed === "object") {
-              if (!parsed.workflowState) {
-                parsed.workflowState = "idle";
-              }
-              setContext(parsed);
-            }
-          } catch (e) {
-            console.error("[HomePage] 恢复上下文失败:", e);
-            removeTabItem(STORAGE_KEY_CONTEXT);
-          }
-        }
-      } catch (error) {
-        console.error("[HomePage] 读取上下文数据失败:", error);
+        setContext({ workflowState: "idle" });
+      } else {
+        migrateGlobalTabMessagesToSessionScopedOnce();
       }
 
       try {
@@ -2892,6 +2885,27 @@ export default function HomePage() {
           const sid = String(raw).trim();
           if (sid.length > 0 && sid.length <= 128) {
             setCurrentSessionId(sid);
+            // 仅恢复与 sid 匹配的本地缓存；最终以服务端拉取为准（见 auth + currentSessionId effect）
+            try {
+              const scopedMessages = readSessionScopedItem(STORAGE_KEY_MESSAGES, sid);
+              if (scopedMessages) {
+                const parsed = JSON.parse(scopedMessages);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  setMessages(stripNonChatMessages(sortSessionMessagesByTime(parsed)));
+                  messagesBoundSessionIdRef.current = sid;
+                }
+              }
+              const scopedContext = readSessionScopedItem(STORAGE_KEY_CONTEXT, sid);
+              if (scopedContext) {
+                const parsedCtx = JSON.parse(scopedContext);
+                if (parsedCtx && typeof parsedCtx === "object") {
+                  if (!parsedCtx.workflowState) parsedCtx.workflowState = "idle";
+                  setContext(parsedCtx);
+                }
+              }
+            } catch (e) {
+              console.warn("[HomePage] 恢复分桶缓存失败，将使用服务端消息:", e);
+            }
           }
         }
       } catch (e) {
@@ -2936,9 +2950,26 @@ export default function HomePage() {
     }
 
     try {
-      let messagesToPersist = normalizeSessionMessagesForStorage(targetMessages, {
-        keepStreaming: loading && targetSessionId === currentSessionId,
-      });
+      let messagesForSave = targetMessages;
+      const explicitSessionPayload =
+        options.sessionId != null && options.messages != null;
+      if (
+        !explicitSessionPayload &&
+        messagesBoundSessionIdRef.current !== targetSessionId
+      ) {
+        console.warn(
+          "[HomePage] 保存时 messages 与 session 未绑定，改从服务端读取后再保存"
+        );
+        try {
+          const bundle = await fetchSessionBundleFromServer(targetSessionId);
+          messagesForSave = bundle.messages;
+        } catch (fetchErr) {
+          console.warn("[HomePage] 无法拉取服务端消息，跳过保存:", fetchErr);
+          return;
+        }
+      }
+
+      let messagesToPersist = normalizeSessionMessagesForStorage(messagesForSave);
       if (!options.skipMergeFetch) {
         try {
           const latestRes = await fetch(`/api/sessions/${targetSessionId}`, {
@@ -2947,8 +2978,7 @@ export default function HomePage() {
           const latestData = await latestRes.json().catch(() => ({}));
           if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
             messagesToPersist = normalizeSessionMessagesForStorage(
-              mergeSessionMessages(targetMessages, latestData.session.messages),
-              { keepStreaming: loading && targetSessionId === currentSessionId }
+              mergeSessionMessages(messagesForSave, latestData.session.messages)
             );
           }
         } catch (mergeErr) {
@@ -2993,6 +3023,8 @@ export default function HomePage() {
     }
 
     if (loading) return;
+    if (!currentSessionId) return;
+    if (messagesBoundSessionIdRef.current !== currentSessionId) return;
 
     localStorageSaveTimerRef.current = setTimeout(() => {
       try {
@@ -3026,9 +3058,17 @@ export default function HomePage() {
         if (messagesJson.length > 4 * 1024 * 1024) {
           console.warn('[HomePage] 消息数据过大，只保存最近的 30 条消息');
           const limitedMessages = cleanedMessages.slice(-30);
-          writeTabItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
+          writeSessionScopedItem(
+            STORAGE_KEY_MESSAGES,
+            currentSessionId,
+            JSON.stringify(limitedMessages)
+          );
         } else {
-          writeTabItem(STORAGE_KEY_MESSAGES, messagesJson);
+          writeSessionScopedItem(
+            STORAGE_KEY_MESSAGES,
+            currentSessionId,
+            messagesJson
+          );
         }
       } catch (error) {
         if (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
@@ -3044,7 +3084,11 @@ export default function HomePage() {
               }
               return cleaned;
             });
-            writeTabItem(STORAGE_KEY_MESSAGES, JSON.stringify(limitedMessages));
+            writeSessionScopedItem(
+              STORAGE_KEY_MESSAGES,
+              currentSessionId,
+              JSON.stringify(limitedMessages)
+            );
           } catch (retryError) {
             console.error('[HomePage] 无法保存消息到 sessionStorage:', retryError);
             clearChatPersistenceKeys();
@@ -3061,14 +3105,15 @@ export default function HomePage() {
         localStorageSaveTimerRef.current = null;
       }
     };
-  }, [messages, mounted, loading]);
+  }, [messages, mounted, loading, currentSessionId]);
 
-  // 保存上下文到 sessionStorage（标签页级）
+  // 保存上下文到 sessionStorage（按 sessionId 分桶）
   useEffect(() => {
-    if (typeof window !== "undefined" && mounted) {
+    if (typeof window !== "undefined" && mounted && currentSessionId) {
+      if (messagesBoundSessionIdRef.current !== currentSessionId) return;
       try {
         const contextJson = JSON.stringify(context);
-        writeTabItem(STORAGE_KEY_CONTEXT, contextJson);
+        writeSessionScopedItem(STORAGE_KEY_CONTEXT, currentSessionId, contextJson);
       } catch (error) {
         if (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
           console.warn('[HomePage] sessionStorage 配额已满，无法保存上下文');
@@ -3082,7 +3127,7 @@ export default function HomePage() {
         }
       }
     }
-  }, [context, mounted]);
+  }, [context, mounted, currentSessionId]);
 
   // 在「执行阶段」（已发布）加载执行进度数据（campaignId 来自 session 解析，非 context）
   useEffect(() => {
@@ -3351,6 +3396,7 @@ export default function HomePage() {
     e.preventDefault();
     const hasAttachments = pendingChatAttachments.length > 0;
     if ((!input.trim() && !hasAttachments) || loading) return;
+    if (sessionSwitchingRef.current) return;
     if (!authChecked) return;
     const trimmed = input.trim();
     if (!authUser) {
@@ -3365,24 +3411,19 @@ export default function HomePage() {
     if (!currentSessionId) return;
     if (loadingRef.current || activeChatSessionRef.current) return;
     try {
-      const res = await fetch(`/api/sessions/${currentSessionId}`, {
-        credentials: "include",
-      });
-      const data = await res.json();
-      if (!data?.success || !data.session) return;
-      const loaded = Array.isArray(data.session.messages)
-        ? data.session.messages
-        : [];
-      const normalized = stripNonChatMessages(sortSessionMessagesByTime(loaded));
-      setMessages(normalized);
+      const bundle = await fetchSessionBundleFromServer(currentSessionId);
+      setMessages(bundle.messages);
+      messagesBoundSessionIdRef.current = currentSessionId;
+      forceScrollToBottomRef.current = true;
+      shouldAutoScrollRef.current = true;
       rememberSessionPersistBaseline(
         sessionPersistSnapshotRef,
         currentSessionId,
-        normalized,
-        data.session.context || context
+        bundle.messages,
+        bundle.context
       );
-    } catch (err) {
-      console.warn("[HomePage] refresh session messages failed:", err);
+    } catch (e) {
+      console.warn("[HomePage] 刷新会话消息失败:", e);
     }
   }
 
@@ -3462,6 +3503,35 @@ export default function HomePage() {
         ? `上传附件：${attachmentList.map((a) => a?.name || "文件").join("、")}`
         : "");
 
+    let sessionIdForChat = currentSessionId;
+    let chatContext = context;
+    let baseMessages = messages;
+
+    if (sessionIdForChat && messagesBoundSessionIdRef.current !== sessionIdForChat) {
+      console.warn(
+        "[HomePage] 发送前 messages 与当前 Campaign 不一致，从服务端同步后再发送"
+      );
+      try {
+        const bundle = await fetchSessionBundleFromServer(sessionIdForChat);
+        baseMessages = bundle.messages;
+        chatContext = bundle.context;
+        setMessages(baseMessages);
+        setContext(chatContext);
+        messagesBoundSessionIdRef.current = sessionIdForChat;
+        rememberSessionPersistBaseline(
+          sessionPersistSnapshotRef,
+          sessionIdForChat,
+          baseMessages,
+          chatContext
+        );
+      } catch (err) {
+        window.alert(
+          `无法加载当前 Campaign 的对话记录：${err?.message || String(err)}。请刷新或重新切换 Campaign 后再试。`
+        );
+        return;
+      }
+    }
+
     const userMessage = {
       role: "user",
       content: displayContent,
@@ -3469,7 +3539,7 @@ export default function HomePage() {
       ...(attachmentList?.length ? { attachments: attachmentList } : {}),
     };
 
-    const nextMessages = [...messages, userMessage];
+    const nextMessages = [...baseMessages, userMessage];
     setInput("");
     setPendingChatAttachments([]);
     loadingRef.current = true;
@@ -3486,7 +3556,7 @@ export default function HomePage() {
       content: "",
       thinking: {
         steps: [],
-        currentState: context.workflowState || "idle",
+        currentState: chatContext.workflowState || "idle",
         nextState: null,
         toolCall: null,
         subAgentResult: null,
@@ -3496,9 +3566,9 @@ export default function HomePage() {
       isThinkingExpanded: true // 默认展开思考过程（Cursor 风格）
     };
     setMessages([...nextMessages, initialAssistantMessage]);
+    messagesBoundSessionIdRef.current = sessionIdForChat;
 
     // 与本轮请求绑定的会话 ID（新建会话时 setState 尚未生效，不能依赖闭包里的 currentSessionId）
-    let sessionIdForChat = currentSessionId;
     activeChatSessionRef.current = sessionIdForChat;
 
     try {
@@ -3513,7 +3583,7 @@ export default function HomePage() {
             body: JSON.stringify({
               title,
               messages: nextMessages,
-              context,
+              context: chatContext,
               status: 'draft',
             }),
           });
@@ -3527,6 +3597,7 @@ export default function HomePage() {
             sessionIdForChat = createData.session.id;
             activeChatSessionRef.current = sessionIdForChat;
             currentSessionIdRef.current = sessionIdForChat;
+            messagesBoundSessionIdRef.current = sessionIdForChat;
             setCurrentSessionId(createData.session.id);
             await loadCampaignSessions();
           } else {
@@ -3604,7 +3675,7 @@ export default function HomePage() {
         },
         body: JSON.stringify({
           messages: nextMessages,
-          context,
+          context: chatContext,
           sessionId: sessionIdForChat,
           stream: true // 启用流式传输
         })
@@ -3786,7 +3857,7 @@ export default function HomePage() {
                   if (finalMessages) {
                     scheduleChatRoundPersist(
                       finalMessages,
-                      ctxAfter || context
+                      ctxAfter || chatContext
                     );
                   }
                 } else if (data.type === "error") {
@@ -3851,7 +3922,7 @@ export default function HomePage() {
           }
 
           if (finalMessages) {
-            scheduleChatRoundPersist(finalMessages, nextCtx || context);
+            scheduleChatRoundPersist(finalMessages, nextCtx || chatContext);
           }
         }
       }
@@ -4612,6 +4683,7 @@ export default function HomePage() {
       throw new Error(createData.error || "创建草稿失败");
     }
     setCurrentSessionId(createData.session.id);
+    messagesBoundSessionIdRef.current = createData.session.id;
     const nextMessages = createData.session.messages || defaultMessage;
     const nextContext = createData.session.context || { workflowState: "idle" };
     if (currentSessionId) {
@@ -4657,9 +4729,26 @@ export default function HomePage() {
     const prevMessages = messages;
     const prevContext = context;
 
+    sessionSwitchingRef.current = true;
+
     if (prevSessionId) {
       pendingAttachmentsBySessionRef.current.set(prevSessionId, pendingChatAttachments);
       inputDraftBySessionRef.current.set(prevSessionId, input);
+      if (messagesBoundSessionIdRef.current === prevSessionId) {
+        try {
+          const prevMsgsJson = JSON.stringify(
+            stripNonChatMessages(sortSessionMessagesByTime(prevMessages)).slice(-50)
+          );
+          writeSessionScopedItem(STORAGE_KEY_MESSAGES, prevSessionId, prevMsgsJson);
+          writeSessionScopedItem(
+            STORAGE_KEY_CONTEXT,
+            prevSessionId,
+            JSON.stringify(prevContext)
+          );
+        } catch (e) {
+          console.warn("[HomePage] 切换前写入分桶缓存失败:", e);
+        }
+      }
     }
 
     try {
@@ -4679,6 +4768,7 @@ export default function HomePage() {
       setCurrentSessionId(sessionId);
       setMessages(normalized);
       setContext(loadedContext);
+      messagesBoundSessionIdRef.current = sessionId;
       setPendingChatAttachments(
         pendingAttachmentsBySessionRef.current.get(sessionId) || []
       );
@@ -4703,6 +4793,8 @@ export default function HomePage() {
       }
     } catch (error) {
       console.error('[HomePage] 切换会话失败:', error);
+    } finally {
+      sessionSwitchingRef.current = false;
     }
   };
 

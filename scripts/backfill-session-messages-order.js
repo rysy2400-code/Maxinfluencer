@@ -1,5 +1,5 @@
 /**
- * 按 createdAt 重排并剔除工作实况空占位，修复轮询追加 / slice(-50) 导致的乱序。
+ * 按 createdAt 重排并剔除流式 thinking 占位 / 重复空 assistant，修复轮询追加导致的脏数据。
  *
  * 使用：
  *   node scripts/backfill-session-messages-order.js

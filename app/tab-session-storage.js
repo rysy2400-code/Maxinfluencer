@@ -41,10 +41,65 @@ export function removeTabItem(key) {
   writeTabItem(key, null);
 }
 
+/** 按 sessionId 分桶，避免 currentSessionId 与 messages 来自不同 Campaign */
+export function sessionScopedKey(baseKey, sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return baseKey;
+  return `${baseKey}__${sid}`;
+}
+
+export function readSessionScopedItem(baseKey, sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (sid) {
+    const scoped = readTabItem(sessionScopedKey(baseKey, sid));
+    if (scoped) return scoped;
+  }
+  return readTabItem(baseKey);
+}
+
+export function writeSessionScopedItem(baseKey, sessionId, value) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return;
+  writeTabItem(sessionScopedKey(baseKey, sid), value);
+}
+
+export function removeSessionScopedItem(baseKey, sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return;
+  removeTabItem(sessionScopedKey(baseKey, sid));
+}
+
+/** 清除全局（非分桶）messages/context，保留 currentSessionId / version */
+export function clearLegacyGlobalChatTabKeys() {
+  removeTabItem(TAB_STORAGE_KEYS.MESSAGES);
+  removeTabItem(TAB_STORAGE_KEYS.CONTEXT);
+}
+
 /** 清除本标签页的聊天持久化 */
 export function clearTabChatPersistence() {
-  for (const key of Object.values(TAB_STORAGE_KEYS)) {
-    removeTabItem(key);
+  const s = storage();
+  if (!s) return;
+  try {
+    const toRemove = [];
+    for (let i = 0; i < s.length; i++) {
+      const k = s.key(i);
+      if (!k) continue;
+      if (
+        k === TAB_STORAGE_KEYS.CURRENT_SESSION_ID ||
+        k === TAB_STORAGE_KEYS.VERSION ||
+        k.startsWith(`${TAB_STORAGE_KEYS.MESSAGES}__`) ||
+        k.startsWith(`${TAB_STORAGE_KEYS.CONTEXT}__`) ||
+        k === TAB_STORAGE_KEYS.MESSAGES ||
+        k === TAB_STORAGE_KEYS.CONTEXT
+      ) {
+        toRemove.push(k);
+      }
+    }
+    for (const k of toRemove) s.removeItem(k);
+  } catch {
+    for (const key of Object.values(TAB_STORAGE_KEYS)) {
+      removeTabItem(key);
+    }
   }
 }
 
@@ -64,12 +119,37 @@ export function migrateLegacyLocalStorageToTabOnce() {
     const legacyVersion = window.localStorage.getItem(TAB_STORAGE_KEYS.VERSION);
 
     if (legacySid) writeTabItem(TAB_STORAGE_KEYS.CURRENT_SESSION_ID, legacySid);
-    if (legacyMessages) writeTabItem(TAB_STORAGE_KEYS.MESSAGES, legacyMessages);
-    if (legacyContext) writeTabItem(TAB_STORAGE_KEYS.CONTEXT, legacyContext);
+    if (legacyMessages) {
+      writeSessionScopedItem(TAB_STORAGE_KEYS.MESSAGES, legacySid, legacyMessages);
+    }
+    if (legacyContext) {
+      writeSessionScopedItem(TAB_STORAGE_KEYS.CONTEXT, legacySid, legacyContext);
+    }
     if (legacyVersion) writeTabItem(TAB_STORAGE_KEYS.VERSION, legacyVersion);
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * v2.2 → v2.3：全局 messages/context 迁入当前 session 分桶后删除全局键
+ */
+export function migrateGlobalTabMessagesToSessionScopedOnce() {
+  if (typeof window === "undefined") return;
+  const sid = readTabItem(TAB_STORAGE_KEYS.CURRENT_SESSION_ID);
+  if (!sid) {
+    clearLegacyGlobalChatTabKeys();
+    return;
+  }
+  const globalMessages = readTabItem(TAB_STORAGE_KEYS.MESSAGES);
+  const globalContext = readTabItem(TAB_STORAGE_KEYS.CONTEXT);
+  if (globalMessages && !readSessionScopedItem(TAB_STORAGE_KEYS.MESSAGES, sid)) {
+    writeSessionScopedItem(TAB_STORAGE_KEYS.MESSAGES, sid, globalMessages);
+  }
+  if (globalContext && !readSessionScopedItem(TAB_STORAGE_KEYS.CONTEXT, sid)) {
+    writeSessionScopedItem(TAB_STORAGE_KEYS.CONTEXT, sid, globalContext);
+  }
+  clearLegacyGlobalChatTabKeys();
 }
 
 /** 停止跨标签污染：移除 localStorage 中的会话相关键 */
