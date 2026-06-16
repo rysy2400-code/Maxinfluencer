@@ -11,6 +11,12 @@ function mapTaskStatusToNoteStatus(taskStatus) {
   return "started";
 }
 
+function numOrNull(raw) {
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * GET /api/campaigns/[id]/work-notes?limit=50
  * 返回执行阶段关键词任务的简版工作笔记历史（用于进入页面后的历史回放）。
@@ -29,8 +35,6 @@ export async function GET(req, { params }) {
     const limitRaw = Number(searchParams.get("limit") || 50);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 200);
 
-    // 注意：部分 MySQL/MariaDB + mysql2 预处理下 `LIMIT ?` 会报 ER_WRONG_ARGUMENTS，
-    // 导致接口 500、前端只能依赖 SSE 显示零星几条。此处 limit 已钳制为整数，直接拼接。
     const rows = await queryTikTok(
       `
       SELECT
@@ -39,18 +43,18 @@ export async function GET(req, { params }) {
         COALESCE(t.started_at, t.created_at) AS noteTime,
         t.status AS taskStatus,
         JSON_UNQUOTE(JSON_EXTRACT(t.payload, '$.keywordReason')) AS keywordReason,
-        JSON_UNQUOTE(JSON_EXTRACT(t.payload, '$.platform')) AS taskPlatform,
-        t.progress_analyzed_count AS browsedCount,
-        COALESCE(r1.enrich_success_count, r2.enrich_success_count) AS extractedCount,
-        COALESCE(r1.analyze_recommended_count, r2.analyze_recommended_count) AS matchedCount
+        COALESCE(
+          NULLIF(t.platform, ''),
+          JSON_UNQUOTE(JSON_EXTRACT(t.payload, '$.platform'))
+        ) AS taskPlatform,
+        t.progress_search_found_count AS searchFoundCount,
+        t.progress_profile_browsed_count AS profileBrowsedCount,
+        t.progress_analyzed_count AS analyzedCount,
+        t.progress_recommended_count AS recommendedCount,
+        t.progress_contactable_count AS contactableCount,
+        t.progress_skip_country_unknown_count AS skipCountryUnknownCount,
+        t.progress_skip_country_mismatch_count AS skipCountryMismatchCount
       FROM tiktok_influencer_search_task t
-      LEFT JOIN tiktok_keyword_run_result r1
-        ON r1.task_id = t.id
-      LEFT JOIN tiktok_keyword_run_result r2
-        ON r1.id IS NULL
-       AND r2.campaign_id = t.campaign_id
-       AND r2.run_id = t.run_id
-       AND r2.keyword = t.keyword
       WHERE t.campaign_id = ?
       ORDER BY COALESCE(t.started_at, t.created_at) DESC, t.id DESC
       LIMIT ${limit}
@@ -58,8 +62,6 @@ export async function GET(req, { params }) {
       [campaignId]
     );
 
-    // mysql2 行字段多为小写蛇形（与 AS 大小写无关），勿用 r.taskId 等驼峰否则全为 undefined，
-    // 前端会退化为仅按 keyword 去重，同一关键词多轮任务会合并成一条（重登后只剩「最新」）。
     const notes = (rows || [])
       .map((r) => {
         const taskIdRaw = r.taskId ?? r.taskid ?? r.TASK_ID;
@@ -68,9 +70,6 @@ export async function GET(req, { params }) {
         const taskStatusRaw = r.taskStatus ?? r.taskstatus ?? r.TASK_STATUS;
         const keywordReasonRaw = r.keywordReason ?? r.keywordreason ?? r.KEYWORD_REASON;
         const taskPlatformRaw = r.taskPlatform ?? r.taskplatform ?? r.TASK_PLATFORM;
-        const browsedRaw = r.browsedCount ?? r.browsedcount ?? r.BROWSED_COUNT;
-        const extractedRaw = r.extractedCount ?? r.extractedcount ?? r.EXTRACTED_COUNT;
-        const matchedRaw = r.matchedCount ?? r.matchedcount ?? r.MATCHED_COUNT;
         const platformSlug =
           typeof taskPlatformRaw === "string" && taskPlatformRaw.trim()
             ? taskPlatformRaw.trim().toLowerCase()
@@ -85,12 +84,31 @@ export async function GET(req, { params }) {
           reasonText:
             (typeof keywordReasonRaw === "string" && keywordReasonRaw.trim()) ||
             "该关键词与当前 campaign 的目标受众方向更贴合。",
-          browsedCount:
-            browsedRaw == null ? null : Number(browsedRaw || 0),
-          extractedCount:
-            extractedRaw == null ? null : Number(extractedRaw || 0),
-          matchedCount:
-            matchedRaw == null ? null : Number(matchedRaw || 0),
+          searchFoundCount: numOrNull(
+            r.searchFoundCount ?? r.searchfoundcount ?? r.SEARCH_FOUND_COUNT
+          ),
+          profileBrowsedCount: numOrNull(
+            r.profileBrowsedCount ?? r.profilebrowsedcount ?? r.PROFILE_BROWSED_COUNT
+          ),
+          analyzedCount: numOrNull(
+            r.analyzedCount ?? r.analyzedcount ?? r.ANALYZED_COUNT
+          ),
+          recommendedCount: numOrNull(
+            r.recommendedCount ?? r.recommendedcount ?? r.RECOMMENDED_COUNT
+          ),
+          contactableCount: numOrNull(
+            r.contactableCount ?? r.contactablecount ?? r.CONTACTABLE_COUNT
+          ),
+          skipCountryUnknownCount: numOrNull(
+            r.skipCountryUnknownCount ??
+              r.skipcountryunknowncount ??
+              r.SKIP_COUNTRY_UNKNOWN_COUNT
+          ),
+          skipCountryMismatchCount: numOrNull(
+            r.skipCountryMismatchCount ??
+              r.skipcountrymismatchcount ??
+              r.SKIP_COUNTRY_MISMATCH_COUNT
+          ),
           status: mapTaskStatusToNoteStatus(taskStatusRaw),
         };
       })

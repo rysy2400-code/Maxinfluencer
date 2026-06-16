@@ -100,7 +100,13 @@ async function main() {
   if (await ensureColumn(taskTable, "worker_host", "worker_host VARCHAR(128) NULL COMMENT '执行机器标识（可选）'")) changed.push("task.worker_host");
   if (await ensureColumn(taskTable, "worker_ip", "worker_ip VARCHAR(64) NULL COMMENT '执行机器 IP（可选）'")) changed.push("task.worker_ip");
   if (await ensureColumn(taskTable, "last_progress_at", "last_progress_at DATETIME NULL COMMENT '最近一次确认任务有推进的时间（用于 stuck 回收）'")) changed.push("task.last_progress_at");
-  if (await ensureColumn(taskTable, "progress_analyzed_count", "progress_analyzed_count INT NOT NULL DEFAULT 0 COMMENT '候选写入尝试数（包含重复/INSERT IGNORE）'")) changed.push("task.progress_analyzed_count");
+  if (await ensureColumn(taskTable, "progress_analyzed_count", "progress_analyzed_count INT NOT NULL DEFAULT 0 COMMENT 'LLM 分析完成并写入候选池'")) changed.push("task.progress_analyzed_count");
+  if (await ensureColumn(taskTable, "progress_search_found_count", "progress_search_found_count INT NOT NULL DEFAULT 0 COMMENT '关键词搜索池频道数（已获取）'")) changed.push("task.progress_search_found_count");
+  if (await ensureColumn(taskTable, "progress_profile_browsed_count", "progress_profile_browsed_count INT NOT NULL DEFAULT 0 COMMENT '已浏览主页（含国家预筛与完整 enrich）'")) changed.push("task.progress_profile_browsed_count");
+  if (await ensureColumn(taskTable, "progress_recommended_count", "progress_recommended_count INT NOT NULL DEFAULT 0 COMMENT '符合红人画像（isRecommended=true）'")) changed.push("task.progress_recommended_count");
+  if (await ensureColumn(taskTable, "progress_contactable_count", "progress_contactable_count INT NOT NULL DEFAULT 0 COMMENT '可联系（符合画像且有邮箱）'")) changed.push("task.progress_contactable_count");
+  if (await ensureColumn(taskTable, "progress_skip_country_unknown_count", "progress_skip_country_unknown_count INT NOT NULL DEFAULT 0 COMMENT '因国家未知跳过分析'")) changed.push("task.progress_skip_country_unknown_count");
+  if (await ensureColumn(taskTable, "progress_skip_country_mismatch_count", "progress_skip_country_mismatch_count INT NOT NULL DEFAULT 0 COMMENT '因国家不符合跳过分析'")) changed.push("task.progress_skip_country_mismatch_count");
   if (
     await ensureColumn(
       taskTable,

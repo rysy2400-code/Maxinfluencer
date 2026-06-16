@@ -728,6 +728,55 @@ function formatWorkNoteDateTime(isoTime) {
   return `${dayPart} ${timePart}`;
 }
 
+function workNoteMetric(item, ...keys) {
+  for (const key of keys) {
+    const raw = item?.[key];
+    if (raw == null || Number.isNaN(Number(raw))) continue;
+    return Number(raw);
+  }
+  return null;
+}
+
+/** 关键词任务执行摘要（finished / failed 时展示） */
+function formatKeywordWorkNoteResult(item) {
+  if (!item || item.status === "started") return "";
+
+  const searchFound = workNoteMetric(item, "searchFoundCount");
+  const profileBrowsed = workNoteMetric(item, "profileBrowsedCount", "browsedCount");
+  const analyzed = workNoteMetric(item, "analyzedCount", "extractedCount");
+  const recommended = workNoteMetric(item, "recommendedCount", "matchedCount");
+  const contactable = workNoteMetric(item, "contactableCount");
+  const skipUnknown = workNoteMetric(item, "skipCountryUnknownCount") ?? 0;
+  const skipMismatch = workNoteMetric(item, "skipCountryMismatchCount") ?? 0;
+  const skipTotal = skipUnknown + skipMismatch;
+
+  const hasCore =
+    searchFound != null ||
+    profileBrowsed != null ||
+    analyzed != null ||
+    recommended != null ||
+    contactable != null;
+  if (!hasCore && skipTotal <= 0) return "";
+
+  const parts = [];
+  if (searchFound != null) parts.push(`已获取 ${searchFound} 位红人`);
+  if (profileBrowsed != null) parts.push(`已浏览 ${profileBrowsed} 位主页`);
+  if (analyzed != null) parts.push(`已分析 ${analyzed} 位`);
+  if (recommended != null) parts.push(`${recommended} 位符合红人画像要求`);
+  if (contactable != null) parts.push(`${contactable} 位可联系`);
+
+  let text = parts.join("，");
+  if (skipTotal > 0) {
+    const skipParts = [`${skipTotal} 位红人跳过分析`];
+    const detail = [];
+    if (skipUnknown > 0) detail.push(`${skipUnknown} 位因国家未知`);
+    if (skipMismatch > 0) detail.push(`${skipMismatch} 位因国家不符合`);
+    if (detail.length) skipParts.push(`其中 ${detail.join("、")}`);
+    text = text ? `${text}。${skipParts.join("，")}` : skipParts.join("，");
+  }
+  return text;
+}
+
 function buildTikTokProfileUrl(handle) {
   const u = String(handle || "")
     .trim()
@@ -6695,29 +6744,7 @@ export default function HomePage() {
                                       const timeLabel = formatWorkNoteDateTime(item?.time);
                                       const keyword = item?.keyword || "（未命名关键词）";
                                       const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
-                                      const searchFound =
-                                        item?.searchFoundCount != null &&
-                                        !Number.isNaN(Number(item.searchFoundCount))
-                                          ? Number(item.searchFoundCount)
-                                          : null;
-                                      const browsed =
-                                        item?.browsedCount != null && !Number.isNaN(Number(item.browsedCount))
-                                          ? Number(item.browsedCount)
-                                          : item?.extractedCount != null && !Number.isNaN(Number(item.extractedCount))
-                                            ? Number(item.extractedCount)
-                                            : null;
-                                      const analyzed =
-                                        item?.extractedCount != null &&
-                                        !Number.isNaN(Number(item.extractedCount))
-                                          ? Number(item.extractedCount)
-                                          : browsed;
-                                      const matched = item?.matchedCount;
-                                      const resultText =
-                                        searchFound == null && analyzed == null && matched == null
-                                          ? ""
-                                          : searchFound != null
-                                            ? `搜索到 ${searchFound} 个频道，已分析 ${analyzed ?? 0} 位，${matched ?? 0} 位符合红人画像要求。`
-                                            : `已浏览 ${browsed ?? analyzed ?? 0} 位红人主页，${matched ?? 0} 位符合红人画像要求。`;
+                                      const resultText = formatKeywordWorkNoteResult(item);
                                       const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
                                       const libraryLabel =
                                         item?.libraryLabel ||
