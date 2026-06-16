@@ -20,6 +20,7 @@ export async function GET(req) {
         companyName: auth.effectiveUser.companyName,
         username: auth.effectiveUser.username,
         isAdmin: auth.realUser.isAdmin,
+        isCompanyAdmin: auth.realUser.isCompanyAdmin,
         isActingAs: auth.isActingAs,
         realUser: {
           companyName: auth.realUser.companyName,

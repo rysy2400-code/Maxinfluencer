@@ -213,7 +213,8 @@ function SidebarAccountMenu({
 }) {
   const balanceLabel = formatAdvertiserBalance(user?.balance?.amount, user?.balance?.currency);
   const initials = usernameInitials(user?.username);
-  const showAdminSwitch = !!user?.isAdmin;
+  const showAdminSwitch = !!(user?.isAdmin || user?.isCompanyAdmin);
+  const switchSearchPlaceholder = user?.isAdmin ? "搜索公司或用户名" : "搜索用户名";
 
   return (
     <div data-account-menu-root style={{ position: "relative" }}>
@@ -371,7 +372,7 @@ function SidebarAccountMenu({
                     type="search"
                     value={switchQuery}
                     onChange={(e) => onSwitchQueryChange(e.target.value)}
-                    placeholder="搜索公司或用户名"
+                    placeholder={switchSearchPlaceholder}
                     onClick={(e) => e.stopPropagation()}
                     style={{
                       width: "100%",
@@ -438,7 +439,7 @@ function SidebarAccountMenu({
                           e.currentTarget.style.background = "transparent";
                         }}
                       >
-                        {acc.companyName} / {acc.username}
+                        {user?.isAdmin ? `${acc.companyName} / ${acc.username}` : acc.username}
                       </button>
                     ))
                   )}
@@ -1962,7 +1963,7 @@ export default function HomePage() {
   }, [accountMenuOpen]);
 
   useEffect(() => {
-    if (!accountMenuOpen || !switchPanelOpen || !authUser?.isAdmin) return;
+    if (!accountMenuOpen || !switchPanelOpen || !(authUser?.isAdmin || authUser?.isCompanyAdmin)) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       setSwitchLoading(true);
@@ -1985,7 +1986,7 @@ export default function HomePage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [accountMenuOpen, switchPanelOpen, switchQuery, authUser?.isAdmin]);
+  }, [accountMenuOpen, switchPanelOpen, switchQuery, authUser?.isAdmin, authUser?.isCompanyAdmin]);
 
   useEffect(() => {
     renamingSessionIdRef.current = renamingSessionId;

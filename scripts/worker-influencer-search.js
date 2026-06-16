@@ -823,7 +823,13 @@ async function importTaskLoop() {
       );
 
       await runInCdpLoop(
-        { platform: "tiktok", taskId: task.id, workerId: IMPORT_WORKER_ID, kind: "import" },
+        {
+          platform: "mixed",
+          persistentPlatforms: ["instagram", "youtube"],
+          taskId: task.id,
+          workerId: IMPORT_WORKER_ID,
+          kind: "import",
+        },
         () => processImportTaskRow(task)
       );
 

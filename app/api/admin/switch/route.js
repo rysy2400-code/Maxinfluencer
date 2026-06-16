@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
+import { canSwitchAccounts, canSwitchToTarget } from "../../../../lib/auth/account-switch.js";
 import { getAdvertiserUserById } from "../../../../lib/db/tiktok-advertiser-dao.js";
 import { setAdvertiserAuthCookie } from "../../../../lib/auth/advertiser-auth-cookie.js";
 import { insertAdminActionLog } from "../../../../lib/db/admin-action-log-dao.js";
@@ -14,7 +15,7 @@ export async function POST(req) {
     if (!auth) {
       return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
     }
-    if (!auth.realUser?.isAdmin) {
+    if (!canSwitchAccounts(auth.realUser)) {
       return NextResponse.json({ success: false, error: "无权限" }, { status: 403 });
     }
 
@@ -28,6 +29,9 @@ export async function POST(req) {
     if (!targetRow || !targetRow.is_active) {
       return NextResponse.json({ success: false, error: "目标账户不存在或已停用" }, { status: 400 });
     }
+    if (!canSwitchToTarget(auth.realUser, targetRow)) {
+      return NextResponse.json({ success: false, error: "无权切换到该账户" }, { status: 403 });
+    }
 
     const res = NextResponse.json({
       success: true,
@@ -35,6 +39,7 @@ export async function POST(req) {
         companyName: targetRow.company_name,
         username: targetRow.username,
         isAdmin: auth.realUser.isAdmin,
+        isCompanyAdmin: auth.realUser.isCompanyAdmin,
         isActingAs: targetId !== auth.realUser.advertiserUserId,
         realUser: {
           companyName: auth.realUser.companyName,

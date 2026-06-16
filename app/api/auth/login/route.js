@@ -72,6 +72,7 @@ export async function POST(req) {
         companyName: advertiser.name,
         username: userRow.username,
         isAdmin: !!userRow.is_admin,
+        isCompanyAdmin: !!userRow.is_company_admin,
         balance,
       },
     });

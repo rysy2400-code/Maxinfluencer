@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
+import { canSwitchAccounts } from "../../../../../lib/auth/account-switch.js";
 import { setAdvertiserAuthCookie } from "../../../../../lib/auth/advertiser-auth-cookie.js";
 import { insertAdminActionLog } from "../../../../../lib/db/admin-action-log-dao.js";
 import { normalizeAdvertiserBalance } from "../../../../../lib/utils/advertiser-balance.js";
@@ -14,7 +15,7 @@ export async function POST(req) {
     if (!auth) {
       return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
     }
-    if (!auth.realUser?.isAdmin) {
+    if (!canSwitchAccounts(auth.realUser)) {
       return NextResponse.json({ success: false, error: "无权限" }, { status: 403 });
     }
 
@@ -28,7 +29,8 @@ export async function POST(req) {
       user: {
         companyName: realRow.company_name,
         username: realRow.username,
-        isAdmin: true,
+        isAdmin: !!realRow.is_admin,
+        isCompanyAdmin: !!realRow.is_company_admin,
         isActingAs: false,
         realUser: {
           companyName: realRow.company_name,
