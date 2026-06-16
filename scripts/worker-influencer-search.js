@@ -367,7 +367,7 @@ async function processTask(task, platformSlug) {
   }) => {
     if (!sessionId) return;
     const m =
-      metrics ||
+      metrics ??
       (status === "started"
         ? null
         : await loadTaskWorkNoteMetrics(task.id));
@@ -393,6 +393,27 @@ async function processTask(task, platformSlug) {
       });
     } catch {
       // ignore work-note publish errors
+    }
+  };
+
+  let progressPublishTimer = null;
+  const scheduleKeywordProgressPublish = () => {
+    if (!sessionId) return;
+    if (progressPublishTimer) clearTimeout(progressPublishTimer);
+    progressPublishTimer = setTimeout(async () => {
+      progressPublishTimer = null;
+      try {
+        const metrics = await loadTaskWorkNoteMetrics(task.id);
+        await publishKeywordNote({ status: "started", metrics });
+      } catch {
+        /* ignore */
+      }
+    }, 1500);
+  };
+  const clearKeywordProgressPublish = () => {
+    if (progressPublishTimer) {
+      clearTimeout(progressPublishTimer);
+      progressPublishTimer = null;
     }
   };
 
@@ -496,9 +517,11 @@ async function processTask(task, platformSlug) {
         runId: runId || null,
         searchKeyword: primaryKeyword,
         onStepUpdate,
+        onTaskProgress: scheduleKeywordProgressPublish,
       }
     );
   } catch (err) {
+    clearKeywordProgressPublish();
     const failMsg = `searchAndExtractInfluencers throw: ${String(err?.message || err).slice(0, 300)}`;
     console.error(
       "[worker-influencer-search] searchAndExtract throw trace:",
@@ -533,6 +556,8 @@ async function processTask(task, platformSlug) {
       error: String(err?.message || "search_throw"),
     });
     return;
+  } finally {
+    clearKeywordProgressPublish();
   }
 
   if (result?.success && Array.isArray(result.influencers)) {

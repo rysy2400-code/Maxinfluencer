@@ -737,9 +737,9 @@ function workNoteMetric(item, ...keys) {
   return null;
 }
 
-/** 关键词任务执行摘要（finished / failed 时展示） */
+/** 关键词任务执行摘要（进行中 / finished / failed 时展示） */
 function formatKeywordWorkNoteResult(item) {
-  if (!item || item.status === "started") return "";
+  if (!item) return "";
 
   const searchFound = workNoteMetric(item, "searchFoundCount");
   const profileBrowsed = workNoteMetric(item, "profileBrowsedCount", "browsedCount");
@@ -3197,9 +3197,18 @@ export default function HomePage() {
         const data = await res.json();
         if (cancelled || !data?.success) return;
         const incoming = Array.isArray(data.notes) ? data.notes : [];
-        // 以接口全量为准建立基线（避免此前 API 失败时仅剩几条 SSE 记录与成功响应错误合并）
-        setKeywordWorkNotes(() => {
-          const merged = [...incoming];
+        setKeywordWorkNotes((prev) => {
+          const map = new Map();
+          for (const n of Array.isArray(prev) ? prev : []) {
+            const key = workNoteMergeKey(n);
+            if (key) map.set(key, n);
+          }
+          for (const n of incoming) {
+            const key = workNoteMergeKey(n);
+            if (!key) continue;
+            map.set(key, { ...map.get(key), ...n });
+          }
+          const merged = [...map.values()];
           merged.sort(
             (a, b) =>
               new Date(a?.time || 0).getTime() - new Date(b?.time || 0).getTime()
@@ -3214,9 +3223,11 @@ export default function HomePage() {
     };
 
     loadWorkNotes();
+    const pollTimer = setInterval(loadWorkNotes, 12000);
 
     return () => {
       cancelled = true;
+      clearInterval(pollTimer);
     };
   }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
