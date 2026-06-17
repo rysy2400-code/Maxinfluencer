@@ -19,6 +19,7 @@ import { ChatAttachmentCard } from "./chat-attachment-card";
 import { isAttachmentOnlyUserMessage } from "./chat-file-utils";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
+import AccountBillingPanel from "./components/AccountBillingPanel";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
 import {
   avgViewsFromSnapshot,
@@ -201,6 +202,8 @@ function SidebarAccountMenu({
   user,
   menuOpen,
   onToggleMenu,
+  onBilling,
+  showBillingMenu,
   onRecharge,
   onLogout,
   switchPanelOpen,
@@ -448,6 +451,33 @@ function SidebarAccountMenu({
                   )}
                 </div>
               ) : null}
+            </>
+          ) : null}
+          {showBillingMenu ? (
+            <>
+              <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBilling();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  width: "100%",
+                  padding: "8px 12px",
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  color: "#111827",
+                  fontSize: 13,
+                }}
+              >
+                账户与账单
+              </button>
             </>
           ) : null}
           <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
@@ -2001,6 +2031,7 @@ export default function HomePage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
+  const [billingPanelOpen, setBillingPanelOpen] = useState(false);
   const [switchPanelOpen, setSwitchPanelOpen] = useState(false);
   const [switchQuery, setSwitchQuery] = useState("");
   const [switchUsers, setSwitchUsers] = useState([]);
@@ -6049,6 +6080,11 @@ export default function HomePage() {
               user={authUser}
               menuOpen={accountMenuOpen}
               onToggleMenu={() => setAccountMenuOpen((open) => !open)}
+              showBillingMenu={!!(authUser?.isCompanyAdmin || authUser?.isAdmin)}
+              onBilling={() => {
+                setAccountMenuOpen(false);
+                setBillingPanelOpen(true);
+              }}
               onRecharge={() => {
                 setAccountMenuOpen(false);
                 setRechargeModalOpen(true);
@@ -7655,6 +7691,8 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      <AccountBillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} />
 
       {loginOpen && (
         <div
