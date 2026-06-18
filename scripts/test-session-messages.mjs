@@ -6,6 +6,7 @@ import {
   mergeSessionMessages,
   normalizeSessionMessagesForStorage,
   sanitizeMessageForStorage,
+  sortSessionMessagesByTime,
 } from "../lib/chat/session-messages.js";
 
 const placeholder = {
@@ -97,4 +98,79 @@ test("merge keeps repeated user commands with different createdAt", () => {
     2
   );
   assert.ok(merged.some((m) => m.createdAt === newPause.createdAt));
+});
+
+test("sort: legacy (no createdAt) before timed; timed chronological at end", () => {
+  const welcome = {
+    role: "assistant",
+    name: "Bin",
+    content: "您好，我是Bin，告诉我您想推广的产品链接",
+  };
+  const legacyA = { role: "user", content: "确认发布" };
+  const legacyB = {
+    role: "assistant",
+    name: "Bin",
+    content: "Campaign 已发布。",
+  };
+  const timedOld = {
+    role: "user",
+    content: "暂停",
+    createdAt: "2026-06-18T08:00:00.000Z",
+  };
+  const timedNew = {
+    role: "assistant",
+    name: "Bin",
+    content: "已更新 Campaign 配置。",
+    createdAt: "2026-06-18T08:30:59.348Z",
+  };
+  // 模拟旧 session 入库顺序：近期带时间戳在前、无时间戳历史在后（legacy 按原下标 2→3）
+  const dbOrder = [timedNew, timedOld, legacyA, legacyB, welcome];
+  const sorted = sortSessionMessagesByTime(dbOrder);
+
+  assert.equal(sorted[0].content, welcome.content);
+  assert.equal(sorted[1].content, legacyA.content);
+  assert.equal(sorted[2].content, legacyB.content);
+  assert.equal(sorted[3].content, timedOld.content);
+  assert.equal(sorted[4].content, timedNew.content);
+});
+
+test("sort: new timed messages appear after legacy block (SHEGLAM-style)", () => {
+  const legacy = [
+    { role: "user", content: "帮我提升每日建联达人效率" },
+    { role: "assistant", name: "Bin", content: "【执行进度汇报】日报" },
+  ];
+  const timed = [
+    {
+      role: "user",
+      content: "画像更新",
+      createdAt: "2026-06-18T08:30:48.864Z",
+    },
+    {
+      role: "assistant",
+      name: "Bin",
+      content: "已更新 Campaign 配置。",
+      createdAt: "2026-06-18T08:30:59.348Z",
+    },
+  ];
+  const dbOrder = [...timed, ...legacy];
+  const sorted = sortSessionMessagesByTime(dbOrder);
+  assert.equal(sorted[0].content, legacy[0].content);
+  assert.equal(sorted[1].content, legacy[1].content);
+  assert.equal(sorted[2].content, timed[0].content);
+  assert.equal(sorted[sorted.length - 1].content, timed[1].content);
+});
+
+test("sort: all-timestamp session stays chronological", () => {
+  const a = { role: "user", content: "a", createdAt: "2026-06-18T10:00:00.000Z" };
+  const b = {
+    role: "assistant",
+    name: "Bin",
+    content: "b",
+    createdAt: "2026-06-18T10:00:05.000Z",
+  };
+  const sorted = sortSessionMessagesByTime([b, a]);
+  assert.deepEqual(
+    sorted.map((m) => m.content),
+    ["a", "b"]
+  );
 });
