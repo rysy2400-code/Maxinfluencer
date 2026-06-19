@@ -16,7 +16,10 @@ import {
 import { ChatSendUpIcon } from "./chat-send-up-icon";
 import { ChatPaperclipIcon } from "./chat-paperclip-icon";
 import { ChatAttachmentCard } from "./chat-attachment-card";
-import { isAttachmentOnlyUserMessage } from "./chat-file-utils";
+import {
+  chatAttachmentDownloadHref,
+  isAttachmentOnlyUserMessage,
+} from "./chat-file-utils";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import AccountBillingPanel from "./components/AccountBillingPanel";
@@ -6394,6 +6397,7 @@ export default function HomePage() {
                             key={`${item.key}-att-${attIdx}`}
                             attachment={att}
                             variant="message"
+                            downloadHref={chatAttachmentDownloadHref(currentSessionId, att)}
                           />
                         ))}
                       </div>
@@ -6425,6 +6429,7 @@ export default function HomePage() {
                               key={`${item.key}-att-${attIdx}`}
                               attachment={att}
                               variant="message"
+                              downloadHref={chatAttachmentDownloadHref(currentSessionId, att)}
                             />
                           ))}
                         {showTextBubble && renderMessageContent(m.content)}

@@ -2,11 +2,92 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
 import { assertUserCanAccessSession } from "../../../../../lib/auth/session-access.js";
-import { saveSessionImportFile } from "../../../../../lib/influencer/session-import-storage.js";
+import {
+  readSessionImportFile,
+  saveSessionImportFile,
+  storageKeyBelongsToSession,
+} from "../../../../../lib/influencer/session-import-storage.js";
 
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 15 * 1024 * 1024;
+
+function contentTypeForFileName(fileName) {
+  const lower = String(fileName || "").toLowerCase();
+  if (lower.endsWith(".xlsx")) {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (lower.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (lower.endsWith(".csv")) return "text/csv; charset=utf-8";
+  return "application/octet-stream";
+}
+
+function buildContentDisposition(fileName) {
+  const safe = (fileName || "attachment").replace(/"/g, "");
+  return `attachment; filename="${safe}"`;
+}
+
+function sanitizeDownloadFileName(name, fallback) {
+  const raw = String(name || "").trim();
+  const base = raw ? raw.split(/[/\\]/).pop() : "";
+  const safe = (base || fallback || "attachment").replace(/"/g, "").slice(0, 200);
+  return safe || "attachment";
+}
+
+export async function GET(req, { params }) {
+  try {
+    const auth = await getAuthenticatedAdvertiserUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
+    }
+
+    const sessionId = String(params?.id || "").trim();
+    if (!sessionId) {
+      return NextResponse.json({ success: false, error: "缺少 sessionId" }, { status: 400 });
+    }
+
+    const access = await assertUserCanAccessSession(sessionId, auth);
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.status === 403 ? "无权访问该会话" : "会话不存在" },
+        { status: access.status }
+      );
+    }
+
+    const { searchParams } = new URL(req.url);
+    const storageKey = String(searchParams.get("storageKey") || "").trim();
+    if (!storageKey || storageKey.includes("..")) {
+      return NextResponse.json({ success: false, error: "缺少或非法 storageKey" }, { status: 400 });
+    }
+    if (!storageKeyBelongsToSession(storageKey, sessionId)) {
+      return NextResponse.json({ success: false, error: "附件不属于该会话" }, { status: 403 });
+    }
+
+    const buffer = readSessionImportFile(storageKey);
+    if (!buffer) {
+      return NextResponse.json({ success: false, error: "附件不存在" }, { status: 404 });
+    }
+
+    const storageFallback = storageKey.split("/").pop() || "attachment.xlsx";
+    const requestedName = searchParams.get("fileName");
+    const fileName = sanitizeDownloadFileName(requestedName, storageFallback);
+    return new Response(buffer, {
+      status: 200,
+      headers: {
+        "Content-Type": contentTypeForFileName(fileName),
+        "Content-Length": String(buffer.length),
+        "Content-Disposition": buildContentDisposition(fileName),
+        "Cache-Control": "private, max-age=60",
+      },
+    });
+  } catch (err) {
+    console.error("[chat-attachments GET]", err);
+    return NextResponse.json(
+      { success: false, error: err?.message || "下载失败" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(req, { params }) {
   try {

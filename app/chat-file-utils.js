@@ -21,6 +21,17 @@ export function buildAttachmentMetaLine(att) {
   return size ? `${ext} ${size}` : ext;
 }
 
+/** 聊天记录附件下载 URL（需登录且有权访问该 session） */
+export function chatAttachmentDownloadHref(sessionId, attachment) {
+  const sid = String(sessionId || "").trim();
+  const storageKey = String(attachment?.storageKey || "").trim();
+  if (!sid || !storageKey) return null;
+  const params = new URLSearchParams({ storageKey });
+  const name = String(attachment?.name || "").trim();
+  if (name) params.set("fileName", name);
+  return `/api/sessions/${encodeURIComponent(sid)}/chat-attachments?${params}`;
+}
+
 /** 用户仅上传附件、无自定义文字时的占位正文 */
 export function isAttachmentOnlyUserMessage(msg) {
   if (!msg || msg.role !== "user") return false;
