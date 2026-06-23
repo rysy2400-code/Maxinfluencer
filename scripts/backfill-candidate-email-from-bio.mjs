@@ -11,7 +11,11 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
-import { extractEmailFromBio } from "../lib/influencer/extract-email-from-bio.js";
+import {
+  extractEmailFromBio,
+  describeEmailExtractionReason,
+} from "../lib/influencer/extract-email-from-bio.js";
+import { resolveCandidateEmail } from "../lib/db/campaign-candidates-dao.js";
 import { upsertInfluencer } from "../lib/db/influencer-dao.js";
 import { avgViewsFromSnapshot } from "../lib/influencer/avg-views.js";
 
@@ -68,11 +72,96 @@ async function resolveCampaignId({ campaignId, petpivot }) {
 }
 
 function resolveEmailFromRow(snap, matchAnalysis) {
+  const resolved = resolveCandidateEmail(snap);
+  if (resolved) {
+    const bio = snap?.bio || snap?.profile_data?.userInfo?.bio || "";
+    return {
+      email: resolved,
+      source: snap?.email === resolved ? "snapshot" : "profile_data",
+      reason:
+        describeEmailExtractionReason(bio, resolved) ||
+        "profile_data 含 public_email/business_email 或 mailto",
+    };
+  }
   const fromBio = extractEmailFromBio(snap?.bio);
-  if (fromBio) return { email: fromBio, source: "bio" };
+  if (fromBio) {
+    return {
+      email: fromBio,
+      source: "bio",
+      reason: describeEmailExtractionReason(snap?.bio, fromBio),
+    };
+  }
   const fromAnalysis = extractEmailFromBio(matchAnalysis?.analysis);
-  if (fromAnalysis) return { email: fromAnalysis, source: "match_analysis" };
-  return { email: null, source: null };
+  if (fromAnalysis) {
+    return {
+      email: fromAnalysis,
+      source: "match_analysis",
+      reason: describeEmailExtractionReason(matchAnalysis?.analysis, fromAnalysis),
+    };
+  }
+  return { email: null, source: null, reason: null };
+}
+
+async function syncExecutionSnapshotEmail(campaignId, row) {
+  const tiktokUsername = row.tiktokUsername;
+  const email = row.email;
+  const snapshot = row.snapshot;
+  const platformInfluencerId = row.platformInfluencerId;
+  const matchScore = row.matchScore ?? null;
+
+  const existing = await queryTikTok(
+    `
+    SELECT id, influencer_snapshot
+    FROM tiktok_campaign_execution
+    WHERE campaign_id = ? AND tiktok_username = ?
+    LIMIT 1
+  `,
+    [campaignId, tiktokUsername]
+  );
+
+  if (existing?.length) {
+    const prevSnap = parseJson(existing[0].influencer_snapshot) || {};
+    const nextSnap = { ...prevSnap, ...snapshot, email };
+    await queryTikTok(
+      `
+      UPDATE tiktok_campaign_execution
+      SET influencer_snapshot = ?,
+          influencer_id = COALESCE(?, influencer_id),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE campaign_id = ? AND tiktok_username = ?
+    `,
+      [
+        JSON.stringify(nextSnap),
+        platformInfluencerId,
+        campaignId,
+        tiktokUsername,
+      ]
+    );
+    return { action: "updated" };
+  }
+
+  const insertResult = await queryTikTok(
+    `
+    INSERT IGNORE INTO tiktok_campaign_execution (
+      campaign_id, tiktok_username, influencer_id, influencer_snapshot, stage, last_event
+    ) VALUES (?, ?, ?, ?, 'pending_quote', ?)
+  `,
+    [
+      campaignId,
+      tiktokUsername,
+      platformInfluencerId,
+      JSON.stringify(snapshot),
+      JSON.stringify({
+        createdBy: "backfill-candidate-email-from-bio",
+        createdAt: new Date().toISOString(),
+        note: "bio 邮箱回填后写入执行表，待联系红人报价。",
+        matchScore: matchScore ?? undefined,
+      }),
+    ]
+  );
+  const affected =
+    typeof insertResult?.affectedRows === "number" ? insertResult.affectedRows : 0;
+  return affected > 0 ? { action: "inserted" } : { action: "insert_ignored" };
 }
 
 function followerCountFromSnapshot(s) {
@@ -146,13 +235,16 @@ async function main() {
   let wouldUpdate = 0;
   let updated = 0;
   let synced = 0;
+  let executionInserted = 0;
+  let executionUpdated = 0;
   const skipped = [];
+  const found = [];
 
   for (const row of rows || []) {
     scanned += 1;
     const snap = parseJson(row.influencer_snapshot) || {};
     const matchAnalysis = parseJson(row.match_analysis);
-    const { email, source } = resolveEmailFromRow(snap, matchAnalysis);
+    const { email, source, reason } = resolveEmailFromRow(snap, matchAnalysis);
     if (!email) {
       skipped.push(row.tiktok_username);
       continue;
@@ -160,9 +252,15 @@ async function main() {
 
     const nextSnap = { ...snap, email };
     wouldUpdate += 1;
+    found.push({
+      username: row.tiktok_username,
+      email,
+      source,
+      reason,
+    });
 
     console.log(
-      `  ${dry ? "[dry-run] " : ""}@${row.tiktok_username} <- ${email} (${source})`
+      `  ${dry ? "[dry-run] " : ""}@${row.tiktok_username} <- ${email} (${source}) — ${reason || ""}`
     );
 
     if (dry) continue;
@@ -181,6 +279,24 @@ async function main() {
       [email, JSON.stringify(nextSnap), row.id, campaignId]
     );
     updated += 1;
+
+    try {
+      const execResult = await syncExecutionSnapshotEmail(campaignId, {
+        tiktokUsername: row.tiktok_username,
+        platformInfluencerId: row.influencer_id || null,
+        email,
+        snapshot: nextSnap,
+        matchScore:
+          typeof matchAnalysis?.score === "number" ? matchAnalysis.score : null,
+      });
+      if (execResult.action === "inserted") executionInserted += 1;
+      if (execResult.action === "updated") executionUpdated += 1;
+    } catch (e) {
+      console.warn(
+        `  [warn] sync execution @${row.tiktok_username}:`,
+        e?.message || e
+      );
+    }
 
     if (row.influencer_id) {
       try {
@@ -201,8 +317,16 @@ async function main() {
   }
 
   console.log(
-    `[backfill-email] 完成: scanned=${scanned} wouldUpdate=${wouldUpdate} updated=${updated} syncedInfluencer=${synced} stillNoEmail=${skipped.length}`
+    `[backfill-email] 完成: scanned=${scanned} wouldUpdate=${wouldUpdate} updated=${updated} executionInserted=${executionInserted} executionUpdated=${executionUpdated} syncedInfluencer=${synced} stillNoEmail=${skipped.length}`
   );
+  if (found.length) {
+    console.log("[backfill-email] 新识别邮箱明细:");
+    for (const f of found) {
+      console.log(
+        `  @${f.username} ${f.email} [${f.source}] ${f.reason || ""}`
+      );
+    }
+  }
   if (skipped.length) {
     console.log(`[backfill-email] 仍无邮箱: ${skipped.join(", ")}`);
   }

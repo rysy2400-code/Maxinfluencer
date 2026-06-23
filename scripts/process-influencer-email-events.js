@@ -43,6 +43,37 @@ function isLikelyAutoReply(subject, bodyText) {
 function isBodyEffectivelyEmpty(bodyText) {
   return !String(bodyText || "").trim() || String(bodyText).trim().length < 15;
 }
+
+/** 从邮件正文兜底提取草稿/视频链接（LLM 未填 draftLink / videoLink 时） */
+function extractLinksFromEmailBody(bodyText) {
+  const text = String(bodyText || "");
+  if (!text.trim()) return { draftLink: null, videoLink: null };
+
+  const draftHostPatterns = [
+    /https?:\/\/(?:drive|docs)\.google\.com\/[^\s<>"')\]]+/i,
+    /https?:\/\/(?:www\.)?dropbox\.com\/[^\s<>"')\]]+/i,
+    /https?:\/\/(?:www\.)?box\.com\/[^\s<>"')\]]+/i,
+    /https?:\/\/we\.tl\/[^\s<>"')\]]+/i,
+    /https?:\/\/(?:www\.)?mediafire\.com\/[^\s<>"')\]]+/i,
+    /https?:\/\/(?:www\.)?icloud\.com\/[^\s<>"')\]]+/i,
+  ];
+
+  for (const re of draftHostPatterns) {
+    const m = text.match(re);
+    if (m) {
+      return { draftLink: m[0].trim(), videoLink: null };
+    }
+  }
+
+  const tiktok = text.match(
+    /(https?:\/\/(?:www\.)?tiktok\.com\/@[^\s/]+\/video\/\d+)/i
+  );
+  if (tiktok) {
+    return { draftLink: null, videoLink: tiktok[1] };
+  }
+
+  return { draftLink: null, videoLink: null };
+}
 import {
   buildActionMessageId,
   buildTraceIdFromInboundMessageId,
@@ -438,12 +469,9 @@ async function applyDecision(decision, event, executions) {
     }
 
     if (!videoLink && !draftLink && event.body_text) {
-      const m = event.body_text.match(
-        /(https?:\/\/www\.tiktok\.com\/@[^\s/]+\/video\/\d+)/
-      );
-      if (m) {
-        videoLink = m[1];
-      }
+      const parsed = extractLinksFromEmailBody(event.body_text);
+      if (parsed.draftLink) draftLink = parsed.draftLink;
+      if (parsed.videoLink) videoLink = parsed.videoLink;
     }
 
     const payload = {
@@ -677,8 +705,30 @@ ${influencerAgentBasePrompt}
   - published → published：广告主已通过草稿后，红人提交最终发布视频链接（仅更新 videoLink，不改变 stage 语义）
 - **禁止**将 newStage 设为 pending_sample、pending_draft、published（从非 published 进入）、quote_rejected。
 - 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
-- 电商 campaign 在 quote_submitted 阶段收集寄样信息：填写 shippingInfo，**newStage 保持 quote_submitted**，不要设为 pending_sample。
 - 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
+- draftLink 可以是 TikTok、Google Drive、Dropbox、Box、WeTransfer、MediaFire、iCloud 等任意可访问链接；从正文/附件识别到链接时务必填入 draftLink（published 阶段交最终稿除外，才用 videoLink）。
+
+【报价阶段 · 与红人沟通的纪律（极其重要）】
+- 判断品牌是否已同意报价：看 activeExecutions[].lastEvent.quoteApprovedAt 是否存在。不存在则一律视为**品牌尚未确认**。
+- 当你将 newStage 设为 quote_submitted（红人接受邀约价或给出 counter 报价）时：
+  - **必须**同时返回 outboundEmails，礼貌回复红人；
+  - 正文必须说明：你已将其报价/意向**同步给品牌方**，**正在等待品牌确认**，确认后会再联系；请红人暂时**不要**开始制作素材；
+  - **禁止**使用 confirmed / approved / let's proceed / move forward / start creating / start filming / shipping address 等暗示合作已定的表述；
+  - **禁止**在此阶段填写 shippingInfo 或向红人索取寄样地址（寄样地址仅在品牌同意报价后、由系统 followup 另行处理）。
+- 当 lastEvent.quoteApprovedAt **不存在**时，无论 stage 为何，**禁止**在 outboundEmails 中确认合作、催促交稿/拍摄、或索取寄样信息。
+- 讨论素材草稿、提交 draftLink 的前提是 lastEvent.quoteApprovedAt 存在（pending_draft / pending_sample / draft_submitted 均可收到草稿，见下方草稿阶段纪律）。
+
+【草稿阶段 · 与红人沟通的纪律（极其重要）】
+- 前提：lastEvent.quoteApprovedAt 必须存在；否则禁止处理 draftLink 或在 outboundEmails 中讨论交稿/发布。
+- 红人提交 draftLink 时（含改稿后再交）：
+  - **必须**同时返回 outboundEmails；
+  - 正文须说明：已收到草稿、已转品牌方审核、请等待反馈；**必须**提醒在收到明确通过通知前 **请勿发布**；
+  - **禁止**：draft approved / ready to publish / you can post / looks perfect / go live 等暗示草稿已通过或可以发布的表述。
+- stage 为 pending_draft：newStage 设为 draft_submitted，并填 draftLink。
+- stage 为 draft_submitted（改稿再交）：newStage 保持 draft_submitted，更新 draftLink。
+- stage 为 pending_sample：仍可填 newStage 为 draft_submitted + draftLink；**系统会只保存链接、不改变 stage**；outboundEmails 与正常交稿相同（已转品牌审核、请等待、勿发布），**不要**向红人解释「样品还在路上」等内部流程细节。
+- 只有 stage 为 published 且 lastEvent.draftApprovedAt 存在时，才用 videoLink 表示最终发布视频（不是草稿）。
+
 - newStage 必须是下列之一（不要使用 failed、sample_sent 等已废弃取值）：
   - "pending_quote"
   - "quote_submitted"

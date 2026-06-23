@@ -190,18 +190,30 @@ export async function PATCH(req, { params }) {
         };
         break;
       case "rejectDraft": {
+        const feedback = String(
+          payload.feedback || payload.draftFeedback || ""
+        ).trim();
+        if (!feedback) {
+          return NextResponse.json(
+            { success: false, error: "请填写修改建议 feedback" },
+            { status: 400 }
+          );
+        }
         stage = "draft_submitted";
         const existing = await getExecutionRow(campaignId, influencerId);
         const prevHistory = existing?.lastEvent?.revisionHistory || [];
         const draftLink = payload.draftLink || existing?.lastEvent?.draftLink;
-        const feedback = payload.feedback || payload.draftFeedback || "";
         lastEvent = {
-          draftFeedback: feedback,
+          draftFeedback: feedback.slice(0, 2000),
           draftLink,
           draftRejectedAt: new Date().toISOString(),
           revisionHistory: [
             ...prevHistory,
-            { draftLink, feedback, rejectedAt: new Date().toISOString() },
+            {
+              draftLink,
+              feedback: feedback.slice(0, 2000),
+              rejectedAt: new Date().toISOString(),
+            },
           ],
         };
         break;

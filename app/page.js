@@ -1849,10 +1849,15 @@ function ExecutionProgressRow({
               type="button"
               disabled={busy}
               onClick={() => {
-                const feedback = window.prompt("修改建议（可选）") ?? "";
+                const feedback = window.prompt("修改建议（必填）") ?? "";
+                const trimmed = feedback.trim();
+                if (!trimmed) {
+                  window.alert("请填写修改建议后再提交");
+                  return;
+                }
                 patchExecution("rejectDraft", username, {
                   draftLink,
-                  feedback,
+                  feedback: trimmed.slice(0, 2000),
                 });
               }}
               style={{

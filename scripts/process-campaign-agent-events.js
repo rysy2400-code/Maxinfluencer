@@ -164,11 +164,15 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     payload,
   });
 
-  const { effectiveStage, skippedStageReason } = resolved;
+  const { effectiveStage, skippedStageReason, draftLinkOnly } = resolved;
 
-  if (skippedStageReason) {
+  if (skippedStageReason && !draftLinkOnly) {
     console.warn(
       `[ProcessCampaignAgentEvents] stage 变更被拦截 (${campaignId}/${influencerId}): ${currentStage} → ${requestedStage}. ${skippedStageReason}`
+    );
+  } else if (draftLinkOnly) {
+    console.log(
+      `[ProcessCampaignAgentEvents] pending_sample 提前交稿 (${campaignId}/${influencerId}): 仅保存 draftLink，stage 保持 ${currentStage}`
     );
   }
 
@@ -213,11 +217,18 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       videoLink = null;
     }
     if (draftLink) {
-      mergedLastEvent = {
-        ...mergedLastEvent,
-        draftLink,
-        draftSubmittedAt: new Date().toISOString(),
-      };
+      const savedAt = new Date().toISOString();
+      mergedLastEvent = resolved.draftLinkOnly
+        ? {
+            ...mergedLastEvent,
+            draftLink,
+            draftLinkSavedAt: savedAt,
+          }
+        : {
+            ...mergedLastEvent,
+            draftLink,
+            draftSubmittedAt: savedAt,
+          };
     }
   } else {
     draftLink = null;
@@ -239,7 +250,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       note: payload.note || "",
       requestedStage,
       effectiveStage,
-      skippedStageReason: skippedStageReason || null,
+      draftLinkOnly: draftLinkOnly || false,
+      skippedStageReason: draftLinkOnly ? null : skippedStageReason || null,
       flatFeeUSD: flatFee,
       videoLink,
       draftLink,

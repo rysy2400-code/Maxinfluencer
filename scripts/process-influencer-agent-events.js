@@ -4,7 +4,7 @@
  * 职责（MVP）：
  * - 处理 first_outreach 事件：调用 sendOutreach 发首封邀约邮件；
  * - 处理 outbound_email 事件：根据 payload 中的信息直接发邮件给红人，并写入对话记忆表。
- * - 处理 advertiser_execution_followup：广告主 Portal 操作（同意价格/寄样/草稿）后的跟进邮件。
+ * - 处理 advertiser_execution_followup：广告主 Portal 操作（同意/拒绝/还价价格、寄样、草稿）后的跟进邮件。
  *
  * 使用方式（示例）：
  *   node scripts/process-influencer-agent-events.js
@@ -534,6 +534,8 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     currency: payload.currency || "USD",
     draftLink: payload.draftLink || null,
     draftFeedback: payload.draftFeedback || null,
+    counterOffer: payload.counterOffer || null,
+    counterReason: payload.counterReason || null,
     conversationHistory,
     influencer,
   });
