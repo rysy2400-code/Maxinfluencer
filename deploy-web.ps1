@@ -191,16 +191,17 @@ try {
   $env:NODE_OPTIONS = $prevNodeOpts
 }
 
-Write-Host "[deploy-web] starting maxin-web (ensure script: pm2 or detached next)..."
+Write-Host "[deploy-web] starting maxin-web (force pm2 restart after build)..."
 Stop-OrphanNextOnPort80
-$ensureScript = Join-Path $Root "scripts\ensure-maxin-web.ps1"
-if (-not (Test-Path $ensureScript)) {
-  throw "ensure script missing: $ensureScript"
-}
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ensureScript
+try {
+  pm2 delete maxin-web 2>$null | Out-Null
+} catch {}
+Start-Sleep -Seconds 2
+pm2 start $ecosystemPath --only maxin-web --update-env
 if ($LASTEXITCODE -ne 0) {
-  throw "ensure-maxin-web failed (exit $LASTEXITCODE). Check logs\ensure-maxin-web.log"
+  throw "pm2 start maxin-web failed (exit $LASTEXITCODE)"
 }
+pm2 save --force 2>$null | Out-Null
 
 Start-Sleep -Seconds 3
 if (-not (Test-Port80Listening)) {

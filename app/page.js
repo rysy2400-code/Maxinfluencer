@@ -1049,6 +1049,46 @@ function partitionAnalyzedCandidates(items) {
   return { recommendedItems, notRecommendedItems };
 }
 
+/** 执行进度阶段内子 Tab（待审核/已拒绝、推荐/不推荐） */
+function ExecutionProgressSubTabs({ tabs, activeKey, onChange }) {
+  if (!tabs.length) return null;
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 6,
+        rowGap: 4,
+        padding: "2px 0 6px",
+      }}
+    >
+      {tabs.map((tab) => {
+        const isActive = tab.key === activeKey;
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => onChange(tab.key)}
+            style={{
+              padding: "3px 10px",
+              borderRadius: 999,
+              border: isActive ? "1px solid #4F46E5" : "1px solid #E5E7EB",
+              backgroundColor: isActive ? "#EEF2FF" : "#FFFFFF",
+              color: isActive ? "#3730A3" : "#4B5563",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+          >
+            {tab.label}（{tab.count}）
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** 执行进度卡片：分析类长文默认两行，可展开；展开后可选 Markdown（sanitize） */
 function executionProgressCollapsibleText(raw) {
   if (raw == null || raw === "") return "—";
@@ -1977,6 +2017,8 @@ export default function HomePage() {
   const [executionExportingStage, setExecutionExportingStage] = useState(null); // 正在导出的执行阶段 key
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
+  const [activeAnalyzedSubTab, setActiveAnalyzedSubTab] = useState("recommended"); // 已分析子 Tab
+  const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
   const pendingFocusExecutionUsernameRef = useRef(null);
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
@@ -2361,6 +2403,22 @@ export default function HomePage() {
     }, 120);
     return () => window.clearTimeout(timer);
   }, [activeExecutionStage, binComputerView, executionStatus]);
+
+  useEffect(() => {
+    if (activeExecutionStage === "analyzed") {
+      setActiveAnalyzedSubTab("recommended");
+    } else if (activeExecutionStage === "pendingPrice") {
+      setActivePendingPriceSubTab("pending");
+    }
+  }, [activeExecutionStage]);
+
+  useEffect(() => {
+    if (activePendingPriceSubTab !== "rejected") return;
+    const rejectedCount = (executionStatus?.columns?.pendingPrice || []).filter(
+      (item) => item?.stage === "quote_rejected"
+    ).length;
+    if (rejectedCount === 0) setActivePendingPriceSubTab("pending");
+  }, [activePendingPriceSubTab, executionStatus]);
 
   useEffect(() => {
     setAnalyzedCandidatesItems([]);
@@ -6735,10 +6793,10 @@ export default function HomePage() {
                   const stageDefsAll = [
                     {
                       key: "analyzed",
-                      title: "已分析",
+                      title: "已分析红人",
                       items: analyzedCandidatesItems,
                     },
-                    { key: "contacted", title: "已联系", items: cols.contacted || [] },
+                    { key: "contacted", title: "待红人报价", items: cols.contacted || [] },
                     { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
                     { key: "pendingSample", title: "待寄样品", items: cols.pendingSample || [] },
                     { key: "pendingDraft", title: "待审核草稿", items: cols.pendingDraft || [] },
@@ -6760,6 +6818,32 @@ export default function HomePage() {
                     currentStage.key === "pendingPrice"
                       ? partitionPendingPriceItems(currentItems)
                       : { pendingReviewItems: [], rejectedItems: [] };
+                  const pendingPriceSubTabs = [
+                    { key: "pending", label: "待审核", count: pendingReviewItems.length },
+                    ...(rejectedItems.length > 0
+                      ? [{ key: "rejected", label: "已拒绝", count: rejectedItems.length }]
+                      : []),
+                  ];
+                  const analyzedSubTabs = [
+                    {
+                      key: "recommended",
+                      label: "推荐",
+                      count:
+                        analyzedDbRecommendedCount != null
+                          ? analyzedDbRecommendedCount
+                          : "…",
+                    },
+                    {
+                      key: "notRecommended",
+                      label: "不推荐",
+                      count:
+                        analyzedDbNotRecommendedCount != null
+                          ? analyzedDbNotRecommendedCount
+                          : "…",
+                    },
+                  ];
+                  const showExecutionSubTabs =
+                    currentStage.key === "analyzed" || currentStage.key === "pendingPrice";
 
                   // 工作笔记：来自执行节奏 + 汇报配置
                   const config = executionConfig;
@@ -7097,19 +7181,6 @@ export default function HomePage() {
                                     </button>
                                   );
                                 })}
-                                {analyzedDbRecommendedCount != null &&
-                                analyzedDbNotRecommendedCount != null ? (
-                                  <span
-                                    style={{
-                                      fontSize: 11,
-                                      color: "#6B7280",
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    全库推荐 {analyzedDbRecommendedCount} · 全库不推荐{" "}
-                                    {analyzedDbNotRecommendedCount}
-                                  </span>
-                                ) : null}
                                 {EXECUTION_EXPORTABLE_STAGES.has(currentStage.key) ? (
                                   <button
                                     type="button"
@@ -7145,6 +7216,26 @@ export default function HomePage() {
                                   </button>
                                 ) : null}
                               </div>
+
+                              {showExecutionSubTabs ? (
+                                <ExecutionProgressSubTabs
+                                  tabs={
+                                    currentStage.key === "analyzed"
+                                      ? analyzedSubTabs
+                                      : pendingPriceSubTabs
+                                  }
+                                  activeKey={
+                                    currentStage.key === "analyzed"
+                                      ? activeAnalyzedSubTab
+                                      : activePendingPriceSubTab
+                                  }
+                                  onChange={
+                                    currentStage.key === "analyzed"
+                                      ? setActiveAnalyzedSubTab
+                                      : setActivePendingPriceSubTab
+                                  }
+                                />
+                              ) : null}
 
                               {/* 当前阶段的红人卡片列表 */}
                               <div
@@ -7202,51 +7293,30 @@ export default function HomePage() {
                                   </div>
                                 ) : currentStage.key === "analyzed" ? (
                                   <>
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: "#6B7280",
-                                        padding: "4px 2px 2px",
-                                        letterSpacing: 0.02,
-                                      }}
-                                    >
-                                      推荐（{recommendedItems.length}）
-                                    </div>
-                                    {recommendedItems.length === 0 ? (
-                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
-                                        暂无
-                                      </div>
-                                    ) : (
-                                      recommendedItems.map((item) => (
-                                        <ExecutionProgressRow
-                                          key={
-                                            item.candidateRowId != null
-                                              ? `analyzed-${item.candidateRowId}`
-                                              : item.id
-                                          }
-                                          stageKey="analyzed"
-                                          item={item}
-                                          needSample={needSampleFlag}
-                                          execPatchingId={execPatchingId}
-                                          patchExecution={patchExecution}
-                                          executionUsernameSet={executionUsernameSet}
-                                          highlightUsername={highlightExecutionUsername}
-                                        />
-                                      ))
-                                    )}
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: "#6B7280",
-                                        padding: "10px 2px 2px",
-                                        letterSpacing: 0.02,
-                                      }}
-                                    >
-                                      不推荐（{notRecommendedItems.length}）
-                                    </div>
-                                    {notRecommendedItems.length === 0 ? (
+                                    {activeAnalyzedSubTab === "recommended" ? (
+                                      recommendedItems.length === 0 ? (
+                                        <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                          暂无
+                                        </div>
+                                      ) : (
+                                        recommendedItems.map((item) => (
+                                          <ExecutionProgressRow
+                                            key={
+                                              item.candidateRowId != null
+                                                ? `analyzed-${item.candidateRowId}`
+                                                : item.id
+                                            }
+                                            stageKey="analyzed"
+                                            item={item}
+                                            needSample={needSampleFlag}
+                                            execPatchingId={execPatchingId}
+                                            patchExecution={patchExecution}
+                                            executionUsernameSet={executionUsernameSet}
+                                            highlightUsername={highlightExecutionUsername}
+                                          />
+                                        ))
+                                      )
+                                    ) : notRecommendedItems.length === 0 ? (
                                       <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
                                         暂无
                                       </div>
@@ -7290,47 +7360,26 @@ export default function HomePage() {
                                   </>
                                 ) : currentStage.key === "pendingPrice" ? (
                                   <>
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: "#6B7280",
-                                        padding: "4px 2px 2px",
-                                        letterSpacing: 0.02,
-                                      }}
-                                    >
-                                      待审核（{pendingReviewItems.length}）
-                                    </div>
-                                    {pendingReviewItems.length === 0 ? (
-                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
-                                        暂无
-                                      </div>
-                                    ) : (
-                                      pendingReviewItems.map((item) => (
-                                        <ExecutionProgressRow
-                                          key={item.id}
-                                          stageKey="pendingPrice"
-                                          item={item}
-                                          needSample={needSampleFlag}
-                                          execPatchingId={execPatchingId}
-                                          patchExecution={patchExecution}
-                                          executionUsernameSet={executionUsernameSet}
-                                          highlightUsername={highlightExecutionUsername}
-                                        />
-                                      ))
-                                    )}
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: "#6B7280",
-                                        padding: "10px 2px 2px",
-                                        letterSpacing: 0.02,
-                                      }}
-                                    >
-                                      已拒绝（{rejectedItems.length}）
-                                    </div>
-                                    {rejectedItems.length === 0 ? (
+                                    {activePendingPriceSubTab === "pending" ? (
+                                      pendingReviewItems.length === 0 ? (
+                                        <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                          暂无
+                                        </div>
+                                      ) : (
+                                        pendingReviewItems.map((item) => (
+                                          <ExecutionProgressRow
+                                            key={item.id}
+                                            stageKey="pendingPrice"
+                                            item={item}
+                                            needSample={needSampleFlag}
+                                            execPatchingId={execPatchingId}
+                                            patchExecution={patchExecution}
+                                            executionUsernameSet={executionUsernameSet}
+                                            highlightUsername={highlightExecutionUsername}
+                                          />
+                                        ))
+                                      )
+                                    ) : rejectedItems.length === 0 ? (
                                       <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
                                         暂无
                                       </div>
