@@ -36,6 +36,10 @@ import {
 } from "../lib/campaign/execution-ui-status.js";
 import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
 import {
+  countPendingPriceReviewItems,
+  partitionPendingPriceItems,
+} from "../lib/execution/pending-price-items.js";
+import {
   isChatVisibleMessage,
   mergeSessionMessages,
   normalizeSessionMessagesForStorage,
@@ -6752,6 +6756,10 @@ export default function HomePage() {
                     currentStage.key === "analyzed"
                       ? partitionAnalyzedCandidates(currentItems)
                       : { recommendedItems: [], notRecommendedItems: [] };
+                  const { pendingReviewItems, rejectedItems } =
+                    currentStage.key === "pendingPrice"
+                      ? partitionPendingPriceItems(currentItems)
+                      : { pendingReviewItems: [], rejectedItems: [] };
 
                   // 工作笔记：来自执行节奏 + 汇报配置
                   const config = executionConfig;
@@ -7067,6 +7075,8 @@ export default function HomePage() {
                                       ? analyzedCandidatesTotal != null
                                         ? String(analyzedCandidatesTotal)
                                         : "…"
+                                      : stage.key === "pendingPrice"
+                                      ? String(countPendingPriceReviewItems(stage.items))
                                       : String(stage.items.length);
                                   return (
                                     <button
@@ -7277,6 +7287,67 @@ export default function HomePage() {
                                         加载更多中…
                                       </div>
                                     ) : null}
+                                  </>
+                                ) : currentStage.key === "pendingPrice" ? (
+                                  <>
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        color: "#6B7280",
+                                        padding: "4px 2px 2px",
+                                        letterSpacing: 0.02,
+                                      }}
+                                    >
+                                      待审核（{pendingReviewItems.length}）
+                                    </div>
+                                    {pendingReviewItems.length === 0 ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        暂无
+                                      </div>
+                                    ) : (
+                                      pendingReviewItems.map((item) => (
+                                        <ExecutionProgressRow
+                                          key={item.id}
+                                          stageKey="pendingPrice"
+                                          item={item}
+                                          needSample={needSampleFlag}
+                                          execPatchingId={execPatchingId}
+                                          patchExecution={patchExecution}
+                                          executionUsernameSet={executionUsernameSet}
+                                          highlightUsername={highlightExecutionUsername}
+                                        />
+                                      ))
+                                    )}
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        color: "#6B7280",
+                                        padding: "10px 2px 2px",
+                                        letterSpacing: 0.02,
+                                      }}
+                                    >
+                                      已拒绝（{rejectedItems.length}）
+                                    </div>
+                                    {rejectedItems.length === 0 ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        暂无
+                                      </div>
+                                    ) : (
+                                      rejectedItems.map((item) => (
+                                        <ExecutionProgressRow
+                                          key={item.id}
+                                          stageKey="pendingPrice"
+                                          item={item}
+                                          needSample={needSampleFlag}
+                                          execPatchingId={execPatchingId}
+                                          patchExecution={patchExecution}
+                                          executionUsernameSet={executionUsernameSet}
+                                          highlightUsername={highlightExecutionUsername}
+                                        />
+                                      ))
+                                    )}
                                   </>
                                 ) : (
                                   currentItems.map((item) => (
