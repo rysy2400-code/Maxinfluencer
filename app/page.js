@@ -6979,9 +6979,11 @@ export default function HomePage() {
                                       ? "已暂停"
                                       : config?.status === "completed"
                                         ? "已完成"
-                                        : config?.status === "running"
-                                          ? "进行中"
-                                          : "尚未获取")}
+                                        : config?.status === "running_passive"
+                                          ? "只按名单分析联系红人"
+                                          : config?.status === "running"
+                                            ? "自主分析联系红人"
+                                            : "尚未获取")}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>汇报频率：</span>

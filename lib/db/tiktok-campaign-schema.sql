@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign (
   keyword_strategy TEXT NULL COMMENT '用户关键词策略（简短文本，供关键词生成参考）',
 
   influencers_per_day INT NOT NULL DEFAULT 5 COMMENT '每天联系红人数量',
-  status ENUM('draft','running','paused','completed','deleted') NOT NULL DEFAULT 'running' COMMENT 'Campaign 状态',
+  status ENUM('draft','running','running_passive','paused','completed','deleted') NOT NULL DEFAULT 'running' COMMENT 'Campaign 状态：running=自主寻源；running_passive=仅名单',
+  status_before_pause ENUM('running','running_passive') NULL COMMENT 'pause 前的活跃态，resume 时恢复',
   deleted_at DATETIME NULL COMMENT '软删除时间',
   deleted_by VARCHAR(64) NULL COMMENT '删除操作者（user/agent/system）',
   delete_reason VARCHAR(255) NULL COMMENT '删除原因',

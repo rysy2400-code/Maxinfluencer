@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCampaignById } from "../../../../../lib/db/campaign-dao.js";
 import { getReportConfigByCampaignId } from "../../../../../lib/db/campaign-report-config-dao.js";
 import { buildCampaignWorkNotesSummary } from "../../../../../lib/campaign/format-work-notes-summary.js";
+import { CAMPAIGN_STATUS_WORK_NOTES_LABEL } from "../../../../../lib/campaign/campaign-status.js";
 import { CAMPAIGN_STATUS_UI_LABEL } from "../../../../../lib/tools/campaign-execution/campaign-execution-tools.js";
 
 /**
@@ -30,7 +31,10 @@ export async function GET(req, { params }) {
     const ip = campaign.influencerProfile || {};
 
     const status = campaign.status || "running";
-    const statusLabel = CAMPAIGN_STATUS_UI_LABEL[status] || status;
+    const statusLabel =
+      CAMPAIGN_STATUS_UI_LABEL[status] ||
+      CAMPAIGN_STATUS_WORK_NOTES_LABEL[status] ||
+      status;
 
     return NextResponse.json({
       success: true,

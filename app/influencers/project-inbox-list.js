@@ -27,6 +27,7 @@ const STAGE_LABEL = {
 
 const STATUS_LABEL = {
   running: "进行中",
+  running_passive: "进行中",
   paused: "已暂停",
   completed: "已结项",
 };
