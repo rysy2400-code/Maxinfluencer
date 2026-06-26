@@ -6948,7 +6948,15 @@ export default function HomePage() {
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>交付结果：</span>
-                                  {campaignSummary?.deliverables ?? "未设置"}
+                                  <span
+                                    style={{
+                                      whiteSpace: campaignSummary?.deliverables
+                                        ? "pre-wrap"
+                                        : undefined,
+                                    }}
+                                  >
+                                    {campaignSummary?.deliverables ?? "未设置"}
+                                  </span>
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
