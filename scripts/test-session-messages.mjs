@@ -7,6 +7,7 @@ import {
   normalizeSessionMessagesForStorage,
   sanitizeMessageForStorage,
   sortSessionMessagesByTime,
+  trimMessagesBeforeSessionCreated,
 } from "../lib/chat/session-messages.js";
 
 const placeholder = {
@@ -158,6 +159,57 @@ test("sort: new timed messages appear after legacy block (SHEGLAM-style)", () =>
   assert.equal(sorted[1].content, legacy[1].content);
   assert.equal(sorted[2].content, timed[0].content);
   assert.equal(sorted[sorted.length - 1].content, timed[1].content);
+});
+
+test("merge with sessionCreatedAt blocks cross-campaign bulk contamination", () => {
+  const welcome = {
+    role: "assistant",
+    name: "Bin",
+    content: "您好，我是Bin，告诉我您想推广的产品链接",
+  };
+  const remote = [welcome];
+  const hailuoBulk = Array.from({ length: 8 }, (_, i) => ({
+    role: i % 2 === 0 ? "user" : "assistant",
+    name: i % 2 === 0 ? undefined : "Bin",
+    content: `hailuo history ${i}`,
+    createdAt: `2026-06-11T10:0${i}:00.000Z`,
+  }));
+  const vastUser = {
+    role: "user",
+    content: "tripo3d.ai",
+    createdAt: "2026-06-26T08:31:44.702Z",
+  };
+  const local = [welcome, ...hailuoBulk, vastUser];
+  const merged = mergeSessionMessages(local, remote, {
+    sessionCreatedAt: "2026-06-26T08:25:01.000Z",
+  });
+  assert.equal(merged.some((m) => String(m.content).startsWith("hailuo history")), false);
+  assert.equal(merged.some((m) => m.content === vastUser.content), true);
+});
+
+test("trimMessagesBeforeSessionCreated removes pre-session foreign history", () => {
+  const welcome = {
+    role: "assistant",
+    name: "Bin",
+    content: "您好，我是Bin，告诉我您想推广的产品链接",
+  };
+  const foreign = {
+    role: "user",
+    content: "https://hailuoai.video/",
+    createdAt: "2026-06-11T10:01:23.289Z",
+  };
+  const own = {
+    role: "user",
+    content: "tripo3d.ai",
+    createdAt: "2026-06-26T08:31:44.702Z",
+  };
+  const trimmed = trimMessagesBeforeSessionCreated(
+    [welcome, foreign, own],
+    "2026-06-26T08:25:01.000Z"
+  );
+  assert.equal(trimmed.some((m) => m.content === foreign.content), false);
+  assert.equal(trimmed.some((m) => m.content === own.content), true);
+  assert.equal(trimmed.some((m) => m.content === welcome.content), true);
 });
 
 test("sort: all-timestamp session stays chronological", () => {

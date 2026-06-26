@@ -50,11 +50,8 @@ export function sessionScopedKey(baseKey, sessionId) {
 
 export function readSessionScopedItem(baseKey, sessionId) {
   const sid = String(sessionId || "").trim();
-  if (sid) {
-    const scoped = readTabItem(sessionScopedKey(baseKey, sid));
-    if (scoped) return scoped;
-  }
-  return readTabItem(baseKey);
+  if (!sid) return null;
+  return readTabItem(sessionScopedKey(baseKey, sid));
 }
 
 export function writeSessionScopedItem(baseKey, sessionId, value) {

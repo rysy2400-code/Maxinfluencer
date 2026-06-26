@@ -595,7 +595,8 @@ async function fetchSessionBundleFromServer(sessionId) {
     : cloneWelcomeMessages();
   const normalized = stripNonChatMessages(sortSessionMessagesByTime(loadedMessages));
   const loadedContext = data.session.context || { workflowState: "idle" };
-  return { messages: normalized, context: loadedContext };
+  const createdAt = data.session.createdAt || null;
+  return { messages: normalized, context: loadedContext, createdAt };
 }
 
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
@@ -1974,6 +1975,8 @@ export default function HomePage() {
   const currentSessionIdRef = useRef(null);
   /** messages/context 当前绑定的 sessionId，须与 currentSessionId 一致才允许发送/保存 */
   const messagesBoundSessionIdRef = useRef(null);
+  /** 当前会话 createdAt（ISO），供 merge 阻断跨 Campaign 误入 */
+  const currentSessionCreatedAtRef = useRef(null);
   /** 切换 Campaign 进行中，禁止发送以免串会话 */
   const sessionSwitchingRef = useRef(false);
   /** 进行中的聊天回合草稿（sessionId + messages），切换 Campaign 后仍保存到发起会话 */
@@ -2782,9 +2785,14 @@ export default function HomePage() {
         const remote = data.session?.messages;
         if (!Array.isArray(remote)) return;
         if (messagesBoundSessionIdRef.current !== sessionId) return;
+        const sessionCreatedAt = currentSessionCreatedAtRef.current;
         setMessages((prev) => {
           if (messagesBoundSessionIdRef.current !== sessionId) return prev;
-          return stripNonChatMessages(mergeSessionMessages(prev, remote));
+          return stripNonChatMessages(
+            mergeSessionMessages(prev, remote, {
+              sessionCreatedAt: sessionCreatedAt || undefined,
+            })
+          );
         });
       } catch (e) {
         console.warn("[HomePage] 轮询会话消息失败:", e);
@@ -2955,6 +2963,7 @@ export default function HomePage() {
               : cloneWelcomeMessages();
           setMessages(normalized);
           messagesBoundSessionIdRef.current = currentSessionId;
+          currentSessionCreatedAtRef.current = data.session.createdAt || null;
           forceScrollToBottomRef.current = true;
           shouldAutoScrollRef.current = true;
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
@@ -3121,7 +3130,9 @@ export default function HomePage() {
           const latestData = await latestRes.json().catch(() => ({}));
           if (latestRes.ok && latestData.success && Array.isArray(latestData.session?.messages)) {
             messagesToPersist = normalizeSessionMessagesForStorage(
-              mergeSessionMessages(messagesForSave, latestData.session.messages)
+              mergeSessionMessages(messagesForSave, latestData.session.messages, {
+                sessionCreatedAt: latestData.session.createdAt || undefined,
+              })
             );
           }
         } catch (mergeErr) {
@@ -3553,6 +3564,7 @@ export default function HomePage() {
       const bundle = await fetchSessionBundleFromServer(currentSessionId);
       setMessages(bundle.messages);
       messagesBoundSessionIdRef.current = currentSessionId;
+      currentSessionCreatedAtRef.current = bundle.createdAt || null;
       forceScrollToBottomRef.current = true;
       shouldAutoScrollRef.current = true;
       rememberSessionPersistBaseline(
@@ -3646,16 +3658,16 @@ export default function HomePage() {
     let chatContext = context;
     let baseMessages = messages;
 
-    if (sessionIdForChat && messagesBoundSessionIdRef.current !== sessionIdForChat) {
-      console.warn(
-        "[HomePage] 发送前 messages 与当前 Campaign 不一致，从服务端同步后再发送"
-      );
+    if (sessionIdForChat) {
       try {
         const bundle = await fetchSessionBundleFromServer(sessionIdForChat);
         baseMessages = bundle.messages;
         chatContext = bundle.context;
-        setMessages(baseMessages);
-        setContext(chatContext);
+        currentSessionCreatedAtRef.current = bundle.createdAt || null;
+        if (messagesBoundSessionIdRef.current !== sessionIdForChat) {
+          setMessages(baseMessages);
+          setContext(chatContext);
+        }
         messagesBoundSessionIdRef.current = sessionIdForChat;
         rememberSessionPersistBaseline(
           sessionPersistSnapshotRef,
@@ -4823,12 +4835,14 @@ export default function HomePage() {
     }
     setCurrentSessionId(createData.session.id);
     messagesBoundSessionIdRef.current = createData.session.id;
-    const nextMessages = createData.session.messages || defaultMessage;
-    const nextContext = createData.session.context || { workflowState: "idle" };
     if (currentSessionId) {
       inputDraftBySessionRef.current.set(currentSessionId, input);
       pendingAttachmentsBySessionRef.current.set(currentSessionId, pendingChatAttachments);
     }
+    const bundle = await fetchSessionBundleFromServer(createData.session.id);
+    const nextMessages = bundle.messages;
+    const nextContext = bundle.context;
+    currentSessionCreatedAtRef.current = bundle.createdAt || createData.session.createdAt || null;
     setMessages(nextMessages);
     setContext(nextContext);
     setPendingChatAttachments([]);
@@ -4921,6 +4935,7 @@ export default function HomePage() {
       setMessages(normalized);
       setContext(loadedContext);
       messagesBoundSessionIdRef.current = sessionId;
+      currentSessionCreatedAtRef.current = data.session.createdAt || null;
       setPendingChatAttachments(
         pendingAttachmentsBySessionRef.current.get(sessionId) || []
       );
