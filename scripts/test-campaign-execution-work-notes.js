@@ -46,6 +46,7 @@ function buildWorkNotesView(campaign, reportConfig) {
     totalBudget: summary.totalBudget,
     commission: summary.commission,
     pricingStrategy: summary.pricingStrategy,
+    deliverables: summary.deliverables,
     followerRange: summary.followerRange,
     viewRange: summary.viewRange,
     accountType: summary.accountType,
@@ -117,6 +118,15 @@ const CASES = [
     verify: (c) => {
       const p = c.campaignInfo?.influencerPricing;
       return p && Number(p.ecpmUsd) === 5 && Number(p.maxFlatFeeUsd) === 800;
+    },
+  },
+  {
+    id: "deliverables",
+    message: "交付结果改为 2 条专属视频，Bio 链接保留 30 天",
+    expectTool: "modify_campaign",
+    verify: (c) => {
+      const d = c.campaignInfo?.deliverables;
+      return typeof d === "string" && d.includes("2") && d.includes("30");
     },
   },
   {

@@ -6947,6 +6947,10 @@ export default function HomePage() {
                                   {campaignSummary?.pricingStrategy ?? "未设置"}
                                 </div>
                                 <div style={{ marginBottom: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>交付结果：</span>
+                                  {campaignSummary?.deliverables ?? "未设置"}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
                                   <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
                                   {profileFollower || "未设置"}
                                 </div>
