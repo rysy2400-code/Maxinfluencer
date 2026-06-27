@@ -73,6 +73,26 @@ if (formatCountryForDisplay(null) !== null || formatCountryForDisplay("") !== nu
   failed += 1;
 }
 
+const modifyPathFix = enrichCampaignInfoCountryFields({
+  region: ["美国", "德国"],
+  platform: "Instagram",
+});
+if (JSON.stringify(modifyPathFix.countries) !== '["US","DE"]') {
+  console.error("FAIL enrich after modify (no stale countries)", modifyPathFix.countries);
+  failed += 1;
+}
+if (
+  JSON.stringify(
+    resolveAllowedCountriesFromCampaign({
+      region: ["美国", "德国"],
+      countries: ["AU"],
+    })
+  ) !== '["AU"]'
+) {
+  console.error("FAIL resolve should prefer persisted countries ISO");
+  failed += 1;
+}
+
 console.log(
   failed === 0
     ? "test-campaign-country-codes: OK"

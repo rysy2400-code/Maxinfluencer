@@ -12,6 +12,7 @@ import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import {
   enrichCampaignInfoCountryFields,
   primaryRegionIsoFromCampaignInfo,
+  normalizeAllowedCountries,
   resolveAllowedCountriesFromCampaign,
 } from "../lib/influencer/campaign-country-codes.js";
 
@@ -47,8 +48,12 @@ async function main() {
   for (const row of rows || []) {
     const id = row.id;
     const info = parseJson(row.campaign_info) || {};
-    const beforeCountries = resolveAllowedCountriesFromCampaign(info, null);
-    const enriched = enrichCampaignInfoCountryFields(info);
+    const storedCountries = normalizeAllowedCountries(info?.countries);
+    // region 为展示源；历史数据可能 region 已扩多国但 countries 仍留旧 ISO，迁移时以 region 重算
+    const enriched = enrichCampaignInfoCountryFields({
+      ...info,
+      countries: undefined,
+    });
     const afterCountries = resolveAllowedCountriesFromCampaign(enriched, null);
 
     if (!afterCountries.length) {
@@ -58,7 +63,7 @@ async function main() {
     }
 
     const same =
-      JSON.stringify(beforeCountries) === JSON.stringify(afterCountries) &&
+      JSON.stringify(storedCountries) === JSON.stringify(afterCountries) &&
       String(row.region || "").toUpperCase() === afterCountries[0];
 
     if (same) {
@@ -68,7 +73,7 @@ async function main() {
 
     const regionIso = primaryRegionIsoFromCampaignInfo(enriched);
     console.log(
-      `  ${id}: region列 ${row.region} → ${regionIso}, countries ${JSON.stringify(beforeCountries)} → ${JSON.stringify(afterCountries)}, region展示保留 ${JSON.stringify(enriched.region)}`
+      `  ${id}: region列 ${row.region} → ${regionIso}, countries ${JSON.stringify(storedCountries)} → ${JSON.stringify(afterCountries)}, region展示保留 ${JSON.stringify(enriched.region)}`
     );
 
     if (!dryRun) {
