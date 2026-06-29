@@ -228,6 +228,19 @@ async function hasInflightForPlatform(platformSlug, platformWorkerId) {
 
 const PENDING_CLAIM_SCAN_LIMIT = 40;
 
+/** 有 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
+async function hasPendingImportTask() {
+  const rows = await queryTikTok(
+    `
+    SELECT id FROM tiktok_influencer_import_task
+    WHERE status = 'pending'
+    LIMIT 1
+  `,
+    []
+  );
+  return Boolean(rows?.[0]);
+}
+
 /**
  * @param {'tiktok'|'instagram'|'youtube'} platformSlug
  * @param {string} platformWorkerId
@@ -236,6 +249,7 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
   const slots = resolveSearchWorkerSlots();
   if (await hasInflightForPlatform(platformSlug, platformWorkerId)) return null;
   if ((await countProcessingOnWorkerIp()) >= slots) return null;
+  if (await hasPendingImportTask()) return null;
 
   // mysql2 预处理不支持 LIMIT ?（ER_WRONG_ARGUMENTS），limit 为常量整数
   const rows = await queryTikTok(
