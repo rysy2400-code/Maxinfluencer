@@ -713,9 +713,10 @@ async function claimOnePendingImportTask() {
   const slots = resolveSearchWorkerSlots();
   if ((await countProcessingOnWorkerIp()) >= slots) return null;
 
+  // 勿在 ORDER BY 扫描中带 payload（大名单 JSON 会触发 Out of sort memory）
   const rows = await queryTikTok(
     `
-    SELECT id, campaign_id, session_id, import_batch_id, payload,
+    SELECT id, campaign_id, session_id, import_batch_id,
            skipped_duplicate_count, parse_error_count
     FROM tiktok_influencer_import_task
     WHERE status = 'pending'
@@ -743,9 +744,13 @@ async function claimOnePendingImportTask() {
       [IMPORT_WORKER_ID, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, row.id]
     );
     if (updateResult && Number(updateResult.affectedRows || 0) > 0) {
+      const payloadRows = await queryTikTok(
+        `SELECT payload FROM tiktok_influencer_import_task WHERE id = ? LIMIT 1`,
+        [row.id]
+      );
       return {
         ...row,
-        payload: parseJsonOrObject(row.payload) || {},
+        payload: parseJsonOrObject(payloadRows?.[0]?.payload) || {},
       };
     }
   }
