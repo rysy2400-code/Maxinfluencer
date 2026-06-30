@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findForeignBlockStart } from "../scripts/clean-session-foreign-messages.js";
+import { findForeignBlockStart } from "../lib/chat/session-messages.js";
 
 test("findForeignBlockStart locates ribbi block after hailuo messages", () => {
   const messages = [

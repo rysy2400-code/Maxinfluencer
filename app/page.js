@@ -46,6 +46,8 @@ import {
   parseMessageTime,
   sortSessionMessagesByTime,
   stripNonChatMessages,
+  stripForeignCampaignBlocks,
+  trimMessagesBeforeSessionCreated,
 } from "../lib/chat/session-messages.js";
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
@@ -542,7 +544,7 @@ const STORAGE_KEY_MESSAGES = TAB_STORAGE_KEYS.MESSAGES;
 const STORAGE_KEY_CONTEXT = TAB_STORAGE_KEYS.CONTEXT;
 const STORAGE_KEY_CURRENT_SESSION_ID = TAB_STORAGE_KEYS.CURRENT_SESSION_ID;
 const STORAGE_KEY_VERSION = TAB_STORAGE_KEYS.VERSION;
-const MESSAGE_VERSION = "v2.3"; // v2.3: messages/context 按 sessionId 分桶，防止跨 Campaign 串对话
+const MESSAGE_VERSION = "v2.4"; // v2.4: 加载/合并时按 session createdAt trim，防跨 Campaign 串对话
 
 function cloneWelcomeMessages() {
   return [
@@ -553,6 +555,19 @@ function cloneWelcomeMessages() {
         "您好，我是Bin，告诉我您想推广的产品链接，我来帮您发布campaign！",
     },
   ];
+}
+
+/** 从 API / 缓存加载后：排序、去占位，并按会话创建时间 / 标题去掉误入的其他 Campaign 历史 */
+function normalizeLoadedSessionMessages(rawMessages, sessionCreatedAt, sessionTitle) {
+  const base = Array.isArray(rawMessages) ? rawMessages : cloneWelcomeMessages();
+  let normalized = stripNonChatMessages(sortSessionMessagesByTime(base));
+  if (sessionTitle) {
+    normalized = stripForeignCampaignBlocks(normalized, sessionTitle);
+  }
+  if (sessionCreatedAt) {
+    normalized = trimMessagesBeforeSessionCreated(normalized, sessionCreatedAt);
+  }
+  return normalized.length > 0 ? normalized : cloneWelcomeMessages();
 }
 
 /** 清除本标签页持久化的聊天状态（换账号登录 / 会话 id 无效时避免沿用他人超长对话导致 POST 创建会话失败） */
@@ -593,10 +608,15 @@ async function fetchSessionBundleFromServer(sessionId) {
   const loadedMessages = Array.isArray(data.session.messages)
     ? data.session.messages
     : cloneWelcomeMessages();
-  const normalized = stripNonChatMessages(sortSessionMessagesByTime(loadedMessages));
-  const loadedContext = data.session.context || { workflowState: "idle" };
   const createdAt = data.session.createdAt || null;
-  return { messages: normalized, context: loadedContext, createdAt };
+  const sessionTitle = data.session.title || null;
+  const normalized = normalizeLoadedSessionMessages(
+    loadedMessages,
+    createdAt,
+    sessionTitle
+  );
+  const loadedContext = data.session.context || { workflowState: "idle" };
+  return { messages: normalized, context: loadedContext, createdAt, title: sessionTitle };
 }
 
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
@@ -2006,6 +2026,7 @@ export default function HomePage() {
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
   const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
   const resolveCampaignRequestRef = useRef(0);
+  const switchSessionRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
   /** 当前 keywordWorkNotes 归属的 campaignId，切换 campaign 时置 null 以防跨 campaign 合并 */
   const keywordWorkNotesCampaignRef = useRef(null);
@@ -2957,13 +2978,15 @@ export default function HomePage() {
           const serverMessages = Array.isArray(data.session.messages)
             ? data.session.messages
             : cloneWelcomeMessages();
-          const normalized =
-            serverMessages.length > 0
-              ? stripNonChatMessages(sortSessionMessagesByTime(serverMessages))
-              : cloneWelcomeMessages();
+          const sessionCreatedAt = data.session.createdAt || null;
+          const normalized = normalizeLoadedSessionMessages(
+            serverMessages.length > 0 ? serverMessages : cloneWelcomeMessages(),
+            sessionCreatedAt,
+            data.session.title || null
+          );
           setMessages(normalized);
           messagesBoundSessionIdRef.current = currentSessionId;
-          currentSessionCreatedAtRef.current = data.session.createdAt || null;
+          currentSessionCreatedAtRef.current = sessionCreatedAt;
           forceScrollToBottomRef.current = true;
           shouldAutoScrollRef.current = true;
           setWorkLiveThinking({ ...EMPTY_WORK_LIVE_THINKING });
@@ -3654,7 +3677,10 @@ export default function HomePage() {
         ? `上传附件：${attachmentList.map((a) => a?.name || "文件").join("、")}`
         : "");
 
-    let sessionIdForChat = currentSessionId;
+    let sessionIdForChat =
+      messagesBoundSessionIdRef.current ||
+      currentSessionIdRef.current ||
+      currentSessionId;
     let chatContext = context;
     let baseMessages = messages;
 
@@ -4863,8 +4889,14 @@ export default function HomePage() {
   // 发布 Campaign：先按需保存当前草稿，再创建并进入新草稿
   const handleCreateNewSession = async () => {
     try {
-      if (currentSessionId && !isEmptyState) {
-        await saveCurrentSession();
+      const prevSessionId = currentSessionIdRef.current || currentSessionId;
+      if (prevSessionId && !isEmptyState) {
+        await saveCurrentSession({
+          sessionId: prevSessionId,
+          messages,
+          context,
+          force: true,
+        });
       }
       await createDraftSessionAndActivate();
     } catch (error) {
@@ -4877,6 +4909,10 @@ export default function HomePage() {
   const handleSwitchSession = async (sessionId, opts = {}) => {
     const skipSave = Boolean(opts.skipSave);
     if (sessionId === currentSessionId) return;
+
+    const reqId = ++switchSessionRequestRef.current;
+    setMessages(cloneWelcomeMessages());
+    messagesBoundSessionIdRef.current = null;
 
     setKeywordWorkNotes([]);
     keywordWorkNotesCampaignRef.current = null;
@@ -4920,6 +4956,7 @@ export default function HomePage() {
     try {
       const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
       const data = await response.json();
+      if (reqId !== switchSessionRequestRef.current) return;
       if (!data.success || !data.session) {
         console.error('[HomePage] 切换会话失败:', data?.error || data);
         return;
@@ -4929,13 +4966,18 @@ export default function HomePage() {
         ? data.session.messages
         : defaultMessage;
       const loadedContext = data.session.context || { workflowState: 'idle' };
-      const normalized = stripNonChatMessages(sortSessionMessagesByTime(loadedMessages));
+      const sessionCreatedAt = data.session.createdAt || null;
+      const normalized = normalizeLoadedSessionMessages(
+        loadedMessages,
+        sessionCreatedAt,
+        data.session.title || null
+      );
 
       setCurrentSessionId(sessionId);
       setMessages(normalized);
       setContext(loadedContext);
       messagesBoundSessionIdRef.current = sessionId;
-      currentSessionCreatedAtRef.current = data.session.createdAt || null;
+      currentSessionCreatedAtRef.current = sessionCreatedAt;
       setPendingChatAttachments(
         pendingAttachmentsBySessionRef.current.get(sessionId) || []
       );
@@ -4959,9 +5001,13 @@ export default function HomePage() {
         });
       }
     } catch (error) {
-      console.error('[HomePage] 切换会话失败:', error);
+      if (reqId === switchSessionRequestRef.current) {
+        console.error('[HomePage] 切换会话失败:', error);
+      }
     } finally {
-      sessionSwitchingRef.current = false;
+      if (reqId === switchSessionRequestRef.current) {
+        sessionSwitchingRef.current = false;
+      }
     }
   };
 

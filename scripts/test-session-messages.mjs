@@ -7,6 +7,7 @@ import {
   normalizeSessionMessagesForStorage,
   sanitizeMessageForStorage,
   sortSessionMessagesByTime,
+  stripForeignCampaignBlocks,
   trimMessagesBeforeSessionCreated,
 } from "../lib/chat/session-messages.js";
 
@@ -185,6 +186,49 @@ test("merge with sessionCreatedAt blocks cross-campaign bulk contamination", () 
   });
   assert.equal(merged.some((m) => String(m.content).startsWith("hailuo history")), false);
   assert.equal(merged.some((m) => m.content === vastUser.content), true);
+});
+
+test("stripForeignCampaignBlocks removes nexbie tail from VAST session", () => {
+  const vastOwn = {
+    role: "user",
+    content: "vast-similar-01.xlsx 名单进度",
+    createdAt: "2026-06-29T12:11:12.713Z",
+  };
+  const nexbieStart = {
+    role: "user",
+    content: "https://www.nexbie.com/",
+    createdAt: "2026-06-30T06:15:20.502Z",
+  };
+  const trimmed = stripForeignCampaignBlocks(
+    [vastOwn, nexbieStart, { role: "assistant", content: "Nexbie 产品", createdAt: "2026-06-30T06:15:25.557Z" }],
+    "VAST AI 3D 模型生成器"
+  );
+  assert.equal(trimmed.length, 1);
+  assert.equal(trimmed[0].content, vastOwn.content);
+});
+
+test("merge with sessionCreatedAt trims small cross-campaign extras", () => {
+  const welcome = {
+    role: "assistant",
+    name: "Bin",
+    content: "您好，我是Bin，告诉我您想推广的产品链接",
+  };
+  const remote = [welcome];
+  const foreign = {
+    role: "user",
+    content: "nexbie product link",
+    createdAt: "2026-06-11T10:01:23.289Z",
+  };
+  const own = {
+    role: "user",
+    content: "tripo3d.ai",
+    createdAt: "2026-06-26T08:31:44.702Z",
+  };
+  const merged = mergeSessionMessages([welcome, foreign, own], remote, {
+    sessionCreatedAt: "2026-06-26T08:25:01.000Z",
+  });
+  assert.equal(merged.some((m) => m.content === foreign.content), false);
+  assert.equal(merged.some((m) => m.content === own.content), true);
 });
 
 test("trimMessagesBeforeSessionCreated removes pre-session foreign history", () => {
