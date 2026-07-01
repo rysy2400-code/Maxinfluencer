@@ -8,12 +8,13 @@ import { enqueueAdvertiserExecutionFollowup } from "../../../../../lib/execution
 import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
 import { assertUserCanAccessCampaign } from "../../../../../lib/auth/campaign-access.js";
 import { executeApproveQuote } from "../../../../../lib/execution/approve-quote.js";
+import { precheckQuoteApproveCharge } from "../../../../../lib/billing/approve-quote-charge.js";
 
 /**
  * PATCH /api/campaigns/[id]/execution
  * 更新红人执行阶段（同意价格、寄样、通过草稿等）
  * Body: { influencerId, action, payload? }
- * action: submitQuote | reopenQuote | approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo | updatePublished | updateShipping | updateDraft
+ * action: precheckApproveQuote | submitQuote | reopenQuote | approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo | updatePublished | updateShipping | updateDraft
  */
 export async function PATCH(req, { params }) {
   try {
@@ -71,6 +72,33 @@ export async function PATCH(req, { params }) {
     let quoteAppend = null;
 
     switch (action) {
+      case "precheckApproveQuote": {
+        const precheck = await precheckQuoteApproveCharge({
+          campaignId,
+          influencerId,
+          advertiserId: auth.advertiserId,
+        });
+        if (!precheck.success) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: precheck.message,
+              code: precheck.code || null,
+              chargeAmount: precheck.chargeAmount ?? null,
+              currentBalance: precheck.currentBalance ?? null,
+            },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          chargeAmount: precheck.chargeAmount,
+          currentBalance: precheck.currentBalance,
+          balanceAfter: precheck.balanceAfter,
+          influencerAmount: precheck.influencerAmount,
+          platformFeeAmount: precheck.platformFeeAmount,
+        });
+      }
       case "submitQuote": {
         const amount = Number(payload.amount);
         if (!Number.isFinite(amount) || amount <= 0) {

@@ -536,6 +536,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     draftFeedback: payload.draftFeedback || null,
     counterOffer: payload.counterOffer || null,
     counterReason: payload.counterReason || null,
+    contentBrief: payload.contentBrief || null,
     conversationHistory,
     influencer,
   });

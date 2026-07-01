@@ -39,6 +39,7 @@ import {
   countPendingPriceReviewItems,
   partitionPendingPriceItems,
 } from "../lib/execution/pending-price-items.js";
+import { formatUsdAmount } from "../lib/billing/balance-messages.js";
 import {
   isChatVisibleMessage,
   mergeSessionMessages,
@@ -1211,6 +1212,250 @@ function ExecutionProgressCollapsibleRow({
   );
 }
 
+/** 同意报价：选择内容指引模式 */
+function ApproveQuoteContentBriefModal({
+  open,
+  influencerLabel,
+  busy,
+  chargePreview,
+  onClose,
+  onConfirm,
+}) {
+  const [mode, setMode] = React.useState(null);
+  const [scriptLink, setScriptLink] = React.useState("");
+  const [scriptNotes, setScriptNotes] = React.useState("");
+
+  React.useEffect(() => {
+    if (!open) {
+      setMode(null);
+      setScriptLink("");
+      setScriptNotes("");
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const canSubmit =
+    mode === "free_creative" ||
+    (mode === "reference_script" && /^https:\/\/.+/i.test(scriptLink.trim()));
+
+  const handleSubmit = () => {
+    if (!mode) {
+      window.alert("请选择内容指引方式");
+      return;
+    }
+    const link = scriptLink.trim();
+    if (mode === "reference_script") {
+      if (!link) {
+        window.alert("请填写脚本链接");
+        return;
+      }
+      if (!/^https:\/\/.+/i.test(link)) {
+        window.alert("脚本链接须以 https:// 开头");
+        return;
+      }
+    }
+    onConfirm({
+      contentBriefMode: mode,
+      scriptLink: mode === "reference_script" ? link : undefined,
+      scriptNotes: scriptNotes.trim() || undefined,
+    });
+  };
+
+  const optionStyle = (selected) => ({
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: selected ? "1px solid #4F46E5" : "1px solid #E5E7EB",
+    background: selected ? "#EEF2FF" : "#FFFFFF",
+    cursor: "pointer",
+    boxSizing: "border-box",
+  });
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(255, 255, 255, 0.65)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+        boxSizing: "border-box",
+      }}
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-labelledby="approve-brief-modal-title"
+        style={{
+          width: "100%",
+          maxWidth: 440,
+          background: "#FFFFFF",
+          border: "1px solid #E5E7EB",
+          borderRadius: 14,
+          padding: "24px 22px",
+          boxShadow:
+            "0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 40px rgba(15, 23, 42, 0.08)",
+          boxSizing: "border-box",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          id="approve-brief-modal-title"
+          style={{
+            color: "#111827",
+            fontSize: 17,
+            fontWeight: 600,
+            marginBottom: 4,
+            letterSpacing: "-0.02em",
+          }}
+        >
+          确认合作 · 内容指引
+        </div>
+        <div style={{ color: "#6B7280", fontSize: 13, marginBottom: 16, lineHeight: 1.5 }}>
+          {influencerLabel ? `为 ${influencerLabel} ` : ""}
+          选择如何向红人说明创作要求，确认后将扣款并通知红人。
+        </div>
+        {chargePreview &&
+        Number.isFinite(Number(chargePreview.chargeAmount)) &&
+        Number(chargePreview.chargeAmount) > 0 ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: "#374151",
+              background: "#F9FAFB",
+              border: "1px solid #E5E7EB",
+              borderRadius: 8,
+              padding: "8px 10px",
+              marginBottom: 14,
+              lineHeight: 1.5,
+            }}
+          >
+            本次扣款 {formatUsdAmount(chargePreview.chargeAmount)}
+            {Number.isFinite(Number(chargePreview.currentBalance))
+              ? ` · 当前余额 ${formatUsdAmount(chargePreview.currentBalance)}`
+              : null}
+          </div>
+        ) : null}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setMode("reference_script")}
+            style={optionStyle(mode === "reference_script")}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 4 }}>
+              A · 严格参考脚本链接
+            </div>
+            <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.45 }}>
+              向红人同步脚本链接；备注选填。
+            </div>
+          </button>
+          {mode === "reference_script" ? (
+            <input
+              type="url"
+              placeholder="https://..."
+              value={scriptLink}
+              onChange={(e) => setScriptLink(e.target.value)}
+              disabled={busy}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                fontSize: 13,
+                borderRadius: 8,
+                border: "1px solid #D1D5DB",
+                boxSizing: "border-box",
+              }}
+            />
+          ) : null}
+
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setMode("free_creative")}
+            style={optionStyle(mode === "free_creative")}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 4 }}>
+              B · 红人基于产品卖点自由发挥
+            </div>
+            <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.45 }}>
+              告知红人按产品卖点与个人风格创作；备注选填。
+            </div>
+          </button>
+        </div>
+
+        <label style={{ display: "block", fontSize: 12, color: "#6B7280", marginBottom: 6 }}>
+          备注（选填）
+        </label>
+        <textarea
+          value={scriptNotes}
+          onChange={(e) => setScriptNotes(e.target.value.slice(0, 2000))}
+          disabled={busy}
+          placeholder="品牌补充说明，如必须展示的功能点"
+          rows={3}
+          style={{
+            width: "100%",
+            padding: "8px 10px",
+            fontSize: 13,
+            borderRadius: 8,
+            border: "1px solid #D1D5DB",
+            resize: "vertical",
+            boxSizing: "border-box",
+            marginBottom: 18,
+          }}
+        />
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid #E5E7EB",
+              background: "#FFFFFF",
+              color: "#374151",
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={busy || !canSubmit}
+            onClick={handleSubmit}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid #10B981",
+              background: busy || !canSubmit ? "#D1FAE5" : "#ECFDF5",
+              color: "#047857",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: busy || !canSubmit ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "处理中…" : "确认同意"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 执行进度 Tab 下单条红人卡片（按阶段展示字段） */
 function ExecutionProgressRow({
   stageKey,
@@ -1218,6 +1463,7 @@ function ExecutionProgressRow({
   needSample,
   execPatchingId,
   patchExecution,
+  precheckApproveQuote,
   executionUsernameSet,
   highlightUsername,
 }) {
@@ -1229,6 +1475,9 @@ function ExecutionProgressRow({
   const [counterAmount, setCounterAmount] = React.useState("");
   const [counterCurrency, setCounterCurrency] = React.useState("USD");
   const [counterReason, setCounterReason] = React.useState("");
+  const [approveBriefOpen, setApproveBriefOpen] = React.useState(false);
+  const [approvePrechecking, setApprovePrechecking] = React.useState(false);
+  const [approveChargePreview, setApproveChargePreview] = React.useState(null);
   const username = item.id || "";
 
   React.useEffect(() => {
@@ -1237,6 +1486,25 @@ function ExecutionProgressRow({
   const platform = resolveInfluencerPlatform(item);
   const profileUrl = buildInfluencerProfileUrl(item);
   const busy = execPatchingId === username;
+
+  const handleAgreeClick = React.useCallback(async () => {
+    if (typeof precheckApproveQuote !== "function") return;
+    setApprovePrechecking(true);
+    try {
+      const result = await precheckApproveQuote(username);
+      if (!result?.ok) {
+        window.alert(result?.error || "无法同意该报价");
+        return;
+      }
+      setApproveChargePreview({
+        chargeAmount: result.chargeAmount,
+        currentBalance: result.currentBalance,
+      });
+      setApproveBriefOpen(true);
+    } finally {
+      setApprovePrechecking(false);
+    }
+  }, [precheckApproveQuote, username]);
 
   const recommendReasonRaw =
     item.analysisSummary ||
@@ -1460,6 +1728,26 @@ function ExecutionProgressRow({
 
   return (
     <div id={rowDomId} style={cardStyle}>
+      <ApproveQuoteContentBriefModal
+        open={approveBriefOpen}
+        influencerLabel={username ? `@${String(username).replace(/^@/, "")}` : ""}
+        busy={busy}
+        chargePreview={approveChargePreview}
+        onClose={() => {
+          setApproveBriefOpen(false);
+          setApproveChargePreview(null);
+        }}
+        onConfirm={async (briefPayload) => {
+          const result = await patchExecution("approveQuote", username, {
+            ...briefPayload,
+            source: "advertiser_portal",
+          });
+          if (result?.ok) {
+            setApproveBriefOpen(false);
+            setApproveChargePreview(null);
+          }
+        }}
+      />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {usernameLink}
@@ -1729,18 +2017,18 @@ function ExecutionProgressRow({
               <>
                 <button
                   type="button"
-                  disabled={busy}
-                  onClick={() => patchExecution("approveQuote", username, {})}
+                  disabled={busy || approvePrechecking}
+                  onClick={handleAgreeClick}
                   style={{
                     padding: "4px 12px",
                     borderRadius: 8,
                     border: "1px solid #10B981",
                     backgroundColor: "#ECFDF5",
                     color: "#047857",
-                    cursor: busy ? "not-allowed" : "pointer",
+                    cursor: busy || approvePrechecking ? "not-allowed" : "pointer",
                   }}
                 >
-                  {busy ? "处理中…" : "同意"}
+                  {approvePrechecking ? "校验中…" : busy ? "处理中…" : "同意"}
                 </button>
                 <button
                   type="button"
@@ -3495,6 +3783,35 @@ export default function HomePage() {
     }
   }, []);
 
+  const precheckApproveQuote = useCallback(async (influencerId) => {
+    const cid = resolvedCampaignId;
+    if (!cid) return { ok: false, error: "缺少 Campaign" };
+    try {
+      const res = await fetch(`/api/campaigns/${cid}/execution`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ influencerId, action: "precheckApproveQuote" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        return {
+          ok: false,
+          error: data.error || "余额预检失败",
+          code: data.code || null,
+        };
+      }
+      return {
+        ok: true,
+        chargeAmount: data.chargeAmount,
+        currentBalance: data.currentBalance,
+        balanceAfter: data.balanceAfter,
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || "余额预检失败" };
+    }
+  }, [resolvedCampaignId]);
+
   const patchExecution = useCallback(
     async (action, influencerId, payload = {}) => {
       const cid = resolvedCampaignId;
@@ -3513,9 +3830,11 @@ export default function HomePage() {
         if (action === "approveQuote") {
           await refreshAuthUser();
         }
+        return { ok: true };
       } catch (err) {
         console.error(err);
         alert(err.message || "更新失败");
+        return { ok: false, error: err.message || "更新失败" };
       } finally {
         setExecPatchingId(null);
       }
@@ -7410,6 +7729,7 @@ export default function HomePage() {
                                             needSample={needSampleFlag}
                                             execPatchingId={execPatchingId}
                                             patchExecution={patchExecution}
+                                            precheckApproveQuote={precheckApproveQuote}
                                             executionUsernameSet={executionUsernameSet}
                                             highlightUsername={highlightExecutionUsername}
                                           />
@@ -7473,6 +7793,7 @@ export default function HomePage() {
                                             needSample={needSampleFlag}
                                             execPatchingId={execPatchingId}
                                             patchExecution={patchExecution}
+                                            precheckApproveQuote={precheckApproveQuote}
                                             executionUsernameSet={executionUsernameSet}
                                             highlightUsername={highlightExecutionUsername}
                                           />

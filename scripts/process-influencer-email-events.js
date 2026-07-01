@@ -21,6 +21,9 @@ import {
   loadConversationHistoryForInfluencer,
   stripBudgetFromCampaignInfo,
 } from "../lib/agents/influencer-agent.js";
+import {
+  CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES,
+} from "../lib/execution/content-brief.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 
@@ -717,6 +720,13 @@ ${influencerAgentBasePrompt}
   - **禁止**在此阶段填写 shippingInfo 或向红人索取寄样地址（寄样地址仅在品牌同意报价后、由系统 followup 另行处理）。
 - 当 lastEvent.quoteApprovedAt **不存在**时，无论 stage 为何，**禁止**在 outboundEmails 中确认合作、催促交稿/拍摄、或索取寄样信息。
 - 讨论素材草稿、提交 draftLink 的前提是 lastEvent.quoteApprovedAt 存在（pending_draft / pending_sample / draft_submitted 均可收到草稿，见下方草稿阶段纪律）。
+${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
+
+【脚本 / 创意要求 · 合作确认后】
+- 当 activeExecutions[].lastEvent.quoteApprovedAt 存在时，读取 lastEvent.contentBrief 并按模式回复（见各 execution 的 contentBrief）：
+  - reference_script：可重发 contentBrief.scriptLink + 英文转述 contentBrief.scriptNotes（若有）；禁止粘贴脚本全文。
+  - free_creative：说明无固定脚本，按产品卖点与个人风格创作 + 转述 scriptNotes（若有）；禁止提供脚本链接。
+- 若 quoteApprovedAt 存在但 contentBrief 缺失，按 free_creative 理解，勿编造脚本链接。
 
 【草稿阶段 · 与红人沟通的纪律（极其重要）】
 - 前提：lastEvent.quoteApprovedAt 必须存在；否则禁止处理 draftLink 或在 outboundEmails 中讨论交稿/发布。
