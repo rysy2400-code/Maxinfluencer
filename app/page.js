@@ -949,6 +949,28 @@ function ExecutionProgressPlatformBadge({ platform }) {
   );
 }
 
+/** 红人来源标签：用户导入 vs 平台发现 */
+function ExecutionProgressSourceLabel({ source }) {
+  const isUser = source === "user_upload";
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 500,
+        padding: "1px 6px",
+        borderRadius: 6,
+        backgroundColor: isUser ? "#ECFDF5" : "#EEF2FF",
+        color: isUser ? "#047857" : "#4338CA",
+        border: `1px solid ${isUser ? "#A7F3D0" : "#C7D2FE"}`,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      来源：{isUser ? "用户" : "平台"}
+    </span>
+  );
+}
+
 function formatAnalysisSnippet(v) {
   if (v == null || v === "") return "—";
   if (typeof v === "string") return v.length > 900 ? `${v.slice(0, 900)}…` : v;
@@ -1281,6 +1303,7 @@ function ExecutionProgressRow({
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {usernameLink}
             <ExecutionProgressPlatformBadge platform={platform} />
+            <ExecutionProgressSourceLabel source={item.source} />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
             {inExecution ? (
@@ -1441,6 +1464,7 @@ function ExecutionProgressRow({
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {usernameLink}
           <ExecutionProgressPlatformBadge platform={platform} />
+          <ExecutionProgressSourceLabel source={item.source} />
         </div>
         {item.stage === "quote_rejected" && (
           <span

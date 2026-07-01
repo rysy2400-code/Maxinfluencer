@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   influencer_id VARCHAR(128) NULL COMMENT 'TikTok userId，与 tiktok_influencer.influencer_id 一致（可空、可回填）',
 
   influencer_snapshot JSON COMMENT '红人快照（画像 + 主页数据 + 评估等）',
+  source VARCHAR(32) NOT NULL DEFAULT 'web_search' COMMENT '红人来源：user_upload=用户导入，web_search=平台发现',
 
   stage ENUM(
     'pending_quote',

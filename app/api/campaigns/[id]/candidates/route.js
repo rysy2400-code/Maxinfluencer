@@ -104,7 +104,8 @@ export async function GET(req, { params }) {
         analysis_summary,
         analyzed_at,
         picked_at,
-        created_at
+        created_at,
+        source
       FROM tiktok_campaign_influencer_candidates
       WHERE campaign_id = ?
       ORDER BY
@@ -136,6 +137,7 @@ export async function GET(req, { params }) {
           analyzedAt: r.analyzed_at,
           pickedAt: r.picked_at,
           createdAt: r.created_at,
+          source: r.source || "web_search",
           snapshot,
         };
       });
@@ -166,7 +168,8 @@ export async function GET(req, { params }) {
         match_analysis,
         analyzed_at,
         picked_at,
-        created_at
+        created_at,
+        source
       FROM tiktok_campaign_influencer_candidates
       WHERE campaign_id = ?
         AND match_analysis IS NOT NULL
@@ -219,6 +222,7 @@ export async function GET(req, { params }) {
         analyzedAt: r.analyzed_at,
         pickedAt: r.picked_at,
         createdAt: r.created_at,
+        source: r.source || "web_search",
         matchAnalysis,
       };
 
