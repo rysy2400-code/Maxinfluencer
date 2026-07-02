@@ -116,6 +116,10 @@ try {
   }
 
   async function probeOne(rec, sessionIdx) {
+    const stagger = Number(process.env.TT_LITE_COUNTRY_PROBE_STAGGER_MS || 80);
+    if (stagger > 0 && sessionIdx > 0) {
+      await new Promise((r) => setTimeout(r, (sessionIdx % concurrency) * stagger));
+    }
     const u = String(rec.username || "").replace(/^@/, "");
     const src = videoByUser.get(u);
     const primaryVid = rec.representativeVideoId || src?.videoId || "";
