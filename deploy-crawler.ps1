@@ -175,7 +175,13 @@ if ($deployCrawlerSelfHashAtStart -and $deployCrawlerSelfHashAfterPull -and ($de
 Write-Host "[deploy-crawler] npm ci..."
 npm ci
 
-$ensureClashScript = Join-Path $scriptsDir "ensure-clash-qg-tiktok.ps1"
+$subEnsureClashScript = Join-Path $scriptsDir "ensure-clash-sub-tiktok.ps1"
+$qgEnsureClashScript = Join-Path $scriptsDir "ensure-clash-qg-tiktok.ps1"
+$ensureClashScript = if ($env:CLASH_SUB_URL -and (Test-Path $subEnsureClashScript)) {
+  $subEnsureClashScript
+} else {
+  $qgEnsureClashScript
+}
 $disableVergeScript = Join-Path $scriptsDir "disable-clash-verge-on-crawler.ps1"
 $guardClashScript = Join-Path $scriptsDir "guard-clash-mihomo.ps1"
 $runGuardClashScript = Join-Path $scriptsDir "run-guard-clash-mihomo.ps1"
@@ -190,11 +196,11 @@ if (-not $skipClashProbe) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $disableVergeScript -ProjectRoot $Root -SkipEnsureClash
   }
   if (Test-Path $ensureClashScript) {
-    Write-Host "[deploy-crawler] ensure clash (Qg tunnel) + TikTok search probe..."
+    Write-Host "[deploy-crawler] ensure clash ($(Split-Path $ensureClashScript -Leaf)) + TikTok search probe..."
     $clashArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ensureClashScript, "-ProjectRoot", $Root)
     & powershell.exe @clashArgs
     if ($LASTEXITCODE -ne 0) {
-      throw "Clash/TikTok probe failed. Set QG_AUTH_PWD in .env and re-run deploy, or set CRAWLER_SKIP_CLASH_PROBE=1 to bypass (not recommended)."
+      throw "Clash/TikTok probe failed. Set CLASH_SUB_URL or QG_AUTH_PWD in .env and re-run deploy, or set CRAWLER_SKIP_CLASH_PROBE=1 to bypass (not recommended)."
     }
     Write-Host "[deploy-crawler] clash OK (7897 + TikTok search probe passed)."
   }
@@ -270,7 +276,7 @@ if ($env:CHROME_VISIBLE) {
   $isVisible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
 }
 $chromeModeArgs = if ($isVisible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
-$launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "about:blank" }
+$launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "https://www.instagram.com/" }
 
 $guard9222 = Join-Path $scriptsDir "run-guard-chrome-9222.ps1"
 $guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
@@ -286,6 +292,7 @@ $guard9222Content = @"
 `$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
 `$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
+`$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"
 . "$($guard9222Source.Replace("\", "\\"))"
 "@
 

@@ -1,7 +1,8 @@
 # 守护爬虫专用 mihomo（crawler-clash.yaml），防止 Clash Verge GUI / 旧脚本抢回订阅配置。
 $ErrorActionPreference = "SilentlyContinue"
 $Root = if ($env:MAXINFLUENCER_ROOT) { $env:MAXINFLUENCER_ROOT } else { "C:\maxinfluencer" }
-$EnsureScript = Join-Path $Root "scripts\ensure-clash-qg-tiktok.ps1"
+$SubEnsureScript = Join-Path $Root "scripts\ensure-clash-sub-tiktok.ps1"
+$QgEnsureScript = Join-Path $Root "scripts\ensure-clash-qg-tiktok.ps1"
 $CrawlerConfig = Join-Path $Root "config\crawler-clash.yaml"
 $MixedPort = if ($env:CLASH_MIXED_PORT) { [int]$env:CLASH_MIXED_PORT } else { 7897 }
 $ProbeEvery = if ($env:CLASH_GUARD_TT_PROBE_EVERY) { [int]$env:CLASH_GUARD_TT_PROBE_EVERY } else { 12 }
@@ -31,6 +32,12 @@ function Import-DotEnv {
 }
 
 Import-DotEnv -ProjectRoot $Root
+
+if ($env:CLASH_SUB_URL -and (Test-Path $SubEnsureScript)) {
+  $EnsureScript = $SubEnsureScript
+} else {
+  $EnsureScript = $QgEnsureScript
+}
 
 function Test-PortListening {
   param([int]$Port)

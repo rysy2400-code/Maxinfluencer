@@ -87,9 +87,26 @@ if (Test-Path $ProfilesDir) {
 }
 
 if (-not $SkipEnsureClash) {
-  $ensure = Join-Path $ProjectRoot "scripts\ensure-clash-qg-tiktok.ps1"
+  foreach ($name in @(".env", ".env.local")) {
+    $path = Join-Path $ProjectRoot $name
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    Get-Content -LiteralPath $path | ForEach-Object {
+      $line = $_.Trim()
+      if (-not $line -or $line.StartsWith("#")) { return }
+      $idx = $line.IndexOf("=")
+      if ($idx -lt 1) { return }
+      $key = $line.Substring(0, $idx).Trim()
+      $val = $line.Substring($idx + 1).Trim()
+      if ($key) { Set-Item -Path "Env:$key" -Value $val }
+    }
+  }
+  $ensure = if ($env:CLASH_SUB_URL -and (Test-Path (Join-Path $ProjectRoot "scripts\ensure-clash-sub-tiktok.ps1"))) {
+    Join-Path $ProjectRoot "scripts\ensure-clash-sub-tiktok.ps1"
+  } else {
+    Join-Path $ProjectRoot "scripts\ensure-clash-qg-tiktok.ps1"
+  }
   if (Test-Path $ensure) {
-    Write-Host "[disable-verge] starting crawler mihomo via ensure-clash-qg-tiktok.ps1..."
+    Write-Host "[disable-verge] starting crawler mihomo via $(Split-Path $ensure -Leaf)..."
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ensure -ProjectRoot $ProjectRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
