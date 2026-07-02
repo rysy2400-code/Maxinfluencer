@@ -506,6 +506,16 @@ async function processTask(task, platformSlug) {
   );
   let result = null;
   try {
+    if (taskPlatformSlug === "tiktok") {
+      try {
+        const { resetLitePageNavStats } = await import(
+          "../lib/tools/influencer-functions/tiktok/lite-page-nav.js"
+        );
+        resetLitePageNavStats();
+      } catch {
+        /* ignore */
+      }
+    }
     const primaryKeyword =
       taskKeyword ||
       (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
@@ -626,6 +636,17 @@ async function processTask(task, platformSlug) {
     console.log(
       `[worker-influencer-search] 任务完成 id=${task.id}, campaign=${campaignId}`
     );
+    try {
+      const { getLitePageNavStats } = await import(
+        "../lib/tools/influencer-functions/tiktok/lite-page-nav.js"
+      );
+      console.log(
+        `[worker-influencer-search] lite-page-nav`,
+        JSON.stringify(getLitePageNavStats())
+      );
+    } catch {
+      /* ignore */
+    }
     await markTaskStatus(task.id, "succeeded", null);
 
     const taskMetrics = await loadTaskWorkNoteMetrics(task.id);
