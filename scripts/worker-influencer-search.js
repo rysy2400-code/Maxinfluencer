@@ -964,14 +964,78 @@ async function main() {
   const slots = resolveSearchWorkerSlots();
   const platforms = resolveWorkerPlatforms();
   const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
+  const forcedTaskId = Number(process.env.SEARCH_TASK_ID || 0);
 
   console.log(
-    `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} platforms=${platforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}`
+    `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} platforms=${platforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}${forcedTaskId ? ` taskId=${forcedTaskId}` : ""}`
   );
 
   if (!loopMode) {
+    let task = null;
+    if (forcedTaskId > 0) {
+      const rows = await queryTikTok(
+        `
+        SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload, status
+        FROM tiktok_influencer_search_task
+        WHERE id = ?
+        LIMIT 1
+      `,
+        [forcedTaskId]
+      );
+      const row = rows?.[0];
+      if (!row) {
+        console.error(`[worker-influencer-search] 未找到任务 id=${forcedTaskId}`);
+        return;
+      }
+      if (row.status !== "pending") {
+        console.error(
+          `[worker-influencer-search] 任务 id=${forcedTaskId} 状态=${row.status}，非 pending`
+        );
+        return;
+      }
+      const payload = parseJsonOrObject(row.payload) || {};
+      const taskPlatform = taskPlatformFromPayload(payload);
+      if (!taskPlatform) {
+        await markTaskStatus(forcedTaskId, "failed", "missing payload.platform");
+        return;
+      }
+      const platformWorkerId = workerIdForPlatform(taskPlatform);
+      const claim = await queryTikTok(
+        `
+        UPDATE tiktok_influencer_search_task
+        SET status = 'processing',
+            worker_id = ?,
+            worker_host = ?,
+            worker_ip = ?,
+            last_progress_at = NOW(),
+            progress_search_found_count = 0,
+            progress_profile_browsed_count = 0,
+            progress_analyzed_count = 0,
+            progress_recommended_count = 0,
+            progress_contactable_count = 0,
+            progress_skip_country_unknown_count = 0,
+            progress_skip_country_mismatch_count = 0,
+            started_at = NOW(),
+            attempt_count = attempt_count + 1,
+            updated_at = NOW()
+        WHERE id = ? AND status = 'pending'
+      `,
+        [platformWorkerId, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, forcedTaskId]
+      );
+      if (!claim?.affectedRows) {
+        console.error(`[worker-influencer-search] claim 失败 id=${forcedTaskId}`);
+        return;
+      }
+      task = row;
+      await runInCdpLoop(
+        { platform: taskPlatform, taskId: task.id, workerId: platformWorkerId },
+        () => processTask(task, taskPlatform)
+      );
+      return;
+    }
+
     const p = platforms[0] || "tiktok";
-    const task = await claimOnePendingTaskForPlatform(p, workerIdForPlatform(p));
+    task = await claimOnePendingTaskForPlatform(p, workerIdForPlatform(p));
     if (task) {
       await runInCdpLoop(
         { platform: p, taskId: task.id, workerId: workerIdForPlatform(p) },
