@@ -24,7 +24,10 @@ $env:CDP_ENDPOINT_ENRICH = "http://127.0.0.1:9223"
 if ($Mode -eq "api-only") {
   $env:TT_LITE_ALLOW_NAV = "0"
   $env:TT_LITE_COUNTRY_DISABLE_NAV = "1"
-  Write-Host "[e2e] mode=api-only (no search/profile/video page navigation fallbacks)"
+  $env:TT_LITE_COUNTRY_VIDEO_INFO = "0"
+  $env:TT_LITE_COUNTRY_HTML_FIRST = "1"
+  $env:TT_LITE_COUNTRY_CONCURRENCY = "10"
+  Write-Host "[e2e] mode=api-only (signed search + html fetch country, concurrency 10)"
 } else {
   $env:TT_LITE_ALLOW_NAV = "1"
   Remove-Item Env:TT_LITE_COUNTRY_DISABLE_NAV -ErrorAction SilentlyContinue
