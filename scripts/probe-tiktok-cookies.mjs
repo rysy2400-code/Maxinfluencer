@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 dotenv.config({ path: ".env.local" });
 const { acquireTiktokApiSession } = await import(
-  "./lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js"
+  "../lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js"
 );
 const s = await acquireTiktokApiSession(null, { endpointKey: "http://127.0.0.1:9222" });
 const c = await s.page.getTiktokCookies();
