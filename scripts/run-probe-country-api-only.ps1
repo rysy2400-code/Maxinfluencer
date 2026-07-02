@@ -14,8 +14,8 @@ Start-Sleep -Seconds 2
 
 $trimScript = Join-Path $Root "scripts\trim-cdp-tiktok-tabs.ps1"
 if (Test-Path $trimScript) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9222 -KeepMax 2
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9223 -KeepMax 3
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9222 -KeepMax 1
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9223 -KeepMax 1
 }
 Start-Sleep -Seconds 2
 
@@ -25,12 +25,17 @@ Start-Sleep -Seconds 2
 $env:TT_LITE_ALLOW_NAV = "0"
 $env:TT_LITE_COUNTRY_DISABLE_NAV = "1"
 $env:TT_LITE_COUNTRY_VIDEO_INFO = "0"
+$env:TT_LITE_COUNTRY_STUB_DOCUMENT = "0"
+$env:TT_LITE_TAB_POOL_SIZE = "1"
 $env:TT_LITE_COUNTRY_HTML_FIRST = "1"
 $env:TT_LITE_COUNTRY_CONCURRENCY = "10"
 $env:TT_LITE_COUNTRY_API_ONLY = "1"
 $env:TT_LITE_COUNTRY_PROBE_DELAY_MS = "800"
 $env:TT_LITE_COUNTRY_VIDEO_INFO_CHAIN = "1"
 $env:TT_LITE_UNIVERSAL_MAX_WAIT_MS = "18000"
+$env:LITE_TT_ENRICH_CONCURRENCY = "10"
+$env:COUNTRY_BATCH_STOP_ON_ZERO = "0"
+$env:ENRICH_BATCH_STOP_ON_ZERO = "0"
 $env:HTTPS_PROXY = "http://127.0.0.1:7897"
 $env:HTTP_PROXY = "http://127.0.0.1:7897"
 

@@ -210,6 +210,7 @@ if (-not $skipClashProbe) {
 
 $scraperMode = if ($env:SCRAPER_MODE) { "$($env:SCRAPER_MODE)".Trim() } else { "lite" }
 Write-Host "[deploy-crawler] SCRAPER_MODE=$scraperMode (lite=API直调，standard=整页滚动)"
+Write-Host "[deploy-crawler] TikTok Lite: TT_LITE_TAB_POOL_SIZE=1 stub-no-goto full-pool-country enrich_c=10"
 
 $chromeExe = Get-ChromeExe
 if (-not $chromeExe) { throw "Chrome/Edge executable not found." }
@@ -334,6 +335,17 @@ $guardCrawlerContent = @"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 `$env:SCRAPER_MODE = "$scraperMode"
 `$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
+`$env:TT_LITE_TAB_POOL_SIZE = "1"
+`$env:TT_LITE_ALLOW_NAV = "0"
+`$env:TT_LITE_COUNTRY_DISABLE_NAV = "1"
+`$env:TT_LITE_COUNTRY_VIDEO_INFO = "0"
+`$env:TT_LITE_COUNTRY_STUB_DOCUMENT = "0"
+`$env:TT_LITE_COUNTRY_HTML_FIRST = "1"
+`$env:TT_LITE_COUNTRY_CONCURRENCY = "10"
+`$env:LITE_TT_ENRICH_CONCURRENCY = "10"
+`$env:COUNTRY_BATCH_STOP_ON_ZERO = "0"
+`$env:ENRICH_BATCH_STOP_ON_ZERO = "0"
+`$env:AFFILIATE_GMV_ENRICH = "true"
 while (`$true) {
   try {
     `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback
