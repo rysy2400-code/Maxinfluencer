@@ -8,8 +8,15 @@ if ($args[2] -and $args[2] -match '^\d+$') { $MaxAttempts = [int]$args[2] }
 Set-Location $Root
 
 Get-CimInstance Win32_Process |
-  Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search" } |
+  Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "worker-influencer-search|probe-tiktok-country|probe-tiktok-enrich" } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+
+$trimScript = Join-Path $Root "scripts\trim-cdp-tiktok-tabs.ps1"
+if (Test-Path $trimScript) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9222 -KeepMax 2
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $trimScript -Port 9223 -KeepMax 3
+}
 Start-Sleep -Seconds 2
 
 & git -C $Root fetch origin
