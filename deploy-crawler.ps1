@@ -426,6 +426,17 @@ Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
 
+if (-not $skipClashProbe) {
+  Write-Host "[deploy-crawler] restart CDP Chrome after clash reload..."
+  Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -match "chrome|msedge") -and
+    $_.CommandLine -match "remote-debugging-port=922[23]" -and
+    $_.CommandLine -notmatch "--type="
+  } | ForEach-Object {
+    try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+
 Start-Sleep -Seconds 6
 $ok9222 = Test-Cdp -Port 9222
 $ok9223 = Test-Cdp -Port 9223
