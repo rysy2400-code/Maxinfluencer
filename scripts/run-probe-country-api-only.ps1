@@ -2,7 +2,8 @@ $ErrorActionPreference = "Continue"
 $Root = "C:\maxinfluencer"
 $Keyword = if ($args[0]) { $args[0] } else { "AI design tool demo" }
 $Batch = if ($args[1]) { $args[1] } else { 20 }
-$MaxAttempts = if ($args[2]) { [int]$args[2] } else { 5 }
+$MaxAttempts = 5
+if ($args[2] -and $args[2] -match '^\d+$') { $MaxAttempts = [int]$args[2] }
 
 Set-Location $Root
 
@@ -16,9 +17,12 @@ Start-Sleep -Seconds 2
 
 $env:TT_LITE_ALLOW_NAV = "0"
 $env:TT_LITE_COUNTRY_DISABLE_NAV = "1"
-$env:TT_LITE_COUNTRY_CONCURRENCY = "1"
+$env:TT_LITE_COUNTRY_VIDEO_INFO = "1"
+$env:TT_LITE_COUNTRY_CONCURRENCY = "10"
 $env:TT_LITE_COUNTRY_API_ONLY = "1"
-$env:TT_LITE_COUNTRY_PROBE_DELAY_MS = "250"
+$env:TT_LITE_COUNTRY_PROBE_DELAY_MS = "400"
+$env:TT_LITE_COUNTRY_VIDEO_INFO_CHAIN = "1"
+$env:TT_LITE_UNIVERSAL_MAX_WAIT_MS = "18000"
 $env:HTTPS_PROXY = "http://127.0.0.1:7897"
 $env:HTTP_PROXY = "http://127.0.0.1:7897"
 
