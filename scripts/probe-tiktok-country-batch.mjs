@@ -17,6 +17,21 @@ dotenv.config({ path: path.join(root, ".env.local") });
 const argv = process.argv.slice(2);
 const apiOnlyFlag = argv[0] === "--api-only";
 if (apiOnlyFlag) argv.shift();
+
+let concurrencyArg = null;
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === "--concurrency" && argv[i + 1]) {
+    concurrencyArg = Number(argv[i + 1]);
+    argv.splice(i, 2);
+    break;
+  }
+  if (argv[i]?.startsWith("--concurrency=")) {
+    concurrencyArg = Number(argv[i].slice("--concurrency=".length));
+    argv.splice(i, 1);
+    break;
+  }
+}
+
 if (apiOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
   process.env.TT_LITE_ALLOW_NAV = "0";
   process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
@@ -32,7 +47,12 @@ const endpoint =
 const probeDelay = Number(process.env.TT_LITE_COUNTRY_PROBE_DELAY_MS || 400);
 const concurrency = Math.max(
   1,
-  Math.min(Number(process.env.TT_LITE_COUNTRY_CONCURRENCY || 3), 10)
+  Math.min(
+    Number.isFinite(concurrencyArg) && concurrencyArg > 0
+      ? concurrencyArg
+      : Number(process.env.TT_LITE_COUNTRY_CONCURRENCY || 3),
+    10
+  )
 );
 const apiOnly =
   process.env.TT_LITE_COUNTRY_DISABLE_NAV === "1" ||
@@ -67,14 +87,20 @@ try {
   for (const b of batches) videos.push(...extractVideosFromSearchAPI(b));
   const recs = extractInfluencersFromVideos(videos);
   const queue = orderInfluencersForCountryCheck(recs, videos, maxCount);
+  console.log(
+    `[probe] search done: ${videos.length} videos, ${queue.length} influencers to check`
+  );
 
-  for (let i = 0; i < concurrency; i += 1) {
+  pool.push(searchSession);
+  searchSession = null;
+  for (let i = 1; i < concurrency; i += 1) {
     const session = await acquireTiktokApiSession(null, {
       endpointKey: endpoint,
-      forceNewTab: concurrency > 1,
+      forceNewTab: true,
     });
     pool.push(session);
   }
+  console.log(`[probe] CDP pool ready: ${pool.length} tab(s)`);
 
   const videoByUser = new Map();
   const altVideosByUser = new Map();

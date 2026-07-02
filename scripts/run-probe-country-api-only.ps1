@@ -34,7 +34,7 @@ while ($attempt -lt $MaxAttempts -and $exitCode -ne 0) {
   $attempt += 1
   Write-Host ""
   Write-Host "=== api-only probe attempt $attempt/$MaxAttempts keyword=`"$Keyword`" batch=$Batch ==="
-  & node --experimental-default-type=module $probeScript --api-only $Keyword $Batch
+  & node --experimental-default-type=module $probeScript --api-only --concurrency 10 $Keyword $Batch
   $exitCode = $LASTEXITCODE
   if ($exitCode -eq 0) {
     Write-Host "[probe] SUCCESS ${Batch}/${Batch} locationCreated (api-only)"
