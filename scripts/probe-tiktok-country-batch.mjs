@@ -35,7 +35,8 @@ for (let i = 0; i < argv.length; i += 1) {
 if (apiOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
   process.env.TT_LITE_ALLOW_NAV = "0";
   process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
-  process.env.TT_LITE_COUNTRY_VIDEO_INFO = "1";
+  process.env.TT_LITE_COUNTRY_VIDEO_INFO = "0";
+  process.env.TT_LITE_COUNTRY_HTML_FIRST = "1";
 }
 
 const keyword = argv[0] || "AI design tool demo";
