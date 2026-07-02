@@ -258,37 +258,39 @@ try {
   console.log(`  两者都有: ${stats.both}/${queue.length}`);
   console.log(`  都没有:   ${stats.neither}/${queue.length}`);
 
-  // resolve 链路：item_list 优先（VIDEO_INFO=0）
-  process.env.TT_LITE_COUNTRY_VIDEO_INFO = "0";
-  process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
-  let resolveItemListFirst = 0;
-  const resolveSources = {};
-  console.log("\n[json-probe] === resolveForInfluencer (VIDEO_INFO=0, item_list 优先) ===");
-  for (let i = 0; i < queue.length; i += 1) {
-    const rec = queue[i];
-    const u = String(rec.username || "").replace(/^@/, "");
-    const src = videos.find((v) => String(v.username || "").replace(/^@/, "") === u);
-    const probe = await resolveVideoLocationCreatedForInfluencer(page, {
-      username: u,
-      videoId: rec.representativeVideoId || src?.videoId || "",
-      secUid: rec.secUid || rec.tiktokSecUid || src?.creator?.secUid || "",
-      searchLocation: src?.locationCreated || null,
-      altVideoIds: videos
-        .filter((v) => String(v.username || "").replace(/^@/, "") === u)
-        .map((v) => String(v.videoId || "").trim())
-        .filter(Boolean),
-    });
-    if (probe.locationCreated) resolveItemListFirst += 1;
-    const srcKey = probe.source || "null";
-    resolveSources[srcKey] = (resolveSources[srcKey] || 0) + 1;
-    if (probeDelay > 0 && i < queue.length - 1) {
-      await page.waitForTimeout(probeDelay);
+  // resolve 链路（可选，--with-resolve 时跑 VIDEO_INFO=0 item_list 优先）
+  if (process.argv.includes("--with-resolve")) {
+    process.env.TT_LITE_COUNTRY_VIDEO_INFO = "0";
+    process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
+    let resolveItemListFirst = 0;
+    const resolveSources = {};
+    console.log("\n[json-probe] === resolveForInfluencer (VIDEO_INFO=0, item_list 优先) ===");
+    for (let i = 0; i < queue.length; i += 1) {
+      const rec = queue[i];
+      const u = String(rec.username || "").replace(/^@/, "");
+      const src = videos.find((v) => String(v.username || "").replace(/^@/, "") === u);
+      const probe = await resolveVideoLocationCreatedForInfluencer(page, {
+        username: u,
+        videoId: rec.representativeVideoId || src?.videoId || "",
+        secUid: rec.secUid || rec.tiktokSecUid || src?.creator?.secUid || "",
+        searchLocation: src?.locationCreated || null,
+        altVideoIds: videos
+          .filter((v) => String(v.username || "").replace(/^@/, "") === u)
+          .map((v) => String(v.videoId || "").trim())
+          .filter(Boolean),
+      });
+      if (probe.locationCreated) resolveItemListFirst += 1;
+      const srcKey = probe.source || "null";
+      resolveSources[srcKey] = (resolveSources[srcKey] || 0) + 1;
+      if (probeDelay > 0 && i < queue.length - 1) {
+        await page.waitForTimeout(probeDelay);
+      }
     }
+    console.log(`  覆盖: ${resolveItemListFirst}/${queue.length}`);
+    console.log(`  来源分布: ${JSON.stringify(resolveSources)}`);
   }
-  console.log(`  覆盖: ${resolveItemListFirst}/${queue.length}`);
-  console.log(`  来源分布: ${JSON.stringify(resolveSources)}`);
 
-  process.exitCode = stats.json_any === queue.length ? 0 : 1;
+  process.exitCode = stats.html === queue.length ? 0 : 1;
 } finally {
   await session.dispose();
 }
