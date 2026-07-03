@@ -26,7 +26,8 @@ const searchEndpoint =
 const enrichEndpoint =
   process.env.TT_LITE_ENRICH_CDP ||
   process.env.CDP_ENDPOINT_ENRICH ||
-  "http://127.0.0.1:9223";
+  process.env.CDP_ENDPOINT ||
+  "http://127.0.0.1:9222";
 const targetVideos = Number(process.env.TT_LITE_MAX_VIDEOS || 50);
 
 const influencerProfile = {

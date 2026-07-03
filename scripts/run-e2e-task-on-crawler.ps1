@@ -19,7 +19,7 @@ $env:SEARCH_WORKER_LOOP = "false"
 $env:SEARCH_TASK_ID = "$TaskId"
 $env:SEARCH_WORKER_PLATFORMS = "tiktok"
 $env:CDP_ENDPOINT = "http://127.0.0.1:9222"
-$env:CDP_ENDPOINT_ENRICH = "http://127.0.0.1:9223"
+$env:CDP_ENDPOINT_ENRICH = "http://127.0.0.1:9222"
 
 if ($Mode -eq "api-only") {
   $env:TT_LITE_ALLOW_NAV = "0"

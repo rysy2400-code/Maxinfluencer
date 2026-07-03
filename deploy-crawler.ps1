@@ -236,7 +236,7 @@ $workerLanIp = $workerIdentity.LanIp
 $workerId = $workerIdentity.WorkerId
 Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, lan=$workerLanIp, host=$workerHost) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
-$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
+$enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 
 # 152.32.192.65 曾用 parallel+2 slots，CDP 易超时；现与其它爬虫机一致：serial + 1 slot。
 $parallelCrawlerIps = @()

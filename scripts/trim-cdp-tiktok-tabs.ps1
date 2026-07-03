@@ -12,8 +12,23 @@ try {
 }
 
 $pages = @($tabs | Where-Object { $_.type -eq "page" })
+$deniedClosed = 0
+foreach ($p in @($pages | Where-Object { [string]$_.title -match "Access Denied" })) {
+  try {
+    Invoke-RestMethod "$endpoint/json/close/$($p.id)" -TimeoutSec 5 | Out-Null
+    $deniedClosed += 1
+  } catch {
+    # ignore
+  }
+}
+if ($deniedClosed -gt 0) {
+  $pages = @(
+    Invoke-RestMethod "$endpoint/json/list" -TimeoutSec 8 |
+      Where-Object { $_.type -eq "page" }
+  )
+}
 if ($pages.Count -le $KeepMax) {
-  Write-Host "[trim-cdp] port=$Port pages=$($pages.Count) ok"
+  Write-Host "[trim-cdp] port=$Port pages=$($pages.Count) ok deniedClosed=$deniedClosed"
   exit 0
 }
 

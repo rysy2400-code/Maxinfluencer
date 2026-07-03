@@ -36,6 +36,9 @@ if (-not $visible) {
 }
 
 $profileDirPattern = [Regex]::Escape($chromeDir)
+$scriptsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $scriptsDir) { $scriptsDir = "C:\maxinfluencer\scripts" }
+$purgeDeniedScript = Join-Path $scriptsDir "purge-cdp-access-denied.ps1"
 $unhealthySince = $null
 $lastStartAt = $null
 $startGraceSec = if ($env:CHROME_GUARD_START_GRACE_SEC) { [int]$env:CHROME_GUARD_START_GRACE_SEC } else { 90 }
@@ -92,6 +95,9 @@ while ($true) {
 
   if (Test-Cdp9222Healthy) {
     $unhealthySince = $null
+    if (Test-Path $purgeDeniedScript) {
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $purgeDeniedScript -Port 9222 -Quiet 2>$null | Out-Null
+    }
   } else {
     $profileProcs = @(Get-Chrome9222ProfileProcesses)
     if ($profileProcs.Count -eq 0) {
