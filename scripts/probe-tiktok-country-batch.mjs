@@ -36,7 +36,9 @@ if (apiOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
   process.env.TT_LITE_ALLOW_NAV = "0";
   process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
   process.env.TT_LITE_COUNTRY_VIDEO_INFO = "0";
-  process.env.TT_LITE_COUNTRY_HTML_FIRST = "1";
+  process.env.TT_LITE_COUNTRY_STUB_DOCUMENT = "0";
+  process.env.TT_LITE_COUNTRY_HTML_FIRST = "0";
+  process.env.TT_LITE_COUNTRY_API_ONLY = "1";
 }
 
 const keyword = argv[0] || "AI design tool demo";
@@ -73,7 +75,7 @@ const { orderInfluencersForCountryCheck } = await import(
 );
 
 console.log(
-  `[probe] mode=${apiOnly ? "api-only (signed API + html fetch, no search/profile nav)" : "lite+nav"} endpoint=${endpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
+  `[probe] mode=${apiOnly ? "api-only (signed item_detail + item_list, no page nav)" : "lite+nav"} endpoint=${endpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
 );
 
 /** @type {Array<{ page: object, dispose: Function }>} */
@@ -94,14 +96,16 @@ try {
 
   pool.push(searchSession);
   searchSession = null;
-  for (let i = 1; i < concurrency; i += 1) {
+  const { resolveLiteCdpTabPoolSize } = await import("../lib/scraper/resolve-scraper-mode.js");
+  const tabPoolSize = resolveLiteCdpTabPoolSize();
+  for (let i = 1; i < tabPoolSize; i += 1) {
     const session = await acquireTiktokApiSession(null, {
       endpointKey: endpoint,
-      forceNewTab: true,
+      forceNewTab: false,
     });
     pool.push(session);
   }
-  console.log(`[probe] CDP pool ready: ${pool.length} tab(s)`);
+  console.log(`[probe] CDP pool ready: ${pool.length} tab(s) (concurrency=${concurrency})`);
 
   const videoByUser = new Map();
   const altVideosByUser = new Map();

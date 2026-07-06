@@ -2,7 +2,7 @@
 param(
   [string]$ProjectRoot = "C:\maxinfluencer",
   [string]$SubUrl = $env:CLASH_SUB_URL,
-  [string]$PreferredNodePattern = $(if ($env:CLASH_TT_NODE_PATTERN) { $env:CLASH_TT_NODE_PATTERN } else { "美国|日本|新加坡|us01|jp01|sg01" }),
+  [string]$PreferredNodePattern = $(if ($env:CLASH_TT_NODE_PATTERN) { $env:CLASH_TT_NODE_PATTERN } else { "8041|8031|8021|美国|日本|新加坡|us01|jp01|sg01" }),
   [int]$MixedPort = $(if ($env:CLASH_MIXED_PORT) { [int]$env:CLASH_MIXED_PORT } else { 7897 }),
   [switch]$SkipTikTokProbe
 )
@@ -50,13 +50,13 @@ function Test-TikTokSearchViaProxy {
   $url = "https://www.tiktok.com/search/video?q=deploy_probe"
   $raw = & curl.exe -sI --http1.1 --max-time $TimeoutSec -x $Proxy $url 2>&1
   $text = ($raw | Out-String)
-  if ($text -match "Location:\s*https://www\.tiktok\.com/hk/about") {
-    return @{ ok = $false; reason = "hk_about_redirect"; raw = $text }
+  if ($text -match "Location:\s*https://www\.tiktok\.com/hk/") {
+    return @{ ok = $false; reason = "hk_redirect"; raw = $text }
   }
   if ($text -match "HTTP/1\.1 200 OK" -or $text -match "HTTP/2 200") {
     return @{ ok = $true; reason = "200_ok"; raw = $text }
   }
-  if ($text -match "HTTP/1\.1 302" -and $text -notmatch "/hk/about") {
+  if ($text -match "HTTP/1\.1 302" -and $text -notmatch "tiktok\.com/hk/") {
     return @{ ok = $true; reason = "302_non_hk"; raw = $text }
   }
   if ($text -match "HTTP/1\.1 200 Connection established" -and $text -match "HTTP/1\.1 200") {
@@ -108,12 +108,48 @@ function Parse-AnyTlsUri {
   }
 }
 
-function Test-IsHongKongNode {
+function Test-IsMetadataNode {
   param($Node)
-  $blob = "$($Node.name)|$($Node.server)|$($Node.sni)".ToLowerInvariant()
-  if ($blob -match '香港|hong\s*kong|\bhk\d') { return $true }
-  if ($Node.server -match '^hk\d' -or $Node.sni -match '^hk\d') { return $true }
+  $name = "$($Node.name)"
+  if ($name -match '剩余流量|距离下次|套餐到期|重置剩余|traffic|expire|reset') { return $true }
   return $false
+}
+
+function Test-IsBlockedRegionNode {
+  param($Node)
+  $blob = "$($Node.name)|$($Node.server)|$($Node.sni)|$($Node.port)"
+  if ($blob -match '香港|台湾|hong\s*kong|taiwan|\bhk\d|🇭🇰|🇹🇼') { return $true }
+  if ($Node.server -match '^hk\d' -or $Node.sni -match '^hk\d') { return $true }
+  # xsus 订阅：8001=香港 8011=台湾（metadata 行也走同一端口，必须整端口排除）
+  if ($Node.server -eq 'xsus.xs-us.net' -and ($Node.port -eq 8001 -or $Node.port -eq 8011)) { return $true }
+  return $false
+}
+
+function Get-NodeNameScore {
+  param($Node)
+  if (Test-IsMetadataNode $Node) { return 0 }
+  if (Test-IsBlockedRegionNode $Node) { return -1 }
+  $name = "$($Node.name)|$($Node.port)"
+  if ($name -match '8041|美国|us01') { return 30 }
+  if ($name -match '8031|日本|jp01') { return 20 }
+  if ($name -match '8021|新加坡|sg01') { return 10 }
+  return 1
+}
+
+function Merge-NodesByEndpoint {
+  param([array]$NodeList)
+  $byKey = @{}
+  foreach ($node in $NodeList) {
+    $key = "$($node.server):$($node.port)"
+    if (-not $byKey.ContainsKey($key)) {
+      $byKey[$key] = $node
+      continue
+    }
+    if ((Get-NodeNameScore $node) -gt (Get-NodeNameScore $byKey[$key])) {
+      $byKey[$key] = $node
+    }
+  }
+  return @($byKey.Values)
 }
 
 function Get-UniqueProxyName {
@@ -130,10 +166,16 @@ function Get-UniqueProxyName {
 
 function Get-SafeProxyName {
   param($Node)
+  $label = "$($Node.name)|$($Node.port)"
+  if ($label -match '8041|美国|us01') { return "US-$($Node.port)" }
+  if ($label -match '8031|日本|jp01') { return "JP-$($Node.port)" }
+  if ($label -match '8021|新加坡|sg01') { return "SG-$($Node.port)" }
   if ($Node.server -match '^([a-z]{2}\d+)') {
-    return $Matches[1].ToUpper()
+    return "$($Matches[1].ToUpper())-$($Node.port)"
   }
-  return ($Node.server -replace '[^a-zA-Z0-9._-]', '-')
+  $base = ($Node.server -replace '[^a-zA-Z0-9._-]', '-')
+  if ($base.Length -gt 32) { $base = $base.Substring(0, 32) }
+  return "$base-$($Node.port)"
 }
 
 function Escape-YamlString {
@@ -159,12 +201,25 @@ foreach ($line in ($decoded -split "`r?`n")) {
 }
 if ($nodes.Count -eq 0) { throw "no anytls nodes found in subscription" }
 
-$nonHk = @($nodes | Where-Object { -not (Test-IsHongKongNode $_) })
-if ($nonHk.Count -eq 0) { throw "subscription has no non-HK nodes" }
+$usable = @(
+  $nodes |
+    Where-Object { -not (Test-IsMetadataNode $_) -and -not (Test-IsBlockedRegionNode $_) }
+)
+$usable = @(Merge-NodesByEndpoint -NodeList $usable)
+if ($usable.Count -eq 0) { throw "subscription has no usable non-HK/TW nodes" }
 
-$preferred = @($nonHk | Where-Object { "$($_.name)|$($_.server)" -match $PreferredNodePattern })
-$selected = if ($preferred.Count -gt 0) { $preferred } else { $nonHk }
-Write-Host "[clash-sub] nodes total=$($nodes.Count) non-hk=$($nonHk.Count) selected=$($selected.Count)"
+$preferred = @(
+  $usable |
+    Where-Object { "$($_.name)|$($_.server)|$($_.port)" -match $PreferredNodePattern }
+)
+if ($preferred.Count -eq 0) {
+  throw "no preferred TikTok nodes matched pattern: $PreferredNodePattern (usable=$($usable.Count))"
+}
+$selected = $preferred
+Write-Host "[clash-sub] nodes total=$($nodes.Count) usable=$($usable.Count) selected=$($selected.Count)"
+foreach ($n in $selected) {
+  Write-Host "[clash-sub]   pick $($n.name) -> $($n.server):$($n.port)"
+}
 
 if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
 if (-not (Test-Path $mihomoDataDir)) { New-Item -ItemType Directory -Path $mihomoDataDir | Out-Null }
@@ -204,7 +259,7 @@ $($proxyLines -join "`n")
 proxy-groups:
   - name: $ProxyGroupName
     type: url-test
-    url: https://www.tiktok.com
+    url: https://www.tiktok.com/search/video?q=deploy_probe
     interval: 300
     tolerance: 50
     proxies:

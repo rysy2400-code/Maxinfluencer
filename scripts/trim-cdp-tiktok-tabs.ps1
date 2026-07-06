@@ -12,34 +12,44 @@ try {
 }
 
 $pages = @($tabs | Where-Object { $_.type -eq "page" })
-$deniedClosed = 0
-foreach ($p in @($pages | Where-Object { [string]$_.title -match "Access Denied" })) {
-  try {
-    Invoke-RestMethod "$endpoint/json/close/$($p.id)" -TimeoutSec 5 | Out-Null
-    $deniedClosed += 1
-  } catch {
-    # ignore
+
+foreach ($p in @($pages)) {
+  if ([string]$p.title -match "Access Denied") {
+    try {
+      Invoke-RestMethod "$endpoint/json/close/$($p.id)" -TimeoutSec 5 | Out-Null
+      Write-Host "[trim-cdp] port=$Port closed Access Denied id=$($p.id)"
+    } catch {}
   }
 }
-if ($deniedClosed -gt 0) {
-  $pages = @(
-    Invoke-RestMethod "$endpoint/json/list" -TimeoutSec 8 |
-      Where-Object { $_.type -eq "page" }
-  )
+
+Start-Sleep -Milliseconds 300
+try {
+  $tabs = @(Invoke-RestMethod "$endpoint/json/list" -TimeoutSec 8)
+  $pages = @($tabs | Where-Object { $_.type -eq "page" })
+} catch {
+  Write-Host "[trim-cdp] port=$Port unavailable after purge: $($_.Exception.Message)"
+  exit 1
 }
+
 if ($pages.Count -le $KeepMax) {
-  Write-Host "[trim-cdp] port=$Port pages=$($pages.Count) ok deniedClosed=$deniedClosed"
+  Write-Host "[trim-cdp] port=$Port pages=$($pages.Count) ok"
   exit 0
 }
 
 function Rank-Url($url) {
   $u = [string]$url
-  if ($u -match "^https://www\.tiktok\.com/?(\?|$)") { return 0 }
-  if ($u -match "tiktok\.com" -and $u -notmatch "/api/") { return 1 }
+  if ($u -match "^https://www\.tiktok\.com/?(\?|$)" -and $u -notmatch "errors\.edgesuite") { return 0 }
+  if ($u -match "tiktok\.com" -and $u -notmatch "/api/" -and $u -notmatch "errors\.edgesuite") { return 1 }
   return 9
 }
 
-$ranked = $pages | Sort-Object { Rank-Url $_.url }, { $_.url }
+function Rank-Title($title) {
+  $t = [string]$title
+  if ($t -match "Access Denied") { return 99 }
+  return 0
+}
+
+$ranked = $pages | Sort-Object { Rank-Title $_.title }, { Rank-Url $_.url }, { $_.url }
 $keep = @($ranked | Select-Object -First $KeepMax)
 $keepIds = @($keep | ForEach-Object { $_.id })
 $closed = 0

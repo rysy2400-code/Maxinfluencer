@@ -26,8 +26,7 @@ const searchEndpoint =
 const enrichEndpoint =
   process.env.TT_LITE_ENRICH_CDP ||
   process.env.CDP_ENDPOINT_ENRICH ||
-  process.env.CDP_ENDPOINT ||
-  "http://127.0.0.1:9222";
+  "http://127.0.0.1:9223";
 const targetVideos = Number(process.env.TT_LITE_MAX_VIDEOS || 50);
 
 const influencerProfile = {
@@ -85,15 +84,17 @@ try {
   pool.push(
     await acquireTiktokApiSession(null, { endpointKey: enrichEndpoint })
   );
-  for (let i = 1; i < concurrency; i += 1) {
+  const { resolveLiteCdpTabPoolSize } = await import("../lib/scraper/resolve-scraper-mode.js");
+  const tabPoolSize = resolveLiteCdpTabPoolSize();
+  for (let i = 1; i < tabPoolSize; i += 1) {
     pool.push(
       await acquireTiktokApiSession(null, {
         endpointKey: enrichEndpoint,
-        forceNewTab: true,
+        forceNewTab: false,
       })
     );
   }
-  console.log(`[enrich-llm-probe] enrich CDP pool: ${pool.length} tab(s)`);
+  console.log(`[enrich-llm-probe] enrich CDP pool: ${pool.length} tab(s) (concurrency=${concurrency})`);
 
   async function enrichAndAnalyze(rec, idx) {
     const u = String(rec.username || "").replace(/^@/, "");

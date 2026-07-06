@@ -19,21 +19,15 @@ $env:SEARCH_WORKER_LOOP = "false"
 $env:SEARCH_TASK_ID = "$TaskId"
 $env:SEARCH_WORKER_PLATFORMS = "tiktok"
 $env:CDP_ENDPOINT = "http://127.0.0.1:9222"
-$env:CDP_ENDPOINT_ENRICH = "http://127.0.0.1:9222"
+$env:CDP_ENDPOINT_ENRICH = "http://127.0.0.1:9223"
 
 if ($Mode -eq "api-only") {
   $env:TT_LITE_ALLOW_NAV = "0"
   $env:TT_LITE_COUNTRY_DISABLE_NAV = "1"
   $env:TT_LITE_COUNTRY_VIDEO_INFO = "0"
-  $env:TT_LITE_COUNTRY_STUB_DOCUMENT = "0"
-  $env:TT_LITE_TAB_POOL_SIZE = "1"
   $env:TT_LITE_COUNTRY_HTML_FIRST = "1"
   $env:TT_LITE_COUNTRY_CONCURRENCY = "10"
-  $env:LITE_TT_ENRICH_CONCURRENCY = "10"
-  $env:COUNTRY_BATCH_STOP_ON_ZERO = "0"
-  $env:ENRICH_BATCH_STOP_ON_ZERO = "0"
-  $env:AFFILIATE_GMV_ENRICH = "true"
-  Write-Host "[e2e] mode=api-only (1 tab, full-pool country, stub-no-goto, c=10)"
+  Write-Host "[e2e] mode=api-only (signed search + html fetch country, concurrency 10)"
 } else {
   $env:TT_LITE_ALLOW_NAV = "1"
   Remove-Item Env:TT_LITE_COUNTRY_DISABLE_NAV -ErrorAction SilentlyContinue

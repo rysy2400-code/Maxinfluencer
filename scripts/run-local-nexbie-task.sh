@@ -71,16 +71,16 @@ echo "================================================================"
 echo "[local-task] exit=${EXIT} elapsed=$((T1-T0))s log=${LOG}"
 echo "================================================================"
 
-node --input-type=module <<NODE || true
-import dotenv from "dotenv";
-dotenv.config({ path: ".env" });
-dotenv.config({ path: ".env.local" });
-const { queryTikTok } = await import("./lib/db/mysql-tiktok.js");
+node -e "
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' });
+dotenv.config({ path: '.env.local' });
+const { queryTikTok } = await import('./lib/db/mysql-tiktok.js');
 const rows = await queryTikTok(
-  "SELECT id,status,error_message,progress_search_found_count,progress_profile_browsed_count,progress_analyzed_count,progress_recommended_count,progress_contactable_count,finished_at FROM tiktok_influencer_search_task WHERE id=? LIMIT 1",
-  ["${TASK_ID}"]
+  'SELECT id,status,error_message,progress_search_found_count,progress_profile_browsed_count,progress_analyzed_count,progress_recommended_count,progress_contactable_count,finished_at FROM tiktok_influencer_search_task WHERE id=? LIMIT 1',
+  ['${TASK_ID}']
 );
-console.log("[local-task] final", JSON.stringify(rows?.[0] ?? null, null, 2));
-NODE
+console.log('[local-task] final', JSON.stringify(rows?.[0] || null, null, 2));
+" || true
 
 exit "$EXIT"

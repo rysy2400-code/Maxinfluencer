@@ -97,6 +97,13 @@ while ($true) {
     $unhealthySince = $null
     if (Test-Path $purgeDeniedScript) {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $purgeDeniedScript -Port 9222 -Quiet 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 2) {
+        Write-Host "[guard-9222] Access Denied persists; restarting Chrome 9222..."
+        Stop-Chrome9222
+        Start-Sleep -Seconds 2
+        Start-Chrome9222
+        Start-Sleep -Seconds 12
+      }
     }
   } else {
     $profileProcs = @(Get-Chrome9222ProfileProcesses)
