@@ -18,10 +18,6 @@ import {
 import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
 import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
 import { fetchSearchTaskWorkNoteMetrics } from "../lib/db/campaign-candidates-dao.js";
-import {
-  resolveImportWorkerPlatforms,
-  resolveSearchWorkerPlatforms,
-} from "../lib/scraper/resolve-scraper-mode.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -52,7 +48,11 @@ function resolveSearchWorkerSlots() {
 }
 
 function resolveWorkerPlatforms() {
-  return resolveSearchWorkerPlatforms();
+  const raw = process.env.SEARCH_WORKER_PLATFORMS || "tiktok,instagram,youtube";
+  return raw
+    .split(",")
+    .map((s) => normalizePlatformSlug(s.trim()))
+    .filter(Boolean);
 }
 
 function taskPlatformFromPayload(payload) {
@@ -211,15 +211,47 @@ async function countProcessingOnWorkerIp() {
   return Number(rows?.[0]?.c ?? rows?.[0]?.C ?? 0) || 0;
 }
 
+async function hasInflightForPlatform(platformSlug, platformWorkerId) {
+  const rows = await queryTikTok(
+    `
+    SELECT id
+    FROM tiktok_influencer_search_task
+    WHERE status = 'processing'
+      AND worker_id = ?
+      AND worker_ip = ?
+    LIMIT 1
+  `,
+    [platformWorkerId, CURRENT_WORKER_IP]
+  );
+  return Boolean(rows?.[0]);
+}
+
 const PENDING_CLAIM_SCAN_LIMIT = 40;
 
-/**
- * @param {Set<string>} allowedPlatforms
- */
-async function claimOnePendingSearchTask(allowedPlatforms) {
-  const slots = resolveSearchWorkerSlots();
-  if ((await countProcessingOnWorkerIp()) >= slots) return null;
+/** 有 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
+async function hasPendingImportTask() {
+  const rows = await queryTikTok(
+    `
+    SELECT id FROM tiktok_influencer_import_task
+    WHERE status = 'pending'
+    LIMIT 1
+  `,
+    []
+  );
+  return Boolean(rows?.[0]);
+}
 
+/**
+ * @param {'tiktok'|'instagram'|'youtube'} platformSlug
+ * @param {string} platformWorkerId
+ */
+async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
+  const slots = resolveSearchWorkerSlots();
+  if (await hasInflightForPlatform(platformSlug, platformWorkerId)) return null;
+  if ((await countProcessingOnWorkerIp()) >= slots) return null;
+  if (await hasPendingImportTask()) return null;
+
+  // mysql2 预处理不支持 LIMIT ?（ER_WRONG_ARGUMENTS），limit 为常量整数
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
@@ -239,9 +271,8 @@ async function claimOnePendingSearchTask(allowedPlatforms) {
       await markTaskStatus(row.id, "failed", "missing payload.platform");
       continue;
     }
-    if (!allowedPlatforms.has(taskPlatform)) continue;
+    if (taskPlatform !== platformSlug) continue;
 
-    const platformWorkerId = workerIdForPlatform(taskPlatform);
     const updateResult = await queryTikTok(
       `
       UPDATE tiktok_influencer_search_task
@@ -266,7 +297,7 @@ async function claimOnePendingSearchTask(allowedPlatforms) {
       [platformWorkerId, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, row.id]
     );
     if (updateResult && Number(updateResult.affectedRows || 0) > 0) {
-      return { task: row, platformSlug: taskPlatform };
+      return row;
     }
   }
   return null;
@@ -804,10 +835,66 @@ async function reclaimStuckProcessingImportTasks() {
   return Number(rows?.affectedRows || 0);
 }
 
-function importPersistentPlatforms() {
-  return resolveImportWorkerPlatforms().filter(
-    (p) => p === "instagram" || p === "youtube"
+async function importTaskLoop() {
+  const idleSleepMs = Math.max(
+    Number(process.env.SEARCH_WORKER_IDLE_SLEEP_MS || 3000) || 3000,
+    500
   );
+  let lastReclaimMs = 0;
+
+  console.log(
+    `[worker-influencer-search][import] loop workerId=${IMPORT_WORKER_ID} ip=${CURRENT_WORKER_IP || "unknown"}`
+  );
+
+  for (;;) {
+    try {
+      if (Date.now() - lastReclaimMs > 60_000) {
+        lastReclaimMs = Date.now();
+        const n = await reclaimStuckProcessingImportTasks();
+        if (n > 0) {
+          console.warn(`[worker-influencer-search] reclaimed stuck import tasks: ${n}`);
+        }
+      }
+
+      const task = await claimOnePendingImportTask();
+      if (!task) {
+        await sleep(idleSleepMs);
+        continue;
+      }
+
+      console.log(
+        `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
+      );
+
+      await runInCdpLoop(
+        {
+          platform: "mixed",
+          persistentPlatforms: ["instagram", "youtube"],
+          taskId: task.id,
+          workerId: IMPORT_WORKER_ID,
+          kind: "import",
+        },
+        () => processImportTaskRow(task)
+      );
+
+      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
+        try {
+          await runExecutionHeartbeatTick(new Date());
+        } catch (hbErr) {
+          console.warn(
+            `[worker-influencer-search][import] heartbeat 失败：`,
+            hbErr?.message || hbErr
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[worker-influencer-search][import] loop error:`,
+        err?.message || err
+      );
+      await sleep(idleSleepMs);
+    }
+  }
 }
 
 async function sleep(ms) {
@@ -836,93 +923,61 @@ async function reclaimStuckProcessingTasks() {
   return Number(rows?.affectedRows || 0);
 }
 
-async function workerDispatchLoop() {
+async function platformLoop(platformSlug) {
+  const platformWorkerId = workerIdForPlatform(platformSlug);
   const idleSleepMs = Math.max(
     Number(process.env.SEARCH_WORKER_IDLE_SLEEP_MS || 3000) || 3000,
     500
   );
-  const searchPlatforms = new Set(resolveSearchWorkerPlatforms());
-  const importPlatforms = resolveImportWorkerPlatforms();
   let lastReclaimMs = 0;
 
   console.log(
-    `[worker-influencer-search] 单 loop：import → search | importPlatforms=${importPlatforms.join(",")} searchPlatforms=${[...searchPlatforms].join(",")} importWorkerId=${IMPORT_WORKER_ID} ip=${CURRENT_WORKER_IP || "unknown"}`
+    `[worker-influencer-search][${platformSlug}] loop workerId=${platformWorkerId} ip=${CURRENT_WORKER_IP || "unknown"}`
   );
 
   for (;;) {
     try {
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
-        const importReclaimed = await reclaimStuckProcessingImportTasks();
-        const searchReclaimed = await reclaimStuckProcessingTasks();
-        if (importReclaimed > 0) {
+        const n = await reclaimStuckProcessingTasks();
+        if (n > 0) {
           console.warn(
-            `[worker-influencer-search] reclaimed stuck import tasks: ${importReclaimed}`
-          );
-        }
-        if (searchReclaimed > 0) {
-          console.warn(
-            `[worker-influencer-search] reclaimed stuck search tasks: ${searchReclaimed}`
+            `[worker-influencer-search] reclaimed stuck processing tasks: ${n}`
           );
         }
       }
 
-      const importTask = await claimOnePendingImportTask();
-      if (importTask) {
-        console.log(
-          `[worker-influencer-search][import] 开始 task=${importTask.id} campaign=${importTask.campaign_id} batch=${importTask.import_batch_id}`
-        );
-        await runInCdpLoop(
-          {
-            platform: "mixed",
-            persistentPlatforms: importPersistentPlatforms(),
-            taskId: importTask.id,
-            workerId: IMPORT_WORKER_ID,
-            kind: "import",
-          },
-          () => processImportTaskRow(importTask)
-        );
-        await maybeRunHeartbeat("import");
+      const task = await claimOnePendingTaskForPlatform(
+        platformSlug,
+        platformWorkerId
+      );
+      if (!task) {
+        await sleep(idleSleepMs);
         continue;
       }
 
-      const searchClaim = await claimOnePendingSearchTask(searchPlatforms);
-      if (searchClaim) {
-        const { task, platformSlug } = searchClaim;
-        const platformWorkerId = workerIdForPlatform(platformSlug);
-        console.log(
-          `[worker-influencer-search][${platformSlug}] 开始 task=${task.id} campaign=${task.campaign_id}`
-        );
-        await runInCdpLoop(
-          { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
-          () => processTask(task, platformSlug)
-        );
-        await maybeRunHeartbeat(platformSlug);
-        continue;
-      }
+      await runInCdpLoop(
+        { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
+        () => processTask(task, platformSlug)
+      );
 
-      await sleep(idleSleepMs);
+      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
+        try {
+          await runExecutionHeartbeatTick(new Date());
+        } catch (hbErr) {
+          console.warn(
+            `[worker-influencer-search][${platformSlug}] 任务后 heartbeat 失败：`,
+            hbErr?.message || hbErr
+          );
+        }
+      }
     } catch (err) {
       console.error(
-        `[worker-influencer-search] dispatch loop error:`,
+        `[worker-influencer-search][${platformSlug}] 处理任务时出错：`,
         err?.message || err
       );
       await sleep(idleSleepMs);
     }
-  }
-}
-
-async function maybeRunHeartbeat(label) {
-  if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") === "false") {
-    return;
-  }
-  try {
-    await runExecutionHeartbeatTick(new Date());
-  } catch (hbErr) {
-    console.warn(
-      `[worker-influencer-search][${label}] heartbeat 失败：`,
-      hbErr?.message || hbErr
-    );
   }
 }
 
@@ -932,9 +987,8 @@ async function main() {
   const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
   const forcedTaskId = Number(process.env.SEARCH_TASK_ID || 0);
 
-  const importPlatforms = resolveImportWorkerPlatforms();
   console.log(
-    `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} searchPlatforms=${platforms.join(",")} importPlatforms=${importPlatforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}${forcedTaskId ? ` taskId=${forcedTaskId}` : ""}`
+    `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} platforms=${platforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}${forcedTaskId ? ` taskId=${forcedTaskId}` : ""}`
   );
 
   if (!loopMode) {
@@ -1001,22 +1055,21 @@ async function main() {
       return;
     }
 
-    const searchClaim = await claimOnePendingSearchTask(new Set(platforms));
-    if (searchClaim) {
-      const { task: searchTask, platformSlug } = searchClaim;
+    const p = platforms[0] || "tiktok";
+    task = await claimOnePendingTaskForPlatform(p, workerIdForPlatform(p));
+    if (task) {
       await runInCdpLoop(
-        {
-          platform: platformSlug,
-          taskId: searchTask.id,
-          workerId: workerIdForPlatform(platformSlug),
-        },
-        () => processTask(searchTask, platformSlug)
+        { platform: p, taskId: task.id, workerId: workerIdForPlatform(p) },
+        () => processTask(task, p)
       );
     }
     return;
   }
 
-  await workerDispatchLoop();
+  await Promise.all([
+    ...platforms.map((platformSlug) => platformLoop(platformSlug)),
+    importTaskLoop(),
+  ]);
 }
 
 main()
