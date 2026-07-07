@@ -430,15 +430,12 @@ export default function AccountBillingPanel({ open, onClose }) {
                   }}
                 >
                   <div style={{ fontWeight: 600, marginBottom: 8 }}>对公转账信息</div>
-                  <div>{issuer.legalName || issuer.companyName}</div>
-                  <div>{issuer.productName || issuer.productBrand}</div>
-                  <div style={{ marginTop: 8 }}>
-                    {issuer.bankName}
-                    <br />
-                    {issuer.bankAddress}
-                    <br />
-                    Account No.: {issuer.accountNo}
-                  </div>
+                  <div>Company Name: {issuer.companyName || issuer.legalName}</div>
+                  <div>Product Name: {issuer.productName || issuer.productBrand}</div>
+                  <div>Bank Name: {issuer.bankName}</div>
+                  <div>Bank Address: {issuer.bankAddress}</div>
+                  <div>Bank Account No.: {issuer.accountNo}</div>
+                  <div>SWIFT Code: {issuer.swiftCode}</div>
                   <div style={{ marginTop: 10, color: "#6B7280", fontSize: 12 }}>
                     转账后请联系 Maxin AI 客户经理或等待财务入账确认。
                   </div>

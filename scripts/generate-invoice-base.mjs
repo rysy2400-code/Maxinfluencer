@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { BILLING_ISSUER } from "../lib/billing/issuer-config.js";
 import {
   INVOICE_PDF_LAYOUT,
   INVOICE_TABLE_COLUMNS,
@@ -22,16 +23,7 @@ const outBase = path.join(templatesDir, "invoice-base.pdf");
 const outPreview = path.join(templatesDir, "invoice-base-preview.pdf");
 const sigPath = path.join(projectRoot, "public/billing/bin-duan-signature.png");
 
-const ISSUER = {
-  companyName: "Grace Capital Group Limited",
-  productName: "Maxin AI",
-  bankName: "OCBC Bank Hong Kong",
-  bankAddress: "161 Queen's Road, Central, Hong Kong",
-  accountNo: "038524-831",
-  accountHolder: "Grace Capital Group Limited",
-  swiftCode: "OCBCHKHH",
-  signatureName: "Bin Duan",
-};
+const ISSUER = BILLING_ISSUER;
 
 const black = rgb(0.12, 0.14, 0.18);
 const gray = rgb(0.42, 0.45, 0.5);
@@ -157,11 +149,10 @@ async function buildBasePage(pdf, { withPreviewSample = false } = {}) {
   });
 
   const bankLines = [
-    ["Account Holder:", ISSUER.accountHolder],
-    ["Account Number:", ISSUER.accountNo],
-    ["SWIFT (BIC):", ISSUER.swiftCode],
     ["Bank Name:", ISSUER.bankName],
     ["Bank Address:", ISSUER.bankAddress],
+    ["Bank Account No.:", ISSUER.accountNo],
+    ["SWIFT Code:", ISSUER.swiftCode],
   ];
   let by = layout.bank.startY;
   for (const [label, value] of bankLines) {
