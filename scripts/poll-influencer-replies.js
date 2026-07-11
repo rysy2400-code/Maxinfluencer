@@ -19,6 +19,7 @@ import { listRecentMessages } from "../lib/email/enterprise-mail-client.js";
 import {
   accountHasImapConfig,
   accountMatchesTemporaryOutboundPool,
+  getOpContactEmail,
   IMAP_POLL_BATCH_SIZE,
   selectImapPollBatch,
 } from "../lib/email/temporary-outbound-pool.js";
@@ -130,16 +131,24 @@ async function pollOnce() {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   for (const account of accounts) {
-    console.log(
-      "[PollInfluencerReplies] 开始轮询账号：",
-      account.email || account.email_address || account.username || account.account
-    );
+    const accountEmail = getOpContactEmail(account) || "(unknown)";
+    console.log("[PollInfluencerReplies] 开始轮询账号：", accountEmail);
 
-    const messages = await listRecentMessages({ account, since });
+    let messages = [];
+    try {
+      messages = await listRecentMessages({ account, since });
+    } catch (err) {
+      console.error(
+        "[PollInfluencerReplies] 账号轮询失败，跳过继续下一个：",
+        accountEmail,
+        err?.message || err
+      );
+      continue;
+    }
     if (!messages || messages.length === 0) {
       console.log(
         "[PollInfluencerReplies] 本次轮询未发现新邮件（或均被过滤），账号：",
-        account.email || account.email_address || account.username || account.account
+        accountEmail
       );
       continue;
     }
