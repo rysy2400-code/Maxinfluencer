@@ -17,8 +17,10 @@ import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { listRecentMessages } from "../lib/email/enterprise-mail-client.js";
 import {
+  accountHasImapConfig,
   accountMatchesTemporaryOutboundPool,
-  getOpContactEmail,
+  IMAP_POLL_BATCH_SIZE,
+  selectImapPollBatch,
 } from "../lib/email/temporary-outbound-pool.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
@@ -93,23 +95,34 @@ async function resolveInfluencerIdByEmail(email) {
 }
 
 function hasImapConfig(account) {
-  const fromEmail = getOpContactEmail(account);
-  const imapHost = account?.imap;
-  const imapPort = Number(account?.imap_port || 0);
-  const password = account?.auth_code;
-  return Boolean(fromEmail && imapHost && imapPort && password);
+  return accountHasImapConfig(account);
 }
 
 async function pollOnce() {
   const allAccounts = await getAllOpContacts();
-  // 临时：与随机发件同一批 20 个邮箱；须在白名单内且 op_contacts 已配置 IMAP
-  const accounts = allAccounts.filter(
+  const eligible = allAccounts.filter(
     (a) => accountMatchesTemporaryOutboundPool(a) && hasImapConfig(a)
   );
-  if (!accounts.length) {
+  if (!eligible.length) {
     console.warn(
-      "[PollInfluencerReplies] 白名单内无可用 IMAP 账号（检查 op_contacts 是否含白名单邮箱的 imap/imap_port/auth_code），退出。"
+      "[PollInfluencerReplies] 动态池内无可用 IMAP 账号（检查 op_contacts 是否含 smtp/imap/auth_code），退出。"
     );
+    return;
+  }
+
+  const { batch, batchIndex, numBatches, totalAccounts } = selectImapPollBatch(
+    eligible,
+    { batchSize: IMAP_POLL_BATCH_SIZE }
+  );
+  const accounts = batch;
+
+  console.log(
+    `[PollInfluencerReplies] 分批轮询：第 ${batchIndex + 1}/${numBatches} 批，` +
+      `本批 ${accounts.length} 个账号（池内共 ${totalAccounts} 个，每批约 ${IMAP_POLL_BATCH_SIZE} 个）`
+  );
+
+  if (!accounts.length) {
+    console.warn("[PollInfluencerReplies] 本批无账号可轮询，退出。");
     return;
   }
 

@@ -19,7 +19,7 @@ import {
   sendOutreach,
   loadConversationHistoryForInfluencer,
 } from "../lib/agents/influencer-agent.js";
-import { sendMail } from "../lib/email/enterprise-mail-client.js";
+import { sendMail, OutboundCooldownError } from "../lib/email/enterprise-mail-client.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
@@ -693,6 +693,14 @@ async function main() {
         "[ProcessInfluencerAgentEvents] 处理事件时出现未捕获错误:",
         err
       );
+      if (err instanceof OutboundCooldownError) {
+        await markInfluencerAgentEventStatus(
+          ev.id,
+          "pending",
+          err?.message || String(err)
+        );
+        continue;
+      }
       await markInfluencerAgentEventStatus(
         ev.id,
         "failed",
