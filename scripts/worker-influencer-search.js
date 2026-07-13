@@ -18,6 +18,7 @@ import {
 import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
 import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
 import { fetchSearchTaskWorkNoteMetrics } from "../lib/db/campaign-candidates-dao.js";
+import { consumeKeywordSignalForSearch } from "../lib/db/campaign-keyword-signals-dao.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -329,7 +330,41 @@ async function loadTaskWorkNoteMetrics(taskId) {
       contactableCount: 0,
       skipCountryUnknownCount: 0,
       skipCountryMismatchCount: 0,
+      newRecommendedInsertCount: 0,
     };
+  }
+}
+
+async function consumeSignalForCompletedTask({
+  campaignId,
+  platform,
+  keyword,
+  taskId,
+}) {
+  const resolvedKeyword = String(keyword || "").trim();
+  if (!campaignId || !resolvedKeyword) return;
+  try {
+    const metrics = await loadTaskWorkNoteMetrics(taskId);
+    const result = await consumeKeywordSignalForSearch({
+      campaignId,
+      platform,
+      keyword: resolvedKeyword,
+      newRecommendedCount: Number(metrics.newRecommendedInsertCount || 0),
+    });
+    if (result.consumed) {
+      console.log(
+        `[worker-influencer-search] signal consumed task=${taskId} keyword=${resolvedKeyword} signal=${result.signalValue} newRec=${metrics.newRecommendedInsertCount || 0}`
+      );
+    } else {
+      console.log(
+        `[worker-influencer-search] signal consume miss task=${taskId} keyword=${resolvedKeyword} platform=${platform}`
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[worker-influencer-search] signal consume failed task=${taskId} keyword=${resolvedKeyword}:`,
+      err?.message || err
+    );
   }
 }
 
@@ -540,6 +575,7 @@ async function processTask(task, platformSlug) {
         taskId: task.id,
         runId: runId || null,
         searchKeyword: primaryKeyword,
+        platform: taskPlatformSlug,
         onStepUpdate,
         onTaskProgress: scheduleKeywordProgressPublish,
       }
@@ -578,6 +614,12 @@ async function processTask(task, platformSlug) {
     await publishKeywordNote({
       status: "failed",
       error: String(err?.message || "search_throw"),
+    });
+    await consumeSignalForCompletedTask({
+      campaignId,
+      platform: taskPlatformSlug,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+      taskId: task.id,
     });
     return;
   } finally {
@@ -630,6 +672,12 @@ async function processTask(task, platformSlug) {
           skipCountryMismatchCount: 0,
         },
       });
+      await consumeSignalForCompletedTask({
+        campaignId,
+        platform: taskPlatformSlug,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+        taskId: task.id,
+      });
       return;
     }
 
@@ -675,6 +723,12 @@ async function processTask(task, platformSlug) {
       },
     });
     await publishKeywordNote({ status: "finished", metrics: taskMetrics });
+    await consumeSignalForCompletedTask({
+      campaignId,
+      platform: taskPlatformSlug,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+      taskId: task.id,
+    });
     return;
   }
 
@@ -725,6 +779,12 @@ async function processTask(task, platformSlug) {
     status: "failed",
     metrics: taskMetricsFail,
     error: String(result?.error || "search_failed"),
+  });
+  await consumeSignalForCompletedTask({
+    campaignId,
+    platform: taskPlatformSlug,
+    keyword: taskKeyword || kwResult.search_queries?.[0] || null,
+    taskId: task.id,
   });
 }
 

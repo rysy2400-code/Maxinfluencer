@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_search_task (
   progress_contactable_count INT NOT NULL DEFAULT 0 COMMENT '可联系（符合画像且有邮箱）',
   progress_skip_country_unknown_count INT NOT NULL DEFAULT 0 COMMENT '因国家未知跳过分析',
   progress_skip_country_mismatch_count INT NOT NULL DEFAULT 0 COMMENT '因国家不符合跳过分析',
+  progress_new_recommended_insert_count INT NOT NULL DEFAULT 0 COMMENT '首次 isRecommended=true 写入候选池的红人数',
   progress_country_checked_count INT NOT NULL DEFAULT 0 COMMENT '已完成视频详情页国家采集的人数（TikTok 内部）',
   progress_country_passed_count INT NOT NULL DEFAULT 0 COMMENT '发布地符合 campaign.countries 的人数（TikTok 内部）',
   progress_enriched_count INT NOT NULL DEFAULT 0 COMMENT 'DEPRECATED: 已由 progress_profile_browsed_count 替代，不再写入',
