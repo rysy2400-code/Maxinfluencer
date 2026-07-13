@@ -7,7 +7,9 @@
  *
  * 环境变量:
  *   SCRAPER_MODE=lite（必须）
- *   LITE_YT_ENRICH_CONCURRENCY=3
+ *   LITE_YT_ENRICH_CONCURRENCY=10
+ *   YT_LITE_TAB_POOL_SIZE=1
+ *   YT_ALLOW_ABOUT_FALLBACK=0（Lite 默认 API-only）
  *   ENRICH_NO_ANALYZE=1  跳过 LLM 分析加快冒烟
  */
 import dotenv from "dotenv";
@@ -25,10 +27,12 @@ process.env.LITE_DISABLE_SCREENSHOTS = process.env.LITE_DISABLE_SCREENSHOTS || "
 process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "false";
 process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "80";
 process.env.YT_LITE_SEARCH_MAX_PAGES = process.env.YT_LITE_SEARCH_MAX_PAGES || "20";
-process.env.LITE_YT_ENRICH_CONCURRENCY = process.env.LITE_YT_ENRICH_CONCURRENCY || "1";
+process.env.LITE_YT_ENRICH_CONCURRENCY = process.env.LITE_YT_ENRICH_CONCURRENCY || "10";
+process.env.YT_LITE_TAB_POOL_SIZE = process.env.YT_LITE_TAB_POOL_SIZE || "1";
+process.env.YT_ALLOW_ABOUT_FALLBACK = process.env.YT_ALLOW_ABOUT_FALLBACK || "0";
 
 const keyword = process.argv[2] || "cat litter review";
-const maxEnrich = Math.min(Number(process.argv[3] || 3), 8);
+const maxEnrich = Math.min(Number(process.argv[3] || 3), 10);
 const enrichNoAnalyze = process.env.ENRICH_NO_ANALYZE === "1";
 
 function buildLlmSamplePreview(inf) {

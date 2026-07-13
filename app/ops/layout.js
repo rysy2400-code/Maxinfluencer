@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Maxinfluencer 爬虫运维",
-  description: "爬虫自愈事件与运维监控（独立于 Campaign 执行总览）",
+  title: "Maxinfluencer 虚拟机运维",
+  description: "14 台虚拟机矩阵：健康状态与任务消费快照（独立于 Campaign 执行总览）",
 };
 
 export default function OpsLayout({ children }) {
@@ -9,8 +9,8 @@ export default function OpsLayout({ children }) {
       style={{
         minHeight: "100vh",
         margin: 0,
-        background: "#0f172a",
-        color: "#e2e8f0",
+        background: "#F9FAFB",
+        color: "#111827",
         fontFamily:
           "system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif",
       }}
