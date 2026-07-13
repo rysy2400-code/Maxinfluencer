@@ -1047,15 +1047,11 @@ function ExecutionProgressLastReplyTime({ at }) {
 
 /** 执行进度卡片：国家 · 粉丝 · 播放 · GMV */
 function ExecutionProgressMetricsLine({ item }) {
-  const platform = resolveInfluencerPlatform(item);
-  const isYt = platform === "YouTube";
   const countryRaw = resolveVideoPublishCountry(item);
   const country =
     countryRaw != null
       ? formatCountryForDisplay(countryRaw) ?? countryRaw
-      : isYt
-        ? ""
-        : "—";
+      : "—";
   const followers = formatInfluencerStat(
     item?.followers ?? item?.followerCount ?? item?.follower_count
   );
