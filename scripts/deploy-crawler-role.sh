@@ -125,17 +125,27 @@ PS
 deploy_one() {
   local host="$1"
   local log="/tmp/deploy-${ROLE}-crawler-${host}.log"
+  local tmp_script
+  tmp_script="$(mktemp "/tmp/deploy-${ROLE}-${host}.XXXXXX.ps1")"
+  build_remote_ps "$ROLE" "$TARGET_SHA" >"$tmp_script"
   echo "[deploy-$ROLE] starting $host sha=$TARGET_SHA"
-  if build_remote_ps "$ROLE" "$TARGET_SHA" | ssh -i "$KEY" -p "$PORT" \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=25 -o BatchMode=yes \
-    "${USER}@${host}" \
-    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command -" \
-    >"$log" 2>&1; then
+  if scp -i "$KEY" -P "$PORT" \
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=25 -o BatchMode=yes \
+      "$tmp_script" "${USER}@${host}:C:/maxinfluencer/scripts/deploy-role-run.ps1" \
+      >"$log" 2>&1 &&
+    ssh -i "$KEY" -p "$PORT" \
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=25 -o BatchMode=yes \
+      "${USER}@${host}" \
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\maxinfluencer\\scripts\\deploy-role-run.ps1" \
+      >>"$log" 2>&1; then
     echo "[deploy-$ROLE] OK $host"
     grep -E "health role=|\\[deploy-crawler\\] role=|SEARCH_WORKER_PLATFORMS=" "$log" | tail -5 || true
+    rm -f "$tmp_script"
     return 0
   fi
+  rm -f "$tmp_script"
   echo "[deploy-$ROLE] FAIL $host - tail $log:" >&2
   tail -40 "$log" >&2 || true
   return 1
