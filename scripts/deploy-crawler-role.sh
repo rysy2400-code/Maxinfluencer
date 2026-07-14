@@ -115,12 +115,12 @@ PS
 deploy_one() {
   local host="$1"
   local log="/tmp/deploy-${ROLE}-crawler-${host}.log"
-  local encoded
-  encoded="$(build_remote_ps "$ROLE" "$TARGET_SHA" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
   echo "[deploy-$ROLE] starting $host sha=$TARGET_SHA"
-  if ssh -i "$KEY" -p "$PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=25 -o BatchMode=yes \
+  if build_remote_ps "$ROLE" "$TARGET_SHA" | ssh -i "$KEY" -p "$PORT" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=25 -o BatchMode=yes \
     "${USER}@${host}" \
-    "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" \
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command -" \
     >"$log" 2>&1; then
     echo "[deploy-$ROLE] OK $host"
     grep -E "health role=|\\[deploy-crawler\\] role=|SEARCH_WORKER_PLATFORMS=" "$log" | tail -5 || true
