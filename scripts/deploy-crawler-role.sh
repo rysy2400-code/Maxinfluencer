@@ -129,11 +129,12 @@ deploy_one() {
   tmp_script="$(mktemp "/tmp/deploy-${ROLE}-${host}.XXXXXX.ps1")"
   build_remote_ps "$ROLE" "$TARGET_SHA" >"$tmp_script"
   echo "[deploy-$ROLE] starting $host sha=$TARGET_SHA"
-  if scp -i "$KEY" -P "$PORT" \
+  if ssh -i "$KEY" -p "$PORT" \
       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o ConnectTimeout=25 -o BatchMode=yes \
-      "$tmp_script" "${USER}@${host}:C:/maxinfluencer/scripts/deploy-role-run.ps1" \
-      >"$log" 2>&1 &&
+      "${USER}@${host}" \
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\$content = [Console]::In.ReadToEnd(); Set-Content -LiteralPath 'C:\\maxinfluencer\\scripts\\deploy-role-run.ps1' -Value \$content -Encoding UTF8\"" \
+      <"$tmp_script" >"$log" 2>&1 &&
     ssh -i "$KEY" -p "$PORT" \
       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o ConnectTimeout=25 -o BatchMode=yes \
