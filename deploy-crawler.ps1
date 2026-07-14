@@ -190,6 +190,11 @@ if ($env:CRAWLER_SKIP_CLASH_PROBE) {
   $v = "$($env:CRAWLER_SKIP_CLASH_PROBE)".ToLowerInvariant()
   $skipClashProbe = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes")
 }
+$crawlerPlatformRoleForProbe = if ($env:CRAWLER_PLATFORM_ROLE) { "$($env:CRAWLER_PLATFORM_ROLE)".Trim().ToLowerInvariant() } else { "" }
+if ((-not $env:CRAWLER_SKIP_CLASH_PROBE) -and ($crawlerPlatformRoleForProbe -eq "youtube" -or $crawlerPlatformRoleForProbe -eq "instagram")) {
+  $skipClashProbe = $true
+  Write-Host "[deploy-crawler] role=$crawlerPlatformRoleForProbe: skip TikTok clash probe."
+}
 if (-not $skipClashProbe) {
   if (Test-Path $disableVergeScript) {
     Write-Host "[deploy-crawler] disable Clash Verge GUI/subscriptions on crawler..."

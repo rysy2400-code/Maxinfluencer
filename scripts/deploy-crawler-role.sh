@@ -44,6 +44,7 @@ if (-not (Test-Path \$root)) { throw "Deploy root not found: \$root" }
 & \$git -C \$root reset --hard \$targetSha
 & \$git -C \$root clean -fd -e .chrome-cdp-9222 -e .chrome-cdp-9223
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root "deploy-crawler.ps1")
+Start-Sleep -Seconds 45
 
 function Test-Cdp([int]\$Port) {
   try {
