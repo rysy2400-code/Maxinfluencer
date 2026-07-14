@@ -51,7 +51,7 @@ if (-not (Test-Path \$root)) { throw "Deploy root not found: \$root" }
   (Join-Path \$root "deploy-crawler.ps1")
 ) -NoNewWindow -Wait -PassThru
 if (\$deploy.ExitCode -ne 0) {
-  throw "deploy-crawler.ps1 failed with exit code \$($deploy.ExitCode)"
+  throw ("deploy-crawler.ps1 failed with exit code " + \$deploy.ExitCode)
 }
 Start-Sleep -Seconds 45
 
