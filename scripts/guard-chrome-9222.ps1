@@ -17,6 +17,12 @@ if ($env:CHROME_VISIBLE) {
   $visible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
 }
 $launchUrl = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "about:blank" }
+$launchUrls = @(
+  $launchUrl -split "[,\r\n]+" |
+    ForEach-Object { "$_".Trim() } |
+    Where-Object { $_ }
+)
+if ($launchUrls.Count -eq 0) { $launchUrls = @("about:blank") }
 $proxyServer = if ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
 $chromeArgList = @(
   "--disable-quic",
@@ -26,9 +32,9 @@ $chromeArgList = @(
   "--profile-directory=Default",
   "--proxy-server=$proxyServer",
   "--no-first-run",
-  "--no-default-browser-check",
-  $launchUrl
+  "--no-default-browser-check"
 )
+$chromeArgList += $launchUrls
 if (-not $visible) {
   $chromeArgList = @("--headless=new", "--disable-gpu") + $chromeArgList
 } else {

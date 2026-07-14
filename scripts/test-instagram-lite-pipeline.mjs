@@ -21,7 +21,7 @@ process.env.ENRICH_BATCH_POLICY = process.env.ENRICH_BATCH_POLICY || "false";
 process.env.SEARCH_MAX_POOL_SIZE = process.env.SEARCH_MAX_POOL_SIZE || "80";
 process.env.IG_LITE_SEARCH_MAX_PAGES = process.env.IG_LITE_SEARCH_MAX_PAGES || "12";
 process.env.IG_LITE_SEARCH_DELAY_MS = process.env.IG_LITE_SEARCH_DELAY_MS || "120";
-process.env.LITE_IG_ENRICH_CONCURRENCY = process.env.LITE_IG_ENRICH_CONCURRENCY || "1";
+process.env.LITE_IG_ENRICH_CONCURRENCY = process.env.LITE_IG_ENRICH_CONCURRENCY || "10";
 
 const keyword = process.argv[2] || "pool cleaner";
 const maxEnrich = Math.min(Number(process.argv[3] || 3), 8);
@@ -48,10 +48,11 @@ const STANDARD_BASELINE = {
     estimatedSeconds: "120–300",
   },
   liteDesign: {
-    search: "1 次搜索导航 + GraphQL 翻页（无滚动）",
-    enrich: "profile API + About 账户 + GraphQL 翻页/滚动兜底至 50 Reels",
+    search: "GraphQL/REST API 直调（不打开搜索页）",
+    enrich: "web_profile_info + clips GraphQL 翻页（不打开 profile/Reels/About）",
     maxReels: 50,
     blockResources: "image/media/font",
+    enrichConcurrency: 10,
   },
   notes: "Standard 基线由 goto/scroll/about 参数推算；Lite 为本次实测。",
 };

@@ -5,7 +5,7 @@ process.env.CDP_ENDPOINT = "http://127.0.0.1:9222";
 process.env.ENRICH_NO_ANALYZE = "1";
 process.env.LITE_DISABLE_SCREENSHOTS = "true";
 process.env.LITE_ENRICH_SCREENSHOTS = process.env.LITE_ENRICH_SCREENSHOTS || "true";
-process.env.LITE_IG_ENRICH_CONCURRENCY = "1";
+process.env.LITE_IG_ENRICH_CONCURRENCY = "10";
 process.env.IG_ABOUT_WAIT_MS = "8000";
 
 const keyword = process.argv[2] || "pool cleaner";

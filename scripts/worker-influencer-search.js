@@ -576,6 +576,8 @@ async function processTask(task, platformSlug) {
         runId: runId || null,
         searchKeyword: primaryKeyword,
         platform: taskPlatformSlug,
+        workerIp: CURRENT_WORKER_IP,
+        workerHost: CURRENT_WORKER_HOST,
         onStepUpdate,
         onTaskProgress: scheduleKeywordProgressPublish,
       }

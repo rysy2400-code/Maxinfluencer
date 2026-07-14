@@ -236,6 +236,12 @@ $workerId = $workerIdentity.WorkerId
 Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, lan=$workerLanIp, host=$workerHost) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
+$isYoutubeDedicatedWorker193 = ($workerIp -eq "152.32.174.193")
+if ($isYoutubeDedicatedWorker193) {
+  $searchCdpEndpoint = "http://127.0.0.1:9222"
+  $enrichCdpEndpoint = "http://127.0.0.1:9222"
+  Write-Host "[deploy-crawler] 152.32.174.193 policy: YouTube-only worker, 9222-only CDP, 3 YT tabs, total enrich concurrency 150."
+}
 
 # 152.32.192.65 曾用 parallel+2 slots，CDP 易超时；现与其它爬虫机一致：serial + 1 slot。
 $parallelCrawlerIps = @()
@@ -260,7 +266,7 @@ $searchTaskStuckReclaimMinutes = if ($env:SEARCH_TASK_STUCK_RECLAIM_MINUTES -and
 } else {
   "7"
 }
-$searchWorkerPlatforms = if ($env:SEARCH_WORKER_PLATFORMS) { "$($env:SEARCH_WORKER_PLATFORMS)".Trim() } else { "instagram,youtube" }
+$searchWorkerPlatforms = if ($isYoutubeDedicatedWorker193) { "youtube" } elseif ($env:SEARCH_WORKER_PLATFORMS) { "$($env:SEARCH_WORKER_PLATFORMS)".Trim() } else { "instagram,youtube" }
 Write-Host "[deploy-crawler] SEARCH_WORKER_PLATFORMS=$searchWorkerPlatforms"
 Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAnalysisTimeoutMs, SEARCH_TASK_STUCK_RECLAIM_MINUTES=$searchTaskStuckReclaimMinutes"
 
@@ -276,7 +282,13 @@ if ($env:CHROME_VISIBLE) {
   $isVisible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
 }
 $chromeModeArgs = if ($isVisible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
-$launchUrl9222 = if ($env:CHROME_9222_URL) { "$($env:CHROME_9222_URL)" } else { "https://www.instagram.com/" }
+$launchUrl9222 = if ($isYoutubeDedicatedWorker193) {
+  "https://www.youtube.com/,https://www.youtube.com/feed/explore,https://www.youtube.com/results?search_query=ai+design"
+} elseif ($env:CHROME_9222_URL) {
+  "$($env:CHROME_9222_URL)"
+} else {
+  "https://www.instagram.com/"
+}
 
 $guard9222 = Join-Path $scriptsDir "run-guard-chrome-9222.ps1"
 $guard9222Source = Join-Path $scriptsDir "guard-chrome-9222.ps1"
@@ -334,6 +346,15 @@ $guardCrawlerContent = @"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 `$env:SCRAPER_MODE = "$scraperMode"
 `$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
+$(if ($isYoutubeDedicatedWorker193) {
+'$env:YT_LITE_TAB_POOL_SIZE = "3"
+$env:LITE_YT_ENRICH_CONCURRENCY = "150"
+$env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
+$env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"
+$env:YT_ALLOW_ABOUT_FALLBACK = "0"
+$env:LITE_ENRICH_SCREENSHOTS = "false"
+$env:ENRICH_BATCH_POLICY = "false"'
+} else { '' })
 while (`$true) {
   try {
     `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback
@@ -394,7 +415,9 @@ while (`$true) {
 "@
 
 Set-Content -Path $guard9222 -Value $guard9222Content -Encoding ASCII
-Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
+if (-not $isYoutubeDedicatedWorker193) {
+  Set-Content -Path $guard9223 -Value $guard9223Content -Encoding ASCII
+}
 Set-Content -Path $guardCrawler -Value $guardCrawlerContent -Encoding ASCII
 Set-Content -Path $guardHealth -Value $guardHealthContent -Encoding ASCII
 
@@ -422,15 +445,20 @@ Write-CrawlerWorkerRuntimeMarker -ProjectRoot $Root -PublicIp $workerIp
 Stop-StaleCdpBrowsers
 Ensure-Schtask -TaskName "maxin-guard-clash-mihomo" -ScriptPath $runGuardClashScript
 Ensure-Schtask -TaskName "maxin-guard-chrome-9222" -ScriptPath $guard9222
-Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
+if ($isYoutubeDedicatedWorker193) {
+  Disable-Cdp9223Guard
+} else {
+  Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
+}
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
 
 if (-not $skipClashProbe) {
   Write-Host "[deploy-crawler] restart CDP Chrome after clash reload..."
+  $cdpRestartPortPattern = if ($isYoutubeDedicatedWorker193) { "remote-debugging-port=9222" } else { "remote-debugging-port=922[23]" }
   Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -match "chrome|msedge") -and
-    $_.CommandLine -match "remote-debugging-port=922[23]" -and
+    $_.CommandLine -match $cdpRestartPortPattern -and
     $_.CommandLine -notmatch "--type="
   } | ForEach-Object {
     try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
@@ -444,6 +472,9 @@ $crawlerProcess = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "no
 
 Write-Host "[deploy-crawler] CDP 9222: $ok9222"
 Write-Host "[deploy-crawler] CDP 9223: $ok9223"
+if ($isYoutubeDedicatedWorker193 -and $ok9223) {
+  Write-Warning "152.32.174.193 policy violation: CDP 9223 is still reachable after cleanup."
+}
 Write-Host "[deploy-crawler] CDP_ENDPOINT_ENRICH default: $enrichCdpEndpoint"
 Write-Host "[deploy-crawler] Crawler process count: $($crawlerProcess.Count)"
 if ($crawlerProcess.Count -gt 1) {
