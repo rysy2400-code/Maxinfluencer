@@ -1048,6 +1048,7 @@ async function main() {
   const platforms = resolveWorkerPlatforms();
   const loopMode = String(process.env.SEARCH_WORKER_LOOP || "true") !== "false";
   const forcedTaskId = Number(process.env.SEARCH_TASK_ID || 0);
+  const forceClaimTask = process.env.SEARCH_TASK_FORCE_CLAIM === "1";
 
   console.log(
     `[worker-influencer-search] 启动 host=${CURRENT_WORKER_HOST || "unknown"} ip=${CURRENT_WORKER_IP || "unknown"} slots=${slots} platforms=${platforms.join(",")} cdp9222=${resolveCdp9222Mode()} parallel=${isCdp9222Parallel()} loop=${loopMode}${forcedTaskId ? ` taskId=${forcedTaskId}` : ""}`
@@ -1070,7 +1071,7 @@ async function main() {
         console.error(`[worker-influencer-search] 未找到任务 id=${forcedTaskId}`);
         return;
       }
-      if (row.status !== "pending") {
+      if (row.status !== "pending" && !forceClaimTask) {
         console.error(
           `[worker-influencer-search] 任务 id=${forcedTaskId} 状态=${row.status}，非 pending`
         );
@@ -1101,7 +1102,7 @@ async function main() {
             started_at = NOW(),
             attempt_count = attempt_count + 1,
             updated_at = NOW()
-        WHERE id = ? AND status = 'pending'
+        WHERE id = ?${forceClaimTask ? "" : " AND status = 'pending'"}
       `,
         [platformWorkerId, CURRENT_WORKER_HOST, CURRENT_WORKER_IP, forcedTaskId]
       );
@@ -1140,4 +1141,3 @@ main()
     console.error("[worker-influencer-search] 运行出错：", err?.message || err);
     process.exit(1);
   });
-
