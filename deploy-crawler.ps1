@@ -305,6 +305,7 @@ $guard9222Content = @"
 `$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
 `$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"
+$(if ($isYoutubeDedicatedWorker193) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
 . "$($guard9222Source.Replace("\", "\\"))"
 "@
 
