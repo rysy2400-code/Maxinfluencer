@@ -4,7 +4,10 @@
  */
 import { enforceStrictKeywordSignals } from "../lib/tools/influencer-functions/generate-search-keywords.js";
 import { normalizeSignalMatchKey } from "../lib/db/campaign-keyword-signals-dao.js";
-import { extractKeywordSignalsFromInfluencer } from "../lib/influencer/extract-keyword-signals.js";
+import {
+  extractKeywordSignalsFromInfluencer,
+  filterKeywordSignalsForSearch,
+} from "../lib/influencer/extract-keyword-signals.js";
 
 const assert = (cond, msg) => {
   if (!cond) throw new Error(msg);
@@ -27,18 +30,22 @@ function filterPromptSignals(signals, excludeSet) {
   return signals.filter((s) => !isKeywordExcluded(s.signal_value, excludeSet));
 }
 
-// 1) 严格模式：LLM 漏掉的 signal 应被补入
+// 1) 候选模式：只有 LLM 选择采用的 signal 才应被兜底补入
 {
   const signals = [
     { signal_type: "hashtag", signal_value: "#poolhack", influencer_count: 3 },
-    { signal_type: "mention", signal_value: "@beatbot", influencer_count: 2 },
   ];
   const llmItems = [{ keyword: "random product review", bucket: "product", is_exploration: false, reason: "" }];
   const merged = enforceStrictKeywordSignals(llmItems, signals, "tiktok");
   const keywords = merged.map((x) => x.keyword);
-  assert(keywords.includes("#poolhack"), "strict: missing hashtag injected");
-  assert(keywords.includes("@beatbot"), "strict: missing mention injected");
-  assert(keywords.includes("random product review"), "strict: keep llm items");
+  assert(keywords.includes("#poolhack"), "selected signal injected");
+  assert(keywords.includes("random product review"), "keep llm items");
+
+  const notSelected = enforceStrictKeywordSignals(llmItems, [], "tiktok");
+  assert(
+    !notSelected.map((x) => x.keyword).includes("#poolhack"),
+    "unselected signal should not be injected"
+  );
 }
 
 // 2) Instagram：仅 hashtag 进 prompt
@@ -89,6 +96,27 @@ function filterPromptSignals(signals, excludeSet) {
   );
   assert(!hashtags.some((t) => t.includes("mybrand")), "own brand filtered");
   assert(hashtags.includes("#nichepool"), "non-brand kept");
+}
+
+// 7) 确定性 signal 过滤：纯数字/过短/通用噪声应被拦截，有意义短 tag 保留
+{
+  const { kept, dropped } = filterKeywordSignalsForSearch([
+    { signal_type: "hashtag", signal_value: "#85", influencer_count: 1 },
+    { signal_type: "hashtag", signal_value: "#x", influencer_count: 1 },
+    { signal_type: "hashtag", signal_value: "#howto", influencer_count: 1 },
+    { signal_type: "hashtag", signal_value: "#ai", influencer_count: 1 },
+    { signal_type: "hashtag", signal_value: "#designagent", influencer_count: 1 },
+  ]);
+  const keptValues = kept.map((s) => s.signal_value);
+  const droppedReasons = dropped.map((s) => s.filter_reason);
+  assert(!keptValues.includes("#85"), "numeric hashtag filtered");
+  assert(!keptValues.includes("#x"), "too short hashtag filtered");
+  assert(!keptValues.includes("#howto"), "generic noise hashtag filtered");
+  assert(keptValues.includes("#ai"), "allowed short hashtag kept");
+  assert(keptValues.includes("#designagent"), "specific hashtag kept");
+  assert(droppedReasons.includes("numeric_hashtag"), "numeric reason recorded");
+  assert(droppedReasons.includes("too_short_hashtag"), "short reason recorded");
+  assert(droppedReasons.includes("generic_noise_hashtag"), "noise reason recorded");
 }
 
 console.log("✅ keyword-signals flow tests passed");
