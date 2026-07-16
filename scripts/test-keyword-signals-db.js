@@ -44,7 +44,7 @@ async function main() {
     username: "poolcreator_a",
     platform: PLATFORM,
     profile_data: {
-      videos: [{ description: "hack #saltwaterpool @beatbot" }],
+      videos: [{ description: "hack #saltwaterpool @beatbot #1 @d" }],
     },
   };
   const influencerB = {
@@ -75,6 +75,17 @@ async function main() {
     [TEST_CAMPAIGN_ID, PLATFORM]
   );
   assert(rows?.[0]?.c === 2, `#saltwaterpool influencer_count should be 2, got ${rows?.[0]?.c}`);
+
+  const noisyRows = await queryTikTok(
+    `
+    SELECT signal_type AS type, signal_value AS value
+    FROM tiktok_campaign_keyword_signals
+    WHERE campaign_id = ?
+      AND signal_value IN ('#1', '@d')
+  `,
+    [TEST_CAMPAIGN_ID]
+  );
+  assert(noisyRows.length === 0, "numeric hashtag and too-short mention should not be ingested");
 
   const promptSignals = await getPromptKeywordSignals(TEST_CAMPAIGN_ID, PLATFORM);
   assert(promptSignals.length >= 2, "prompt should have signals");

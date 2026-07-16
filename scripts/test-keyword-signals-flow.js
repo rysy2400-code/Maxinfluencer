@@ -98,7 +98,28 @@ function filterPromptSignals(signals, excludeSet) {
   assert(hashtags.includes("#nichepool"), "non-brand kept");
 }
 
-// 7) 确定性 signal 过滤：纯数字/过短/通用噪声应被拦截，有意义短 tag 保留
+// 7) 信号提取只读 profile_data.videos，不再从兼容字段/顶层 videos 取数
+{
+  const { hashtags } = extractKeywordSignalsFromInfluencer(
+    {
+      profile_data: {
+        videos: [{ description: "#fromprofilevideos" }],
+        videoList: [{ description: "#fromvideolist" }],
+        posts: [{ description: "#fromposts" }],
+        reels: [{ description: "#fromreels" }],
+      },
+      videos: [{ description: "#fromtopvideos" }],
+    },
+    {}
+  );
+  assert(hashtags.includes("#fromprofilevideos"), "profile_data.videos is read");
+  assert(!hashtags.includes("#fromvideolist"), "profile_data.videoList ignored");
+  assert(!hashtags.includes("#fromposts"), "profile_data.posts ignored");
+  assert(!hashtags.includes("#fromreels"), "profile_data.reels ignored");
+  assert(!hashtags.includes("#fromtopvideos"), "top-level videos ignored");
+}
+
+// 8) 确定性 signal 过滤：纯数字/过短/通用噪声应被拦截，有意义短 tag 保留
 {
   const { kept, dropped } = filterKeywordSignalsForSearch([
     { signal_type: "hashtag", signal_value: "#85", influencer_count: 1 },
