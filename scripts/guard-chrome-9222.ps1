@@ -88,12 +88,10 @@ function Start-Chrome9222 {
 function Ensure-LaunchUrlTabs {
   if ($launchUrls.Count -le 1) { return }
   try {
-    $hostName = ([uri]$launchUrls[0]).Host
-    if (-not $hostName) { return }
     $allTargets = Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/list" -TimeoutSec 5
     $targets = @(
       $allTargets |
-        Where-Object { $_.type -eq "page" -and $_.url -match ([Regex]::Escape($hostName)) }
+        Where-Object { $_.type -eq "page" }
     )
     for ($i = $targets.Count; $i -lt $launchUrls.Count; $i++) {
       $url = [uri]::EscapeDataString($launchUrls[$i])
