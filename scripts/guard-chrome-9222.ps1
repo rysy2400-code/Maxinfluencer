@@ -90,8 +90,9 @@ function Ensure-LaunchUrlTabs {
   try {
     $hostName = ([uri]$launchUrls[0]).Host
     if (-not $hostName) { return }
+    $allTargets = Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/list" -TimeoutSec 5
     $targets = @(
-      Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/list" -TimeoutSec 5 |
+      $allTargets |
         Where-Object { $_.type -eq "page" -and $_.url -match ([Regex]::Escape($hostName)) }
     )
     for ($i = $targets.Count; $i -lt $launchUrls.Count; $i++) {
