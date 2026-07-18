@@ -52,6 +52,7 @@ if ($env:CDP_9222_SKIP_TIKTOK_PURGE) {
 }
 $unhealthySince = $null
 $lastStartAt = $null
+$lastTabEnsureAt = $null
 $startGraceSec = if ($env:CHROME_GUARD_START_GRACE_SEC) { [int]$env:CHROME_GUARD_START_GRACE_SEC } else { 90 }
 
 function Test-Cdp9222Healthy {
@@ -84,6 +85,22 @@ function Start-Chrome9222 {
   }
 }
 
+function Ensure-LaunchUrlTabs {
+  if ($launchUrls.Count -le 1) { return }
+  try {
+    $hostName = ([uri]$launchUrls[0]).Host
+    if (-not $hostName) { return }
+    $targets = @(
+      Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/list" -TimeoutSec 5 |
+        Where-Object { $_.type -eq "page" -and $_.url -match ([Regex]::Escape($hostName)) }
+    )
+    for ($i = $targets.Count; $i -lt $launchUrls.Count; $i++) {
+      $url = [uri]::EscapeDataString($launchUrls[$i])
+      Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:9222/json/new?$url" -TimeoutSec 5 | Out-Null
+    }
+  } catch {}
+}
+
 while ($true) {
   if (Test-Path $signalFile) {
     try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
@@ -106,6 +123,10 @@ while ($true) {
 
   if (Test-Cdp9222Healthy) {
     $unhealthySince = $null
+    if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
+      Ensure-LaunchUrlTabs
+      $lastTabEnsureAt = Get-Date
+    }
     if ((-not $skipTiktokPurge) -and (Test-Path $purgeDeniedScript)) {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $purgeDeniedScript -Port 9222 -Quiet 2>$null | Out-Null
       if ($LASTEXITCODE -eq 2) {
