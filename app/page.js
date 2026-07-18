@@ -23,6 +23,7 @@ import {
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import AccountBillingPanel from "./components/AccountBillingPanel";
+import AdminAccountPanel from "./components/AdminAccountPanel";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
 import {
   avgViewsFromSnapshot,
@@ -216,6 +217,8 @@ function SidebarAccountMenu({
   showBillingMenu,
   onRecharge,
   onLogout,
+  onCreateAccount,
+  onTopUp,
   switchPanelOpen,
   onToggleSwitchPanel,
   switchQuery,
@@ -358,6 +361,40 @@ function SidebarAccountMenu({
           {showAdminSwitch ? (
             <>
               <div style={{ height: 1, background: "#F3F4F6", margin: "2px 0" }} />
+              {user?.isAdmin ? (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateAccount();
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", width: "100%", padding: "8px 12px",
+                      border: "none", background: "transparent", cursor: "pointer", textAlign: "left",
+                      color: "#111827", fontSize: 13,
+                    }}
+                  >
+                    创建账户
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTopUp();
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", width: "100%", padding: "8px 12px",
+                      border: "none", background: "transparent", cursor: "pointer", textAlign: "left",
+                      color: "#111827", fontSize: 13,
+                    }}
+                  >
+                    充值入账
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 role="menuitem"
@@ -2418,6 +2455,8 @@ export default function HomePage() {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
   const [billingPanelOpen, setBillingPanelOpen] = useState(false);
+  const [adminAccountPanelOpen, setAdminAccountPanelOpen] = useState(false);
+  const [adminAccountPanelTab, setAdminAccountPanelTab] = useState("create");
   const [switchPanelOpen, setSwitchPanelOpen] = useState(false);
   const [switchQuery, setSwitchQuery] = useState("");
   const [switchUsers, setSwitchUsers] = useState([]);
@@ -5548,6 +5587,7 @@ export default function HomePage() {
     setSwitchPanelOpen(false);
     setSwitchQuery("");
     setRechargeModalOpen(false);
+    setAdminAccountPanelOpen(false);
     setAuthUser(null);
     setCurrentSessionId(null);
     clearChatPersistenceKeys();
@@ -6562,6 +6602,16 @@ export default function HomePage() {
               onLogout={() => {
                 setAccountMenuOpen(false);
                 void handleLogout();
+              }}
+              onCreateAccount={() => {
+                setAccountMenuOpen(false);
+                setAdminAccountPanelTab("create");
+                setAdminAccountPanelOpen(true);
+              }}
+              onTopUp={() => {
+                setAccountMenuOpen(false);
+                setAdminAccountPanelTab("topup");
+                setAdminAccountPanelOpen(true);
               }}
               switchPanelOpen={switchPanelOpen}
               onToggleSwitchPanel={() => setSwitchPanelOpen((open) => !open)}
@@ -8239,6 +8289,20 @@ export default function HomePage() {
       )}
 
       <AccountBillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} />
+      <AdminAccountPanel
+        open={adminAccountPanelOpen && !!authUser?.isAdmin}
+        initialTab={adminAccountPanelTab}
+        onClose={() => setAdminAccountPanelOpen(false)}
+        onAccountCreated={() => setSwitchUsers([])}
+        onBalanceChanged={(topUp) => {
+          if (topUp?.companyName === authUser?.companyName) {
+            setAuthUser((old) => old ? {
+              ...old,
+              balance: { amount: topUp.balanceAfter, currency: "USD" },
+            } : old);
+          }
+        }}
+      />
 
       {loginOpen && (
         <div

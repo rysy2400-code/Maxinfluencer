@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS tiktok_advertiser_top_up (
   created_by_user_id INT NULL,
   notification_sent_at TIMESTAMP NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_topup_bank_ref (advertiser_id, bank_reference),
+  UNIQUE KEY uk_topup_bank_ref_global (bank_reference),
   KEY idx_topup_advertiser_received (advertiser_id, received_at),
   CONSTRAINT fk_topup_advertiser FOREIGN KEY (advertiser_id) REFERENCES tiktok_advertiser (id)
     ON DELETE CASCADE ON UPDATE CASCADE

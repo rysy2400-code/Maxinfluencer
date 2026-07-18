@@ -8,7 +8,9 @@
     "dev:clean": "npm run clean && next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:account-admin": "node scripts/test-account-admin-validation.mjs",
+    "migrate:topup-reference": "node scripts/migrate-topup-reference-global-unique.js"
   },
   "dependencies": {
     "@langchain/core": "^0.3.0",
