@@ -117,7 +117,16 @@ if (\$role -eq "youtube") {
   if (\$ok9223) { throw "Instagram role must not expose CDP 9223" }
   \$pages = Get-CdpPages 9222
   \$igTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "instagram\\.com" }).Count
-  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs=\$igTabs platforms=instagram"
+  foreach (\$needle in @(
+    '\$env:IG_LITE_TAB_POOL_SIZE = "1"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY = "200"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "200"',
+    '\$env:IG_ALLOW_REELS_SCROLL_FALLBACK = "0"'
+  )) {
+    if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing Instagram guard env: \$needle" }
+  }
+  if (\$igTabs -ne 1) { throw "Instagram role expected exactly 1 Instagram tab, got \$igTabs" }
+  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs=\$igTabs platforms=instagram concurrency=1x200"
 }
 PS
 }
