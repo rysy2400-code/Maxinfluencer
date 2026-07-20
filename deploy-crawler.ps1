@@ -387,6 +387,27 @@ $guard9223Content = @"
 . "$($guard9223Source.Replace("\", "\\"))"
 "@
 
+$instagramGuardEnv = if ($isInstagramDedicatedWorker) {
+  @'
+$env:IG_LITE_TAB_POOL_SIZE = "1"
+$env:LITE_IG_ENRICH_CONCURRENCY = "200"
+$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "200"
+$env:LITE_IG_ENRICH_HARD_MAX = "200"
+$env:SEARCH_MAX_POOL_SIZE = "200"
+$env:IG_SEARCH_MAX_INFLUENCERS = "200"
+$env:IG_LITE_SEARCH_HARD_MAX_INFLUENCERS = "200"
+$env:IG_LITE_DISABLE_EVALUATE_LOCK = "1"
+$env:IG_ALLOW_REELS_SCROLL_FALLBACK = "0"
+$env:IG_ABOUT_CONCURRENCY = "200"
+$env:IG_ABOUT_429_PROBE_SIZE = "10"
+$env:IG_ABOUT_429_CIRCUIT_THRESHOLD = "5"
+$env:LITE_ENRICH_SCREENSHOTS = "false"
+$env:ENRICH_BATCH_POLICY = "true"
+$env:ENRICH_BATCH_SIZE = "200"
+$env:ENRICH_BATCH_STOP_ON_ZERO = "false"
+'@
+} else { "" }
+
 $guardCrawlerContent = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$Root = "$($Root.Replace("\", "\\"))"
@@ -408,6 +429,7 @@ $guardCrawlerContent = @"
 `$env:SEARCH_TASK_STUCK_RECLAIM_MINUTES = "$searchTaskStuckReclaimMinutes"
 `$env:SCRAPER_MODE = "$scraperMode"
 `$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
+$instagramGuardEnv
 $(if ($isYoutubeDedicatedWorker) {
 '$env:SEARCH_WORKER_LOOP = "true"
 $env:SEARCH_IMPORT_TASK_LOOP = "false"
