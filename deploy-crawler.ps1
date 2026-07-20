@@ -70,10 +70,27 @@ function Test-Cdp {
 }
 
 function Stop-StaleCdpBrowsers {
-  # Clear stale 9222 browser processes to avoid port conflicts.
+  # Clear stale CDP browser processes to avoid port conflicts and stale tabs.
   $stale = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -match "chrome|msedge") -and
-    ($_.CommandLine -match "remote-debugging-port=9222")
+    ($_.CommandLine -match "remote-debugging-port=922[23]" -or
+      $_.CommandLine -match "\\.chrome-cdp-922[23]")
+  }
+  foreach ($p in $stale) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+
+function Stop-GuardProcesses {
+  param(
+    [string[]]$ScriptNamePatterns
+  )
+  if (-not $ScriptNamePatterns -or $ScriptNamePatterns.Count -eq 0) { return }
+  $pattern = ($ScriptNamePatterns | ForEach-Object { [Regex]::Escape($_) }) -join "|"
+  $stale = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -match "powershell") -and
+    $_.CommandLine -and
+    ($_.CommandLine -match $pattern)
   }
   foreach ($p in $stale) {
     try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
@@ -85,8 +102,11 @@ function Disable-Cdp9223Guard {
   $taskName = "maxin-guard-chrome-9223"
   try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$taskName`"" -NoNewWindow -Wait | Out-Null } catch {}
   try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/Delete /F /TN `"$taskName`"" -NoNewWindow -Wait | Out-Null } catch {}
+  Stop-GuardProcesses -ScriptNamePatterns @("run-guard-chrome-9223.ps1", "guard-chrome-9223.ps1")
   $stale9223 = Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -match "chrome|msedge") -and ($_.CommandLine -match "remote-debugging-port=9223")
+    ($_.Name -match "chrome|msedge") -and
+    ($_.CommandLine -match "remote-debugging-port=9223" -or
+      $_.CommandLine -match "\\.chrome-cdp-9223")
   }
   foreach ($p in $stale9223) {
     try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
@@ -123,6 +143,7 @@ function Ensure-Schtask {
 
   # Ensure only one instance: stop old task instance then run once.
   try { Start-Process -FilePath "schtasks.exe" -ArgumentList "/End /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null } catch {}
+  Stop-GuardProcesses -ScriptNamePatterns @((Split-Path -Leaf $ScriptPath))
   Start-Process -FilePath "schtasks.exe" -ArgumentList "/Run /TN `"$TaskName`"" -NoNewWindow -Wait | Out-Null
 }
 
@@ -388,7 +409,9 @@ $guardCrawlerContent = @"
 `$env:SCRAPER_MODE = "$scraperMode"
 `$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
 $(if ($isYoutubeDedicatedWorker) {
-'$env:YT_LITE_TAB_POOL_SIZE = "3"
+'$env:SEARCH_WORKER_LOOP = "true"
+$env:SEARCH_IMPORT_TASK_LOOP = "false"
+$env:YT_LITE_TAB_POOL_SIZE = "3"
 $env:LITE_YT_ENRICH_CONCURRENCY = "150"
 $env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
 $env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"

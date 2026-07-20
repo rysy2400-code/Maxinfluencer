@@ -5,4 +5,5 @@ $env:CDP_RESTART_SIGNAL_FILE = "C:\maxinfluencer\signals\restart-chrome-9222.fla
 $env:CHROME_VISIBLE = "1"
 $env:CHROME_9222_URL = "https://www.instagram.com/"
 $env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"
+$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"
 . "C:\maxinfluencer\scripts\guard-chrome-9222.ps1"

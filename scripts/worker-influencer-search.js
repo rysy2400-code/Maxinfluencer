@@ -17,7 +17,10 @@ import {
 } from "../lib/influencer/resolve-campaign-platforms.js";
 import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
 import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
-import { fetchSearchTaskWorkNoteMetrics } from "../lib/db/campaign-candidates-dao.js";
+import {
+  fetchSearchTaskWorkNoteMetrics,
+  setSearchTaskFinalMetrics,
+} from "../lib/db/campaign-candidates-dao.js";
 import { consumeKeywordSignalForSearch } from "../lib/db/campaign-keyword-signals-dao.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -116,6 +119,78 @@ function calcKeywordScore(metrics = {}) {
   const failCount = Number(metrics.failCount || 0);
   const matchRate = enrichSuccessCount > 0 ? analyzeRecommendedCount / enrichSuccessCount : 0;
   return matchRate * 10 + enrichSuccessCount * 0.05 - failCount * 0.2;
+}
+
+function safeCount(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function countInfluencers(influencers, predicate) {
+  return (Array.isArray(influencers) ? influencers : []).filter(predicate).length;
+}
+
+function deriveSearchTaskMetricsFromResult(result = {}) {
+  const influencers = Array.isArray(result.influencers) ? result.influencers : [];
+  const stats = result.stats || {};
+  const country = result.countryFilter || stats.countryFilter || {};
+  const searchFoundCount = Math.max(
+    safeCount(stats.searchChannelCount),
+    safeCount(stats.influencerCount),
+    safeCount(result.savedCount),
+    influencers.length
+  );
+  const profileBrowsedCount = Math.max(
+    safeCount(stats.enrichedCount),
+    countInfluencers(
+      influencers,
+      (inf) => !!(inf?.profileDataReady || inf?.profile_data || inf?.viewsData || inf?.engagement)
+    )
+  );
+  const analyzedCount = Math.max(
+    safeCount(stats.analyzedCount),
+    countInfluencers(
+      influencers,
+      (inf) => typeof inf?.isRecommended === "boolean" || !!inf?.analysisReady
+    )
+  );
+  const recommendedCount = Math.max(
+    safeCount(stats.recommendedCount),
+    countInfluencers(influencers, (inf) => inf?.isRecommended === true)
+  );
+  const contactableCount = countInfluencers(
+    influencers,
+    (inf) => inf?.isRecommended === true && !!(inf?.email || inf?.hasEmail)
+  );
+  return {
+    searchFoundCount,
+    profileBrowsedCount,
+    analyzedCount,
+    recommendedCount,
+    contactableCount,
+    skipCountryUnknownCount: safeCount(country.unknown),
+    skipCountryMismatchCount: safeCount(country.mismatch),
+  };
+}
+
+function mergeSearchTaskMetrics(...items) {
+  const out = {
+    searchFoundCount: 0,
+    profileBrowsedCount: 0,
+    analyzedCount: 0,
+    recommendedCount: 0,
+    contactableCount: 0,
+    skipCountryUnknownCount: 0,
+    skipCountryMismatchCount: 0,
+    newRecommendedInsertCount: 0,
+  };
+  for (const item of items) {
+    if (!item) continue;
+    for (const key of Object.keys(out)) {
+      out[key] = Math.max(out[key], safeCount(item[key]));
+    }
+  }
+  return out;
 }
 
 async function upsertKeywordRunResult({
@@ -229,8 +304,13 @@ async function hasInflightForPlatform(platformSlug, platformWorkerId) {
 
 const PENDING_CLAIM_SCAN_LIMIT = 40;
 
+function isSearchImportTaskLoopEnabled() {
+  return String(process.env.SEARCH_IMPORT_TASK_LOOP ?? "true").toLowerCase() !== "false";
+}
+
 /** 有 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
 async function hasPendingImportTask() {
+  if (!isSearchImportTaskLoopEnabled()) return false;
   const rows = await queryTikTok(
     `
     SELECT id FROM tiktok_influencer_import_task
@@ -258,10 +338,17 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
     SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
     FROM tiktok_influencer_search_task
     WHERE status = 'pending'
+      AND (
+        platform = ?
+        OR (
+          (platform IS NULL OR platform = '')
+          AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.platform')) = ?
+        )
+      )
     ORDER BY priority DESC, id ASC
     LIMIT ${PENDING_CLAIM_SCAN_LIMIT}
   `,
-    []
+    [platformSlug, platformSlug]
   );
   if (!rows?.length) return null;
 
@@ -697,9 +784,12 @@ async function processTask(task, platformSlug) {
     } catch {
       /* ignore */
     }
+    const taskMetrics = mergeSearchTaskMetrics(
+      await loadTaskWorkNoteMetrics(task.id),
+      deriveSearchTaskMetricsFromResult(result)
+    );
+    await setSearchTaskFinalMetrics(task.id, taskMetrics);
     await markTaskStatus(task.id, "succeeded", null);
-
-    const taskMetrics = await loadTaskWorkNoteMetrics(task.id);
     console.log(
       `[worker-influencer-search] 任务指标 id=${task.id}:`,
       JSON.stringify(taskMetrics)
@@ -1131,7 +1221,7 @@ async function main() {
 
   await Promise.all([
     ...platforms.map((platformSlug) => platformLoop(platformSlug)),
-    importTaskLoop(),
+    ...(isSearchImportTaskLoopEnabled() ? [importTaskLoop()] : []),
   ]);
 }
 
