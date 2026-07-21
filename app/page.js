@@ -2370,6 +2370,7 @@ export default function HomePage() {
   /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
   const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
+  const resolvedCampaignIdRef = useRef(null);
   const resolveCampaignRequestRef = useRef(0);
   const switchSessionRequestRef = useRef(0);
   const resolveCampaignSessionRef = useRef(null);
@@ -2379,6 +2380,7 @@ export default function HomePage() {
   const keywordWorkNotesSessionRef = useRef(null);
   const [executionStatus, setExecutionStatus] = useState(null); // 执行阶段右侧「执行进度」数据
   const [executionLoading, setExecutionLoading] = useState(false);
+  const [executionLoadingMore, setExecutionLoadingMore] = useState(false);
   const [executionError, setExecutionError] = useState(null);
   const [executionConfig, setExecutionConfig] = useState(null); // 执行阶段右侧「工作笔记」用到的执行节奏 & 汇报配置
   const [executionConfigError, setExecutionConfigError] = useState(null);
@@ -2386,6 +2388,8 @@ export default function HomePage() {
   const [executionExportingStage, setExecutionExportingStage] = useState(null); // 正在导出的执行阶段 key
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
+  // 大 campaign 的执行卡片包含较大的分析文本；分批挂载，避免首屏同步创建数百个复杂组件。
+  const [executionVisibleLimit, setExecutionVisibleLimit] = useState(40);
   const [activeAnalyzedSubTab, setActiveAnalyzedSubTab] = useState("recommended"); // 已分析子 Tab
   const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
@@ -2404,7 +2408,9 @@ export default function HomePage() {
   const [analyzedDbRecommendedCount, setAnalyzedDbRecommendedCount] = useState(null);
   const [analyzedDbNotRecommendedCount, setAnalyzedDbNotRecommendedCount] = useState(null);
   const analyzedPagingInFlightRef = useRef(false);
+  const executionPagingInFlightRef = useRef(false);
   const executionProgressListRef = useRef(null);
+  const executionInfiniteSentinelRef = useRef(null);
   const analyzedInfiniteSentinelRef = useRef(null);
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
@@ -2763,6 +2769,91 @@ export default function HomePage() {
     [executionStatus, analyzedCandidatesItems]
   );
 
+  const mergeExecutionStatusPage = React.useCallback((prev, data, stageKey, append = false) => {
+    if (!data) return prev;
+    const base =
+      prev && prev.campaignId === data.campaignId
+        ? prev
+        : {
+            ...data,
+            columns: {
+              contacted: [],
+              pendingPrice: [],
+              pendingSample: [],
+              pendingDraft: [],
+              published: [],
+            },
+          };
+    const incomingColumns = data.columns || {};
+    const nextColumns = {
+      contacted: base.columns?.contacted || [],
+      pendingPrice: base.columns?.pendingPrice || [],
+      pendingSample: base.columns?.pendingSample || [],
+      pendingDraft: base.columns?.pendingDraft || [],
+      published: base.columns?.published || [],
+    };
+
+    if (stageKey && nextColumns[stageKey]) {
+      const incoming = Array.isArray(incomingColumns[stageKey])
+        ? incomingColumns[stageKey]
+        : [];
+      nextColumns[stageKey] = append ? [...nextColumns[stageKey], ...incoming] : incoming;
+    } else {
+      for (const key of ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"]) {
+        nextColumns[key] = Array.isArray(incomingColumns[key]) ? incomingColumns[key] : [];
+      }
+    }
+
+    return {
+      ...base,
+      ...data,
+      columns: nextColumns,
+      totalByStage: data.totalByStage || base.totalByStage || {},
+      page: data.page || base.page || null,
+    };
+  }, []);
+
+  const loadExecutionStatusPage = useCallback(
+    async (stageKey, { append = false } = {}) => {
+      const cid = resolvedCampaignId;
+      if (!cid || stageKey === "analyzed") return;
+      if (append && executionPagingInFlightRef.current) return;
+      const currentCount = executionStatus?.columns?.[stageKey]?.length || 0;
+      const offset = append ? currentCount : 0;
+      if (append) executionPagingInFlightRef.current = true;
+      try {
+        if (append) setExecutionLoadingMore(true);
+        else setExecutionLoading(true);
+        setExecutionError(null);
+        const q = new URLSearchParams({
+          stage: stageKey,
+          limit: "40",
+          offset: String(offset),
+        });
+        const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.success) throw new Error(data.error || "获取执行进度失败");
+        setExecutionStatus((prev) => mergeExecutionStatusPage(prev, data, stageKey, append));
+      } catch (e) {
+        console.error("[HomePage] 获取执行进度失败:", e);
+        setExecutionError(e.message || "获取执行进度失败");
+      } finally {
+        if (append) {
+          setExecutionLoadingMore(false);
+          executionPagingInFlightRef.current = false;
+        } else {
+          setExecutionLoading(false);
+        }
+      }
+    },
+    [resolvedCampaignId, executionStatus, mergeExecutionStatusPage]
+  );
+
+  useEffect(() => {
+    resolvedCampaignIdRef.current = resolvedCampaignId;
+  }, [resolvedCampaignId]);
+
   useEffect(() => {
     const handle = pendingFocusExecutionUsernameRef.current;
     if (!handle || binComputerView !== "overview") return undefined;
@@ -2782,6 +2873,27 @@ export default function HomePage() {
       setActivePendingPriceSubTab("pending");
     }
   }, [activeExecutionStage]);
+
+  useEffect(() => {
+    setExecutionVisibleLimit(40);
+  }, [activeExecutionStage, executionStatus?.campaignId]);
+
+  useEffect(() => {
+    if (!resolvedCampaignId || !isExecutionPhaseGlobal) return;
+    if (activeExecutionStage === "analyzed") return;
+    const total = executionStatus?.totalByStage?.[activeExecutionStage] ?? 0;
+    const loaded = executionStatus?.columns?.[activeExecutionStage]?.length ?? 0;
+    if (loaded === 0 && total > 0 && !executionLoading) {
+      void loadExecutionStatusPage(activeExecutionStage);
+    }
+  }, [
+    activeExecutionStage,
+    resolvedCampaignId,
+    isExecutionPhaseGlobal,
+    executionStatus,
+    executionLoading,
+    loadExecutionStatusPage,
+  ]);
 
   useEffect(() => {
     if (activePendingPriceSubTab !== "rejected") return;
@@ -2846,6 +2958,7 @@ export default function HomePage() {
         setAnalyzedCandidatesError(null);
         const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&limit=30`);
         const data = await res.json().catch(() => ({}));
+        if (resolvedCampaignIdRef.current !== cid) return;
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (!data.success) throw new Error(data.error || "获取已分析候选失败");
         if (cancelled) return;
@@ -2944,6 +3057,34 @@ export default function HomePage() {
     analyzedCandidatesNextBeforeId,
     loadMoreAnalyzedCandidates,
     analyzedCandidatesItems.length,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
+    if (activeExecutionStage === "analyzed") return;
+    if (!executionStatus?.campaignId) return;
+    const loaded = executionStatus?.columns?.[activeExecutionStage]?.length || 0;
+    const total = executionStatus?.totalByStage?.[activeExecutionStage] || 0;
+    if (loaded <= 0 || loaded >= total) return;
+    const root = executionProgressListRef.current;
+    const target = executionInfiniteSentinelRef.current;
+    if (!root || !target) return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.some((en) => en.isIntersecting);
+        if (!hit) return;
+        if (executionPagingInFlightRef.current) return;
+        void loadExecutionStatusPage(activeExecutionStage, { append: true });
+      },
+      { root, rootMargin: "160px 0px 0px 0px", threshold: 0 }
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [
+    activeExecutionStage,
+    executionStatus,
+    loadExecutionStatusPage,
   ]);
 
   // 已发布 campaign：订阅工作实况 SSE（与红人画像阶段 /api/chat 相同：thinking + screenshot）
@@ -3664,42 +3805,9 @@ export default function HomePage() {
       return;
     }
 
-    let cancelled = false;
-
-    const loadExecutionStatus = async () => {
-      try {
-        setExecutionLoading(true);
-        setExecutionError(null);
-        const res = await fetch(`/api/campaigns/${campaignId}/execution-status`);
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        if (!cancelled) {
-          if (data.success) {
-            setExecutionStatus(data);
-          } else {
-            setExecutionError(data.error || "获取执行进度失败");
-          }
-        }
-      } catch (e) {
-        if (!cancelled) {
-          console.error("[HomePage] 获取执行进度失败:", e);
-          setExecutionError(e.message || "获取执行进度失败");
-        }
-      } finally {
-        if (!cancelled) {
-          setExecutionLoading(false);
-        }
-      }
-    };
-
-    loadExecutionStatus();
-
-    return () => {
-      cancelled = true;
-    };
+    setExecutionStatus(null);
+    setExecutionVisibleLimit(40);
+    void loadExecutionStatusPage(activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage);
   }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   // 在「执行阶段」加载执行节奏 & 汇报配置（用于工作笔记）
@@ -3800,13 +3908,22 @@ export default function HomePage() {
     const cid = resolvedCampaignId;
     if (!cid) return;
     try {
-      const res = await fetch(`/api/campaigns/${cid}/execution-status`);
+      const stageKey = activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage;
+      const currentCount = Math.max(executionStatus?.columns?.[stageKey]?.length || 40, 40);
+      const q = new URLSearchParams({
+        stage: stageKey,
+        limit: String(Math.min(currentCount, 100)),
+        offset: "0",
+      });
+      const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`);
       const data = await res.json();
-      if (data.success) setExecutionStatus(data);
+      if (data.success) {
+        setExecutionStatus((prev) => mergeExecutionStatusPage(prev, data, stageKey, false));
+      }
     } catch (e) {
       console.error("[HomePage] 刷新执行进度失败:", e);
     }
-  }, [resolvedCampaignId]);
+  }, [resolvedCampaignId, activeExecutionStage, executionStatus, mergeExecutionStatusPage]);
 
   const refreshAuthUser = useCallback(async () => {
     try {
@@ -7268,6 +7385,20 @@ export default function HomePage() {
                     currentStage.key === "pendingPrice"
                       ? partitionPendingPriceItems(currentItems)
                       : { pendingReviewItems: [], rejectedItems: [] };
+                  const activeExecutionItems =
+                    currentStage.key === "pendingPrice"
+                      ? activePendingPriceSubTab === "pending"
+                        ? pendingReviewItems
+                        : rejectedItems
+                      : currentItems;
+                  const currentStageTotal =
+                    currentStage.key === "analyzed"
+                      ? analyzedCandidatesTotal ?? currentItems.length
+                      : executionStatus?.totalByStage?.[currentStage.key] ?? currentItems.length;
+                  const visibleExecutionItems = activeExecutionItems.slice(
+                    0,
+                    executionVisibleLimit
+                  );
                   const pendingPriceSubTabs = [
                     { key: "pending", label: "待审核", count: pendingReviewItems.length },
                     ...(rejectedItems.length > 0
@@ -7624,8 +7755,8 @@ export default function HomePage() {
                                         ? String(analyzedCandidatesTotal)
                                         : "…"
                                       : stage.key === "pendingPrice"
-                                      ? String(countPendingPriceReviewItems(stage.items))
-                                      : String(stage.items.length);
+                                      ? String(executionStatus?.totalByStage?.pendingPrice ?? countPendingPriceReviewItems(stage.items))
+                                      : String(executionStatus?.totalByStage?.[stage.key] ?? stage.items.length);
                                   return (
                                     <button
                                       key={stage.key}
@@ -7831,7 +7962,7 @@ export default function HomePage() {
                                           暂无
                                         </div>
                                       ) : (
-                                        pendingReviewItems.map((item) => (
+                                        visibleExecutionItems.map((item) => (
                                           <ExecutionProgressRow
                                             key={item.id}
                                             stageKey="pendingPrice"
@@ -7850,7 +7981,7 @@ export default function HomePage() {
                                         暂无
                                       </div>
                                     ) : (
-                                      rejectedItems.map((item) => (
+                                      visibleExecutionItems.map((item) => (
                                         <ExecutionProgressRow
                                           key={item.id}
                                           stageKey="pendingPrice"
@@ -7865,7 +7996,7 @@ export default function HomePage() {
                                     )}
                                   </>
                                 ) : (
-                                  currentItems.map((item) => (
+                                  visibleExecutionItems.map((item) => (
                                     <ExecutionProgressRow
                                       key={item.id}
                                       stageKey={currentStage.key}
@@ -7878,6 +8009,46 @@ export default function HomePage() {
                                     />
                                   ))
                                 )}
+                                {currentStage.key !== "analyzed" &&
+                                activeExecutionItems.length > visibleExecutionItems.length ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setExecutionVisibleLimit((limit) => limit + 40)}
+                                    style={{
+                                      flexShrink: 0,
+                                      alignSelf: "center",
+                                      padding: "6px 14px",
+                                      borderRadius: 8,
+                                      border: "1px solid #D1D5DB",
+                                      backgroundColor: "#FFFFFF",
+                                      color: "#4B5563",
+                                      fontSize: 12,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    加载更多（剩余 {activeExecutionItems.length - visibleExecutionItems.length}）
+                                  </button>
+                                ) : null}
+                                {currentStage.key !== "analyzed" &&
+                                currentItems.length < currentStageTotal ? (
+                                  <div
+                                    ref={executionInfiniteSentinelRef}
+                                    style={{ height: 1, flexShrink: 0, width: "100%" }}
+                                    aria-hidden
+                                  />
+                                ) : null}
+                                {currentStage.key !== "analyzed" && executionLoadingMore ? (
+                                  <div
+                                    style={{
+                                      textAlign: "center",
+                                      fontSize: 11,
+                                      color: "#9CA3AF",
+                                      padding: "6px 0 4px",
+                                    }}
+                                  >
+                                    加载更多中…
+                                  </div>
+                                ) : null}
                               </div>
                             </>
                           )}
