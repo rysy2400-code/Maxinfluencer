@@ -36,10 +36,7 @@ import {
   shouldShowBinComputerPanel,
 } from "../lib/campaign/execution-ui-status.js";
 import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
-import {
-  countPendingPriceReviewItems,
-  partitionPendingPriceItems,
-} from "../lib/execution/pending-price-items.js";
+import { partitionPendingPriceItems } from "../lib/execution/pending-price-items.js";
 import { formatUsdAmount } from "../lib/billing/balance-messages.js";
 import {
   isChatVisibleMessage,
@@ -2388,8 +2385,6 @@ export default function HomePage() {
   const [executionExportingStage, setExecutionExportingStage] = useState(null); // 正在导出的执行阶段 key
   const [keywordWorkNotes, setKeywordWorkNotes] = useState([]); // 执行阶段关键词任务简版工作笔记
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
-  // 大 campaign 的执行卡片包含较大的分析文本；分批挂载，避免首屏同步创建数百个复杂组件。
-  const [executionVisibleLimit, setExecutionVisibleLimit] = useState(40);
   const [activeAnalyzedSubTab, setActiveAnalyzedSubTab] = useState("recommended"); // 已分析子 Tab
   const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
@@ -2875,10 +2870,6 @@ export default function HomePage() {
   }, [activeExecutionStage]);
 
   useEffect(() => {
-    setExecutionVisibleLimit(40);
-  }, [activeExecutionStage, executionStatus?.campaignId]);
-
-  useEffect(() => {
     if (!resolvedCampaignId || !isExecutionPhaseGlobal) return;
     if (activeExecutionStage === "analyzed") return;
     const total = executionStatus?.totalByStage?.[activeExecutionStage] ?? 0;
@@ -2897,9 +2888,11 @@ export default function HomePage() {
 
   useEffect(() => {
     if (activePendingPriceSubTab !== "rejected") return;
-    const rejectedCount = (executionStatus?.columns?.pendingPrice || []).filter(
-      (item) => item?.stage === "quote_rejected"
-    ).length;
+    const rejectedCount =
+      executionStatus?.totalByStage?.pendingPriceRejected ??
+      (executionStatus?.columns?.pendingPrice || []).filter(
+        (item) => item?.stage === "quote_rejected"
+      ).length;
     if (rejectedCount === 0) setActivePendingPriceSubTab("pending");
   }, [activePendingPriceSubTab, executionStatus]);
 
@@ -3806,7 +3799,6 @@ export default function HomePage() {
     }
 
     setExecutionStatus(null);
-    setExecutionVisibleLimit(40);
     void loadExecutionStatusPage(activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage);
   }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
@@ -7395,14 +7387,15 @@ export default function HomePage() {
                     currentStage.key === "analyzed"
                       ? analyzedCandidatesTotal ?? currentItems.length
                       : executionStatus?.totalByStage?.[currentStage.key] ?? currentItems.length;
-                  const visibleExecutionItems = activeExecutionItems.slice(
-                    0,
-                    executionVisibleLimit
-                  );
+                  const visibleExecutionItems = activeExecutionItems;
+                  const pendingPricePendingTotal =
+                    executionStatus?.totalByStage?.pendingPricePending ?? pendingReviewItems.length;
+                  const pendingPriceRejectedTotal =
+                    executionStatus?.totalByStage?.pendingPriceRejected ?? rejectedItems.length;
                   const pendingPriceSubTabs = [
-                    { key: "pending", label: "待审核", count: pendingReviewItems.length },
-                    ...(rejectedItems.length > 0
-                      ? [{ key: "rejected", label: "已拒绝", count: rejectedItems.length }]
+                    { key: "pending", label: "待审核", count: pendingPricePendingTotal },
+                    ...(pendingPriceRejectedTotal > 0
+                      ? [{ key: "rejected", label: "已拒绝", count: pendingPriceRejectedTotal }]
                       : []),
                   ];
                   const analyzedSubTabs = [
@@ -7755,7 +7748,7 @@ export default function HomePage() {
                                         ? String(analyzedCandidatesTotal)
                                         : "…"
                                       : stage.key === "pendingPrice"
-                                      ? String(executionStatus?.totalByStage?.pendingPrice ?? countPendingPriceReviewItems(stage.items))
+                                      ? String(pendingPricePendingTotal)
                                       : String(executionStatus?.totalByStage?.[stage.key] ?? stage.items.length);
                                   return (
                                     <button
@@ -8009,26 +8002,6 @@ export default function HomePage() {
                                     />
                                   ))
                                 )}
-                                {currentStage.key !== "analyzed" &&
-                                activeExecutionItems.length > visibleExecutionItems.length ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setExecutionVisibleLimit((limit) => limit + 40)}
-                                    style={{
-                                      flexShrink: 0,
-                                      alignSelf: "center",
-                                      padding: "6px 14px",
-                                      borderRadius: 8,
-                                      border: "1px solid #D1D5DB",
-                                      backgroundColor: "#FFFFFF",
-                                      color: "#4B5563",
-                                      fontSize: 12,
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    加载更多（剩余 {activeExecutionItems.length - visibleExecutionItems.length}）
-                                  </button>
-                                ) : null}
                                 {currentStage.key !== "analyzed" &&
                                 currentItems.length < currentStageTotal ? (
                                   <div
