@@ -16,7 +16,12 @@ export async function GET(req, { params }) {
       );
     }
 
-    const data = await getCampaignExecutionStatus(campaignId);
+    const { searchParams } = new URL(req.url);
+    const data = await getCampaignExecutionStatus(campaignId, {
+      stage: searchParams.get("stage"),
+      limit: searchParams.get("limit"),
+      offset: searchParams.get("offset"),
+    });
 
     if (!data) {
       return NextResponse.json(
