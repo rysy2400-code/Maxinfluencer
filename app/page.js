@@ -38,6 +38,7 @@ import {
 import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
 import { partitionPendingPriceItems } from "../lib/execution/pending-price-items.js";
 import { formatUsdAmount } from "../lib/billing/balance-messages.js";
+import { resolveLatestInfluencerQuote } from "../lib/execution/quote-resolution.js";
 import {
   isChatVisibleMessage,
   mergeSessionMessages,
@@ -1717,12 +1718,12 @@ function ExecutionProgressRow({
       ? shippingRaw
       : {};
 
-  const flatUsd =
-    item.flatFeeUsd ??
-    item.flat_fee ??
-    item.flatFeeUSD ??
-    item.campaignAgentDecision?.flatFeeUSD ??
-    null;
+  const flatUsd = resolveLatestInfluencerQuote({
+    quoteNegotiation: item.quoteNegotiation,
+    fallbackAmount:
+      item.flatFeeUsd ?? item.flat_fee ?? item.flatFeeUSD ?? item.campaignAgentDecision?.flatFeeUSD,
+    fallbackCurrency: item.currency,
+  })?.amount ?? null;
   const viewsNumForEcpm = avgViewsFromSnapshot(item);
   const ecpmDisplay =
     item.ecpm != null && item.ecpm !== ""
@@ -1865,7 +1866,7 @@ function ExecutionProgressRow({
             useMarkdown
           />
           {labelRow(
-            `报价 (${item.currency || "USD"})`,
+            `红人最新报价 (${item.currency || "USD"})`,
             flatUsd != null && flatUsd !== ""
               ? `${Number(flatUsd)} ${item.currency || "USD"}`
               : "—"

@@ -359,7 +359,9 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
             : [];
         const attachmentMarkers = buildInboundImageMarkers(inboundAttachments);
         const content =
-          specialRequestStatus === "resolved"
+          payload.clarificationType === "delivery_requirement"
+            ? `【特殊请求 · 请补充交付要求】\n\n红人 ${handleHint} 提供了多个交付档位，但当前 Campaign 信息不足以判断应采用哪一档。\n\n红人报价：${creatorMessage}\n\n请明确具体交付形式后，Bin 将据此更新红人有效报价。\n\n执行侧摘要：${note}${attachmentMarkers}`
+            : specialRequestStatus === "resolved"
             ? `【特殊请求已达成一致】\n\n红人 ${handleHint} 已同意本轮特殊请求。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数，如需调整请在本对话中确认后再操作。）${attachmentMarkers}`
             : `【特殊请求 · 待您决策】\n\n红人 ${handleHint} 已对本轮询问作出回复，需要您确认下一步。\n\n红人回复：${creatorMessage}\n\n执行侧摘要：${note}\n\n（未自动修改报价/条数；您可继续协商或在本对话中明确指示。）${attachmentMarkers}`;
         const result = await appendBinMessageToSession(sessionId, content);
