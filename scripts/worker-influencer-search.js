@@ -229,8 +229,13 @@ async function hasInflightForPlatform(platformSlug, platformWorkerId) {
 
 const PENDING_CLAIM_SCAN_LIMIT = 40;
 
+function isSearchImportTaskLoopEnabled() {
+  return String(process.env.SEARCH_IMPORT_TASK_LOOP ?? "true").toLowerCase() !== "false";
+}
+
 /** 有 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
 async function hasPendingImportTask() {
+  if (!isSearchImportTaskLoopEnabled()) return false;
   const rows = await queryTikTok(
     `
     SELECT id FROM tiktok_influencer_import_task
@@ -258,10 +263,17 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
     SELECT id, campaign_id, session_id, run_id, keyword, keyword_type, payload
     FROM tiktok_influencer_search_task
     WHERE status = 'pending'
+      AND (
+        platform = ?
+        OR (
+          (platform IS NULL OR platform = '')
+          AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.platform')) = ?
+        )
+      )
     ORDER BY priority DESC, id ASC
     LIMIT ${PENDING_CLAIM_SCAN_LIMIT}
   `,
-    []
+    [platformSlug, platformSlug]
   );
   if (!rows?.length) return null;
 
@@ -1131,7 +1143,7 @@ async function main() {
 
   await Promise.all([
     ...platforms.map((platformSlug) => platformLoop(platformSlug)),
-    importTaskLoop(),
+    ...(isSearchImportTaskLoopEnabled() ? [importTaskLoop()] : []),
   ]);
 }
 
