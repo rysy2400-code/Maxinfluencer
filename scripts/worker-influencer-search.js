@@ -30,6 +30,38 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+function setDefaultEnv(key, value) {
+  if (process.env[key] == null || String(process.env[key]).trim() === "") {
+    process.env[key] = String(value);
+  }
+}
+
+function applyTiktokLiteProductionDefaults() {
+  setDefaultEnv("SCRAPER_MODE", "lite");
+  setDefaultEnv("CDP_ENDPOINT", "http://127.0.0.1:9222");
+  setDefaultEnv("CDP_ENDPOINT_ENRICH", "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_ENRICH_CDP", process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_COUNTRY_CDP", process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_STRICT_API_ONLY_NO_GOTO", "1");
+  setDefaultEnv("TT_LITE_TAB_POOL_SIZE", "1");
+  setDefaultEnv("TT_LITE_COUNTRY_CONCURRENCY", "10");
+  // TikTok /api/post/item_list 会在 1tab/10 连续请求后短时返回 200 空列表；
+  // 生产默认先保守串行，后续用压测数据再提高到 2/3/5。
+  setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY", "1");
+  setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY_MAX", "1");
+  setDefaultEnv("TT_LITE_POST_ITEM_RETRIES", "2");
+  setDefaultEnv("TT_LITE_EMPTY_ITEMS_COOLDOWN_MS", "15000");
+  setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MIN_MS", "3000");
+  setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MAX_MS", "5000");
+  setDefaultEnv("TT_LITE_COUNTRY_SEARCH_ALT_VIDEOS", "1");
+  setDefaultEnv("TT_SEARCH_MAX_INFLUENCERS", "500");
+  setDefaultEnv("SEARCH_MAX_POOL_SIZE", "500");
+  setDefaultEnv("TT_LITE_SEARCH_MAX_PAGES", "80");
+  setDefaultEnv("TT_LITE_MAX_VIDEOS", "50");
+  setDefaultEnv("LITE_DISABLE_SCREENSHOTS", "true");
+  setDefaultEnv("LITE_ENRICH_SCREENSHOTS", "false");
+}
+
 function detectWorkerIp() {
   return detectPrimaryIpv4({ preferEnvKey: "SEARCH_WORKER_IP" });
 }
@@ -494,6 +526,12 @@ async function processTask(task, platformSlug) {
       `platform mismatch: payload=${taskPlatformSlug} loop=${platformSlug}`
     );
     return;
+  }
+  if (taskPlatformSlug === "tiktok") {
+    applyTiktokLiteProductionDefaults();
+    console.log(
+      `[worker-influencer-search] TikTok Lite defaults: search=${process.env.CDP_ENDPOINT} country/enrich=${process.env.CDP_ENDPOINT_ENRICH} tab=${process.env.TT_LITE_TAB_POOL_SIZE} country_c=${process.env.TT_LITE_COUNTRY_CONCURRENCY} enrich_c=${process.env.LITE_TT_ENRICH_CONCURRENCY} pool=${process.env.SEARCH_MAX_POOL_SIZE} api_only=true`
+    );
   }
 
   const publishKeywordNote = async ({
