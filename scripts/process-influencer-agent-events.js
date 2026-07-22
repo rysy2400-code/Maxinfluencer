@@ -15,6 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
+import { getCampaignById } from "../lib/db/campaign-dao.js";
 import {
   sendOutreach,
   loadConversationHistoryForInfluencer,
@@ -520,6 +521,28 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     );
   }
 
+  const campaign = campaignId ? await getCampaignById(campaignId) : null;
+  if (!campaign) {
+    throw new Error(
+      `advertiser_execution_followup campaign 不存在：${campaignId || "null"}`
+    );
+  }
+  const productInfo = campaign.productInfo || {};
+  const campaignInfo = campaign.campaignInfo || {};
+  const campaignContext = {
+    brandName: productInfo.brandName || null,
+    productName: productInfo.productName || null,
+    productLink: productInfo.productLink || null,
+    platform: campaignInfo.platform || null,
+    deliverables: campaignInfo.deliverables || null,
+  };
+
+  if (!campaignContext.brandName) {
+    throw new Error(
+      `advertiser_execution_followup campaign 缺少 brandName：${campaignId}`
+    );
+  }
+
   const conversationHistory = await loadConversationHistoryForInfluencer(
     platformInfluencerId,
     20
@@ -537,6 +560,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     counterOffer: payload.counterOffer || null,
     counterReason: payload.counterReason || null,
     contentBrief: payload.contentBrief || null,
+    campaignContext,
     conversationHistory,
     influencer,
   });
@@ -719,4 +743,3 @@ main()
     console.error("[ProcessInfluencerAgentEvents] 运行出错:", err);
     process.exit(1);
   });
-
