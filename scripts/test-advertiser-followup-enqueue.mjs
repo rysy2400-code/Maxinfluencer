@@ -75,6 +75,14 @@ async function main() {
   assert(ev[0].status === "pending", "status pending");
   assert(payload.action === "approveQuote", "payload.action");
   assert(payload.campaignId === campaignId, "payload.campaignId");
+  assert(
+    payload.campaignContext?.brandName === campaign?.productInfo?.brandName,
+    "payload.campaignContext.brandName"
+  );
+  assert(
+    payload.campaignContext?.productName === campaign?.productInfo?.productName,
+    "payload.campaignContext.productName"
+  );
 
   await queryTikTok(`DELETE FROM tiktok_influencer_agent_event WHERE id = ?`, [
     eventId,
