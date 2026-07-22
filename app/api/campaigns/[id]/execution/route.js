@@ -100,6 +100,30 @@ export async function PATCH(req, { params }) {
         });
       }
       case "submitQuote": {
+        const existing = await getExecutionRow(campaignId, influencerId);
+        if (!existing) {
+          return NextResponse.json(
+            { success: false, error: "红人执行记录不存在" },
+            { status: 404 }
+          );
+        }
+        const negotiation = Array.isArray(existing.quote_negotiation)
+          ? existing.quote_negotiation
+          : (() => {
+              try {
+                const parsed = JSON.parse(existing.quote_negotiation || "[]");
+                return Array.isArray(parsed) ? parsed : [];
+              } catch {
+                return [];
+              }
+            })();
+        const latestQuote = negotiation[negotiation.length - 1];
+        if (latestQuote?.role === "advertiser" && latestQuote?.type === "counter") {
+          return NextResponse.json(
+            { success: false, error: "已提交还价，请等待红人回应后再操作" },
+            { status: 409 }
+          );
+        }
         const amount = Number(payload.amount);
         if (!Number.isFinite(amount) || amount <= 0) {
           return NextResponse.json(
@@ -273,7 +297,7 @@ export async function PATCH(req, { params }) {
         );
     }
 
-    await updateExecutionStage(campaignId, influencerId, {
+    const updateResult = await updateExecutionStage(campaignId, influencerId, {
       stage,
       lastEvent,
       quoteAppend,
@@ -299,6 +323,9 @@ export async function PATCH(req, { params }) {
     return NextResponse.json({
       success: true,
       stage,
+      quoteEntry: updateResult?.quoteEntry || null,
+      flatFeeUsd: updateResult?.flatFeeUsd ?? null,
+      currency: updateResult?.currency || null,
       message: "更新成功",
     });
   } catch (error) {

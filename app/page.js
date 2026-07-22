@@ -1505,6 +1505,8 @@ function ExecutionProgressRow({
   const [counterAmount, setCounterAmount] = React.useState("");
   const [counterCurrency, setCounterCurrency] = React.useState("USD");
   const [counterReason, setCounterReason] = React.useState("");
+  const [counterSubmitted, setCounterSubmitted] = React.useState(false);
+  const [highlightQuoteAt, setHighlightQuoteAt] = React.useState(null);
   const [approveBriefOpen, setApproveBriefOpen] = React.useState(false);
   const [approvePrechecking, setApprovePrechecking] = React.useState(false);
   const [approveChargePreview, setApproveChargePreview] = React.useState(null);
@@ -1513,6 +1515,11 @@ function ExecutionProgressRow({
   React.useEffect(() => {
     setCounterCurrency((item.currency || "USD").toString().toUpperCase().slice(0, 8) || "USD");
   }, [item.id, item.currency]);
+
+  React.useEffect(() => {
+    setCounterSubmitted(false);
+    setHighlightQuoteAt(null);
+  }, [item.id]);
   const platform = resolveInfluencerPlatform(item);
   const profileUrl = buildInfluencerProfileUrl(item);
   const busy = execPatchingId === username;
@@ -1729,6 +1736,9 @@ function ExecutionProgressRow({
   const quoteNegotiation = Array.isArray(item.quoteNegotiation)
     ? item.quoteNegotiation
     : [];
+  const latestQuote = quoteNegotiation[quoteNegotiation.length - 1];
+  const waitingForInfluencerReply =
+    latestQuote?.role === "advertiser" && latestQuote?.type === "counter";
   const canApproveReject = item.stage === "quote_submitted";
   const canReopenRejected = item.stage === "quote_rejected";
 
@@ -1888,6 +1898,8 @@ function ExecutionProgressRow({
                   }}
                 >
                   {[...quoteNegotiation].reverse().map((entry, idx) => {
+                    const isHighlighted =
+                      highlightQuoteAt && entry.at === highlightQuoteAt;
                     const roleLabel =
                       entry.role === "advertiser"
                         ? "广告主"
@@ -1910,6 +1922,8 @@ function ExecutionProgressRow({
                           borderLeft: "2px solid #E5E7EB",
                           paddingLeft: 8,
                           color: "#4B5563",
+                          backgroundColor: isHighlighted ? "#ECFDF5" : "transparent",
+                          transition: "background-color 200ms ease",
                         }}
                       >
                         <div style={{ fontWeight: 600, color: "#374151" }}>
@@ -2011,20 +2025,25 @@ function ExecutionProgressRow({
                 />
                 <button
                   type="button"
-                  disabled={busy}
-                  onClick={() => {
+                  disabled={busy || waitingForInfluencerReply}
+                  onClick={async () => {
                     const amt = parseFloat(counterAmount, 10);
                     if (!Number.isFinite(amt) || amt <= 0) {
                       window.alert("请输入有效正数金额");
                       return;
                     }
-                    patchExecution("submitQuote", username, {
+                    setCounterSubmitted(false);
+                    const result = await patchExecution("submitQuote", username, {
                       amount: amt,
                       currency: counterCurrency.trim() || "USD",
                       reason: counterReason.trim() || undefined,
                     });
+                    if (!result?.ok) return;
                     setCounterAmount("");
                     setCounterReason("");
+                    setCounterSubmitted(true);
+                    setNegExpanded(true);
+                    setHighlightQuoteAt(result.quoteEntry?.at || null);
                   }}
                   style={{
                     padding: "4px 10px",
@@ -2033,12 +2052,17 @@ function ExecutionProgressRow({
                     backgroundColor: "#EEF2FF",
                     color: "#3730A3",
                     fontSize: 12,
-                    cursor: busy ? "not-allowed" : "pointer",
+                    cursor: busy || waitingForInfluencerReply ? "not-allowed" : "pointer",
                   }}
                 >
-                  提交还价
+                  {busy ? "提交中…" : waitingForInfluencerReply ? "等待红人回应" : "提交还价"}
                 </button>
               </div>
+              {counterSubmitted && (
+                <div style={{ marginTop: 6, fontSize: 11, color: "#047857", fontWeight: 600 }}>
+                  已提交
+                </div>
+              )}
             </div>
           )}
 
@@ -3969,12 +3993,36 @@ export default function HomePage() {
           body: JSON.stringify({ influencerId, action, payload }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "更新失败");
-        await refreshExecutionStatusQuiet();
+        if (!res.ok || !data.success) throw new Error(data.error || "更新失败");
+        if (action === "submitQuote" && data.quoteEntry) {
+          setExecutionStatus((prev) => {
+            if (!prev?.columns) return prev;
+            const columns = { ...prev.columns };
+            for (const stageKey of Object.keys(columns)) {
+              if (!Array.isArray(columns[stageKey])) continue;
+              columns[stageKey] = columns[stageKey].map((row) => {
+                if (row?.id !== influencerId) return row;
+                const history = Array.isArray(row.quoteNegotiation)
+                  ? row.quoteNegotiation
+                  : [];
+                return {
+                  ...row,
+                  flatFeeUsd: data.flatFeeUsd,
+                  currency: data.currency || row.currency,
+                  quoteNegotiation: [...history, data.quoteEntry],
+                };
+              });
+            }
+            return { ...prev, columns };
+          });
+          void refreshExecutionStatusQuiet();
+        } else {
+          await refreshExecutionStatusQuiet();
+        }
         if (action === "approveQuote") {
           await refreshAuthUser();
         }
-        return { ok: true };
+        return { ok: true, ...data };
       } catch (err) {
         console.error(err);
         alert(err.message || "更新失败");
