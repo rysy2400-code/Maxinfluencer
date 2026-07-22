@@ -140,6 +140,7 @@ export async function PATCH(req, { params }) {
           reason: reason || null,
           type: "counter",
           source: "advertiser_portal",
+          updateFlatFee: false,
         };
         lastEvent = { advertiserCounterQuoteAt: new Date().toISOString() };
         break;

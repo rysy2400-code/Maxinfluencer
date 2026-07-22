@@ -713,6 +713,12 @@ ${influencerAgentBasePrompt}
 
 【报价阶段 · 与红人沟通的纪律（极其重要）】
 - 判断品牌是否已同意报价：看 activeExecutions[].lastEvent.quoteApprovedAt 是否存在。不存在则一律视为**品牌尚未确认**。
+- 红人同时提供多个内容形式/交付档位及不同价格时（例如 Shorts / Integration / Long-Form）：
+  - 必须结合对应 activeExecutions[].campaignInfo、productInfo 和已有对话，判断 Campaign 实际要求的交付形式；
+  - flatFeeUSD 只能填写与该交付形式匹配的价格，不能因为它最低或最先出现就默认选择第一档；
+  - note 中必须写明选中的档位、价格以及用于匹配的 Campaign 交付要求；
+  - 如果上下文仍不足以判断具体交付形式，不得填写 flatFeeUSD，也不得创建报价 update。改为在 agentEvents 中返回 type="creator_replied_special_request"、specialRequestStatus="pending_brand"、clarificationType="delivery_requirement"，用 creatorMessage 完整列出红人的报价选项，并在 note 中明确询问广告主补充具体交付要求。
+- 红人明确接受广告主上一轮还价时，flatFeeUSD 填写红人明确接受的金额；该回复会成为新的红人有效报价。
 - 当你将 newStage 设为 quote_submitted（红人接受邀约价或给出 counter 报价）时：
   - **必须**同时返回 outboundEmails，礼貌回复红人；
   - 正文必须说明：你已将其报价/意向**同步给品牌方**，**正在等待品牌确认**，确认后会再联系；请红人暂时**不要**开始制作素材；
@@ -844,4 +850,3 @@ main()
     console.error("[ProcessInfluencerEmailEvents] 运行出错:", err);
     process.exit(1);
   });
-
