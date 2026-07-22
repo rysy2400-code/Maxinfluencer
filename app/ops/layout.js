@@ -1,9 +1,19 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { COOKIE_NAME, verifyAdvertiserToken } from "../../lib/auth/advertiser-jwt.js";
+import { getAdvertiserUserById } from "../../lib/db/tiktok-advertiser-dao.js";
+
 export const metadata = {
   title: "Maxinfluencer 虚拟机运维",
-  description: "14 台虚拟机矩阵：健康状态与任务消费快照（独立于 Campaign 执行总览）",
+  description: "Crawler 机器角色、真实任务执行健康、生产版本与运维操作",
 };
 
-export default function OpsLayout({ children }) {
+export default async function CrawlerOpsLayout({ children }) {
+  const token = cookies().get(COOKIE_NAME)?.value || null;
+  const claims = await verifyAdvertiserToken(token);
+  if (!claims?.advertiserUserId) redirect("/");
+  const user = await getAdvertiserUserById(claims.advertiserUserId);
+  if (!user?.is_active || !user?.is_admin) redirect("/");
   return (
     <div
       style={{

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedAdvertiserUser } from "../../../../lib/auth/advertiser-auth-http.js";
+import { requireCrawlerOpsSuperAdmin } from "../../../../lib/auth/require-crawler-ops-super-admin.js";
 import { listCrawlerSelfHealEvents } from "../../../../lib/db/crawler-self-heal-dao.js";
 
 export const dynamic = "force-dynamic";
@@ -10,11 +10,8 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req) {
   try {
-    const auth = await getAuthenticatedAdvertiserUser(req);
+    const auth = await requireCrawlerOpsSuperAdmin(req);
     if (!auth) {
-      return NextResponse.json({ success: false, error: "未登录" }, { status: 401 });
-    }
-    if (!auth.isAdmin) {
       return NextResponse.json({ success: false, error: "无权限" }, { status: 403 });
     }
 

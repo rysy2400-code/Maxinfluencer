@@ -151,7 +151,7 @@ if (Test-Path $nodeDirForPath) {
   $env:Path = "$nodeDirForPath;$env:Path"
 }
 
-Write-Host "[deploy-crawler] Fetch + pull main..."
+Write-Host "[deploy-crawler] Fetch repository..."
 # Mitigate Windows Git/libcurl "getaddrinfo() thread failed to start" / flaky DNS (esp. over SSH sessions).
 try {
   git config http.sslBackend schannel 2>$null | Out-Null
@@ -159,8 +159,18 @@ try {
   git config core.preferIPv4 true 2>$null | Out-Null
 } catch {}
 git fetch origin
-git checkout main
-git pull origin main
+$targetSha = if ($env:CRAWLER_DEPLOY_SHA) { "$($env:CRAWLER_DEPLOY_SHA)".Trim() } else { "" }
+if ($targetSha) {
+  if ($targetSha -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid CRAWLER_DEPLOY_SHA" }
+  git cat-file -e "$targetSha^{commit}"
+  if ($LASTEXITCODE -ne 0) { throw "CRAWLER_DEPLOY_SHA not found after fetch: $targetSha" }
+  Write-Host "[deploy-crawler] Checkout production release $targetSha"
+  git checkout --detach $targetSha
+} else {
+  Write-Host "[deploy-crawler] No CRAWLER_DEPLOY_SHA; pull main (legacy/manual mode)."
+  git checkout main
+  git pull origin main
+}
 
 $deployCrawlerSelfHashAfterPull = $null
 if (Test-Path $deployCrawlerSelfPath) {
@@ -238,6 +248,11 @@ $workerIpSource = $workerIdentity.Source
 $workerHost = $workerIdentity.Host
 $workerLanIp = $workerIdentity.LanIp
 $workerId = $workerIdentity.WorkerId
+$crawlerMachineKey = if ($env:CRAWLER_MACHINE_KEY) {
+  "$($env:CRAWLER_MACHINE_KEY)".Trim()
+} else {
+  "crawler-$($workerIp -replace '[^a-zA-Z0-9]+','-')"
+}
 Write-Host "[deploy-crawler] worker_ip(source=$workerIpSource, lan=$workerLanIp, host=$workerHost) -> using=$workerIp"
 $searchCdpEndpoint = if ($env:CRAWLER_CDP_SEARCH_ENDPOINT) { "$($env:CRAWLER_CDP_SEARCH_ENDPOINT)" } else { "http://127.0.0.1:9222" }
 $enrichCdpEndpoint = if ($env:CRAWLER_CDP_ENRICH_ENDPOINT) { "$($env:CRAWLER_CDP_ENRICH_ENDPOINT)" } else { "http://127.0.0.1:9223" }
@@ -433,6 +448,8 @@ $guardHealthContent = @"
 `$node = "$($nodeExe.Replace("\", "\\"))"
 `$script = "$($healthScript.Replace("\", "\\"))"
 `$env:WORKER_HEALTH_INTERVAL_MS = "30000"
+`$env:CRAWLER_MACHINE_KEY = "$($crawlerMachineKey.Replace('"','\"'))"
+`$env:SEARCH_WORKER_PLATFORMS = "$($searchWorkerPlatforms.Replace('"','\"'))"
 while (`$true) {
   try {
     `$identity = Set-CrawlerWorkerProcessEnv -ProjectRoot `$Root -MaxAttempts 2 -AllowCacheFallback

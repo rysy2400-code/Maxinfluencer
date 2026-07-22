@@ -20,6 +20,23 @@ const T_LOG = "tiktok_crawler_repair_action_log";
 const OLD_WORKER = "crawler_worker_health";
 const OLD_LOG = "crawler_repair_action_log";
 
+const INITIAL_MACHINES = [
+  ["36.255.223.141", "youtube"],
+  ["36.255.223.151", "youtube"],
+  ["103.218.240.130", "youtube"],
+  ["107.150.119.142", "youtube"],
+  ["128.1.132.49", "youtube"],
+  ["128.1.132.174", "youtube"],
+  ["152.32.174.193", "youtube"],
+  ["152.32.174.208", "youtube"],
+  ["152.32.187.186", "youtube"],
+  ["152.32.187.244", "youtube"],
+  ["152.32.188.48", "youtube"],
+  ["152.32.211.203", "youtube"],
+  ["152.32.192.65", "tiktok"],
+  ["152.32.252.45", "instagram"],
+];
+
 async function tableExists(table) {
   const rows = await queryTikTok(
     `
@@ -52,6 +69,41 @@ async function ensureColumn(table, column, ddl) {
   if (exists) return false;
   await queryTikTok(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`);
   return true;
+}
+
+async function ensureIndex(table, index, ddl) {
+  const rows = await queryTikTok(
+    `SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [table, index]
+  );
+  if (Number(rows?.[0]?.n || 0) > 0) return false;
+  await queryTikTok(`ALTER TABLE \`${table}\` ADD ${ddl}`);
+  return true;
+}
+
+function machineKey(ip) {
+  return `crawler-${String(ip).replace(/[^a-zA-Z0-9]+/g, "-")}`;
+}
+
+async function seedMachines() {
+  for (const [ip, platform] of INITIAL_MACHINES) {
+    await queryTikTok(
+      `INSERT INTO tiktok_crawler_machine
+        (machine_key, display_name, public_ip, ssh_host, mode, enabled)
+       VALUES (?, ?, ?, ?, 'dedicated', 1)
+       ON DUPLICATE KEY UPDATE ssh_host = VALUES(ssh_host), updated_at = NOW()`,
+      [machineKey(ip), ip, ip, ip]
+    );
+    await queryTikTok(
+      `INSERT INTO tiktok_crawler_machine_platform
+        (machine_id, platform, enabled, is_primary, worker_slots, task_timeout_minutes)
+       SELECT id, ?, 1, 1, 1, 30
+       FROM tiktok_crawler_machine WHERE machine_key = ?
+       ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), updated_at = NOW()`,
+      [platform, machineKey(ip)]
+    );
+  }
 }
 
 function splitSqlStatements(sqlText) {
@@ -124,10 +176,47 @@ async function main() {
     changed.push(`${T_WORKER}.cdp_9223_fail_streak`);
   }
 
-  await queryTikTok("DROP TABLE IF EXISTS tiktok_influencer_outreach_thread_binding");
-  console.log("✅ 已 DROP IF EXISTS tiktok_influencer_outreach_thread_binding");
+  const workerColumns = [
+    ["machine_id", "machine_id BIGINT NULL AFTER id"],
+    ["cdp_9222_rpc_ok", "cdp_9222_rpc_ok TINYINT(1) NULL AFTER cdp_9222_ok"],
+    ["worker_loop_ok", "worker_loop_ok TINYINT(1) NULL AFTER worker_alive"],
+    ["reported_platforms", "reported_platforms VARCHAR(255) NULL AFTER worker_id"],
+    ["reported_release_sha", "reported_release_sha CHAR(40) NULL AFTER reported_platforms"],
+    ["last_claim_at", "last_claim_at DATETIME NULL AFTER last_seen_at"],
+    ["last_progress_at", "last_progress_at DATETIME NULL AFTER last_claim_at"],
+  ];
+  for (const [column, ddl] of workerColumns) {
+    if (await ensureColumn(T_WORKER, column, ddl)) changed.push(`${T_WORKER}.${column}`);
+  }
+  if (await ensureIndex(T_WORKER, "idx_machine_seen", "INDEX idx_machine_seen (machine_id, last_seen_at DESC)")) {
+    changed.push(`${T_WORKER}.idx_machine_seen`);
+  }
+
+  const logColumns = [
+    ["machine_id", "machine_id BIGINT NULL AFTER id"],
+    ["platform", "platform VARCHAR(32) NULL AFTER worker_ip"],
+    ["requested_by_user_id", "requested_by_user_id BIGINT NULL AFTER operator"],
+    ["request_reason", "request_reason VARCHAR(500) NULL AFTER trigger_reason"],
+    ["target_release_sha", "target_release_sha CHAR(40) NULL AFTER request_reason"],
+  ];
+  for (const [column, ddl] of logColumns) {
+    if (await ensureColumn(T_LOG, column, ddl)) changed.push(`${T_LOG}.${column}`);
+  }
+
+  if (
+    await ensureColumn(
+      "tiktok_crawler_alert_state",
+      "notified_level",
+      "notified_level ENUM('normal','degraded','fault','idle','unknown') NULL AFTER current_level"
+    )
+  ) {
+    changed.push("tiktok_crawler_alert_state.notified_level");
+  }
+
+  await seedMachines();
 
   console.log(`✅ ${T_WORKER} / ${T_LOG} 表已确保存在。`);
+  console.log(`✅ 已确保 ${INITIAL_MACHINES.length} 台 crawler 注册配置。`);
   if (changed.length) {
     console.log("✅ crawler health 已补齐字段:", changed.join(", "));
   }
