@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_search_task (
   INDEX idx_status_priority_created (status, priority, created_at),
   INDEX idx_worker_status (worker_id, status),
   INDEX idx_worker_host_ip_status (worker_host, worker_ip, status),
+  INDEX idx_worker_platform_started (worker_ip, platform, started_at DESC),
+  INDEX idx_worker_platform_finished (worker_ip, platform, finished_at DESC),
   INDEX idx_session_status (session_id, status),
   INDEX idx_keyword (campaign_id, keyword, created_at),
   INDEX idx_created_at (created_at DESC)

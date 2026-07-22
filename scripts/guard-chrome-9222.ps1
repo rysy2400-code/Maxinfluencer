@@ -102,16 +102,13 @@ function Ensure-LaunchUrlTabs {
 
 while ($true) {
   if (Test-Path $signalFile) {
-    try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
-    if (Test-Cdp9222Healthy) {
-      # Worker 误发重启信号但 CDP 仍可用：只清 flag，不杀窗口
-      Start-Sleep -Seconds 8
-      continue
-    }
     if ($lastStartAt -and (((Get-Date) - $lastStartAt).TotalSeconds -lt $startGraceSec)) {
       Start-Sleep -Seconds 8
       continue
     }
+    try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
+    # 该信号只会在真实 CDP WebSocket/RPC 连续连接失败后产生。
+    # /json/version 可用不能证明 browser WebSocket 可用，因此必须重启。
     $unhealthySince = $null
     Stop-Chrome9222
     Start-Sleep -Seconds 2

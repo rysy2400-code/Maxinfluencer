@@ -29,6 +29,8 @@ fi
 build_remote_ps() {
   local role="$1"
   local sha="$2"
+  local host="$3"
+  local machine_key="$4"
   cat <<PS
 \$ErrorActionPreference = "Stop"
 \$role = "$role"
@@ -39,9 +41,10 @@ if (-not (Test-Path \$git)) { \$git = "git" }
 if (-not (Test-Path \$root)) { throw "Deploy root not found: \$root" }
 
 \$env:CRAWLER_PLATFORM_ROLE = \$role
+\$env:CRAWLER_MACHINE_KEY = "$machine_key"
+\$env:CRAWLER_DEPLOY_SHA = \$targetSha
 & \$git -C \$root fetch origin --prune
-& \$git -C \$root checkout main
-& \$git -C \$root reset --hard \$targetSha
+& \$git -C \$root checkout --detach --force \$targetSha
 & \$git -C \$root clean -fd -e .chrome-cdp-9222 -e .chrome-cdp-9223
 \$deploy = Start-Process -FilePath "powershell.exe" -ArgumentList @(
   "-NoProfile",
@@ -132,11 +135,23 @@ PS
 }
 
 deploy_one() {
-  local host="$1"
+  local spec="$1"
+  local host machine_key
+  if [[ "$spec" == *=* ]]; then
+    machine_key="${spec%%=*}"
+    host="${spec#*=}"
+  else
+    host="$spec"
+    machine_key="crawler-${host//./-}"
+  fi
+  if [[ ! "$host" =~ ^[a-zA-Z0-9.-]+$ || ! "$machine_key" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    echo "Invalid crawler target: $spec" >&2
+    return 2
+  fi
   local log="/tmp/deploy-${ROLE}-crawler-${host}.log"
   local tmp_script
   tmp_script="$(mktemp "/tmp/deploy-${ROLE}-${host}.XXXXXX.ps1")"
-  build_remote_ps "$ROLE" "$TARGET_SHA" >"$tmp_script"
+  build_remote_ps "$ROLE" "$TARGET_SHA" "$host" "$machine_key" >"$tmp_script"
   echo "[deploy-$ROLE] starting $host sha=$TARGET_SHA"
   if ssh -i "$KEY" -p "$PORT" \
       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \

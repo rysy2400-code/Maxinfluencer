@@ -20,6 +20,7 @@ import os from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
+import { reconcileCrawlerAlerts } from "../lib/ops/crawler-alert-service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -389,6 +390,11 @@ async function tick() {
   const tickAt = nowIso();
   console.log(`[crawler-health-checker] tick start ${tickAt}`);
   try {
+    try {
+      await reconcileCrawlerAlerts();
+    } catch (alertError) {
+      console.error("[crawler-health-checker] alert reconcile failed:", alertError?.message || alertError);
+    }
     await main();
     console.log(`[crawler-health-checker] tick done ${tickAt}`);
   } catch (e) {
@@ -401,4 +407,3 @@ async function tick() {
 // Run once immediately, then every 60s. This avoids PM2 cron restarts killing in-flight repairs.
 tick();
 setInterval(tick, 60_000);
-

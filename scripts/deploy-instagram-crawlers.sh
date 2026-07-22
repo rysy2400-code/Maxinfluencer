@@ -3,8 +3,4 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS=(
-  "152.32.252.45"
-)
-
-exec "$SCRIPT_DIR/deploy-crawler-role.sh" instagram "${HOSTS[@]}"
+exec "$SCRIPT_DIR/deploy-platform-crawlers.sh" instagram

@@ -135,6 +135,8 @@ async function main() {
   if (await ensureIndex(taskTable, "idx_session_status", "INDEX idx_session_status (session_id, status)")) changed.push("task.idx_session_status");
   if (await ensureIndex(taskTable, "idx_keyword", "INDEX idx_keyword (campaign_id, keyword, created_at)")) changed.push("task.idx_keyword");
   if (await ensureIndex(taskTable, "idx_worker_host_ip_status", "INDEX idx_worker_host_ip_status (worker_host, worker_ip, status)")) changed.push("task.idx_worker_host_ip_status");
+  if (await ensureIndex(taskTable, "idx_worker_platform_started", "INDEX idx_worker_platform_started (worker_ip, platform, started_at DESC)")) changed.push("task.idx_worker_platform_started");
+  if (await ensureIndex(taskTable, "idx_worker_platform_finished", "INDEX idx_worker_platform_finished (worker_ip, platform, finished_at DESC)")) changed.push("task.idx_worker_platform_finished");
   if (await dropIndexIfExists(taskTable, "uk_campaign_run_keyword")) changed.push("task.drop_uk_campaign_run_keyword");
   if (
     await ensureIndex(
@@ -184,4 +186,3 @@ main()
     console.error("❌ 创建 tiktok_influencer_search_task 失败:", err?.message || err);
     process.exit(1);
   });
-
