@@ -1035,7 +1035,9 @@ function formatInfluencerStat(v) {
 function resolveVideoPublishCountry(item) {
   const v = item?.videoPublishCountry ?? item?.video_publish_country;
   if (v == null || v === "") return null;
-  return String(v).trim();
+  const country = String(v).trim();
+  if (!country || country.toLowerCase() === "country_unknown") return null;
+  return country;
 }
 
 function formatGmvStat(item) {
