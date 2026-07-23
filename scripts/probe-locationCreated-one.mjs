@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** 单用户逐步诊断 locationCreated 各链路 */
+/** 单用户逐步诊断 video_html_fetch locationCreated 链路 */
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -19,10 +19,8 @@ const {
   acquireTiktokApiSession,
   fetchUserDetail,
   fetchPostItemList,
-  fetchLocationCreatedFromItemDetailApi,
   fetchLocationCreatedFromVideoHtmlRequest,
   fetchLocationCreatedFromVideoHtmlViaNode,
-  parseVideoLocationFromDetailJson,
 } = await import("../lib/tools/influencer-functions/tiktok/tiktok-direct-fetch.js");
 
 function itemLoc(item) {
@@ -81,30 +79,6 @@ try {
       log("item_list", `FAIL ${e.message}`);
     }
   }
-
-  try {
-    const { tiktokMakeRequest } = await import(
-      "../lib/tools/influencer-functions/tiktok/tiktok-api-client.js"
-    );
-    const referer = `https://www.tiktok.com/@${username}/video/${videoId}`;
-    const json = await tiktokMakeRequest(
-      page,
-      "https://www.tiktok.com/api/post/item_detail/",
-      { itemId: videoId },
-      { referer }
-    );
-    const loc = parseVideoLocationFromDetailJson(json);
-    log("item_detail", {
-      loc,
-      status: json?.statusCode ?? json?.status_code,
-      keys: Object.keys(json || {}),
-    });
-  } catch (e) {
-    log("item_detail", `FAIL ${e.message}`);
-  }
-
-  const apiLoc = await fetchLocationCreatedFromItemDetailApi(page, videoId, username);
-  log("item_detail_helper", apiLoc);
 
   const htmlBrowser = await fetchLocationCreatedFromVideoHtmlRequest(page, username, videoId);
   log("html_browser", htmlBrowser);

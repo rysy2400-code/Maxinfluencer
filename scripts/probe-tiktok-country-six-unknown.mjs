@@ -46,7 +46,6 @@ try {
       username: u,
       videoId: v?.videoId || "",
       secUid: v?.creator?.secUid || "",
-      searchLocation: v?.locationCreated || null,
     });
     if (probe.locationCreated) ok += 1;
     console.log(

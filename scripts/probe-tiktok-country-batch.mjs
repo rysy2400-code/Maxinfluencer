@@ -4,7 +4,7 @@
  * 用法:
  *   node scripts/probe-tiktok-country-batch.mjs "AI design tool demo" 20
  *   TT_LITE_COUNTRY_DISABLE_NAV=1 node scripts/probe-tiktok-country-batch.mjs "AI design tool demo" 20
- *   node scripts/probe-tiktok-country-batch.mjs --api-only "AI design tool demo" 20
+ *   node scripts/probe-tiktok-country-batch.mjs --fetch-only "AI design tool demo" 20
  */
 import dotenv from "dotenv";
 import path from "path";
@@ -15,8 +15,8 @@ dotenv.config({ path: path.join(root, ".env") });
 dotenv.config({ path: path.join(root, ".env.local") });
 
 const argv = process.argv.slice(2);
-const apiOnlyFlag = argv[0] === "--api-only";
-if (apiOnlyFlag) argv.shift();
+const fetchOnlyFlag = argv[0] === "--fetch-only" || argv[0] === "--api-only";
+if (fetchOnlyFlag) argv.shift();
 
 let concurrencyArg = null;
 for (let i = 0; i < argv.length; i += 1) {
@@ -32,12 +32,10 @@ for (let i = 0; i < argv.length; i += 1) {
   }
 }
 
-if (apiOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
+if (fetchOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
   process.env.TT_LITE_ALLOW_NAV = "0";
   process.env.TT_LITE_COUNTRY_DISABLE_NAV = "1";
-  process.env.TT_LITE_COUNTRY_VIDEO_INFO = "0";
   process.env.TT_LITE_COUNTRY_STUB_DOCUMENT = "0";
-  process.env.TT_LITE_COUNTRY_HTML_FIRST = "0";
   process.env.TT_LITE_COUNTRY_API_ONLY = "1";
 }
 
@@ -79,7 +77,7 @@ const { orderInfluencersForCountryCheck } = await import(
 );
 
 console.log(
-  `[probe] mode=${apiOnly ? "api-only (signed item_detail + item_list, no page nav)" : "lite+nav"} search=${searchEndpoint} country=${countryEndpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
+  `[probe] mode=${apiOnly ? "fetch-only video_html_fetch (no page nav)" : "lite+nav"} search=${searchEndpoint} country=${countryEndpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
 );
 
 /** @type {Array<{ page: object, dispose: Function }>} */

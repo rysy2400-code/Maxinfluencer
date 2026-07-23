@@ -106,7 +106,6 @@ if (sample) {
       username: sample.username,
       secUid: sample.creator?.secUid || "",
       videoId: sample.videoId,
-      searchLocation: sample.locationCreated || null,
     });
     console.log("[probe] resolveVideoLocationCreated=", loc);
 

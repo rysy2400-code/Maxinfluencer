@@ -70,8 +70,8 @@ check_cdp() {
 
 echo "================================================================"
 echo "[local-crawler65] keyword=\"${KEYWORD}\""
-echo "  search+country=9222 (api-only location)  enrich=9223"
-echo "  baseline=3e32dc6+overlay  TT_LITE_COUNTRY_API_ONLY=1"
+echo "  search+country=9222 (fetch-only video_html_fetch location)  enrich=9223"
+echo "  baseline=3e32dc6+overlay  TT_LITE_COUNTRY_FETCH_ONLY=1"
 echo "================================================================"
 
 check_cdp 9222
@@ -89,8 +89,8 @@ node scripts/probe-tiktok-search-api-only.mjs "$KEYWORD" && SEARCH_EXIT=0 || SEA
 echo "[phase1] search_exit=${SEARCH_EXIT}"
 
 echo ""
-echo "=== Phase 2: Country API only (9222, signed item_detail+item_list, no page nav) ==="
-node scripts/probe-tiktok-country-batch.mjs --api-only --concurrency 10 "$KEYWORD" "$COUNTRY_BATCH" && COUNTRY_EXIT=0 || COUNTRY_EXIT=$?
+echo "=== Phase 2: Country fetch-only (9222, video_html_fetch, no page nav) ==="
+node scripts/probe-tiktok-country-batch.mjs --fetch-only --concurrency 10 "$KEYWORD" "$COUNTRY_BATCH" && COUNTRY_EXIT=0 || COUNTRY_EXIT=$?
 echo "[phase2] country_exit=${COUNTRY_EXIT}"
 
 trim_port 9222 1
