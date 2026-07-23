@@ -19,7 +19,6 @@ function Restart-CdpChrome {
   $signal = Join-Path $Root "signals\restart-chrome-$Port.flag"
   New-Item -ItemType File -Path $signal -Force | Out-Null
   Start-Sleep -Seconds 20
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\purge-cdp-access-denied.ps1") -Port $Port -Quiet 2>$null | Out-Null
   $trim = Join-Path $Root "scripts\trim-cdp-tiktok-tabs.ps1"
   if (Test-Path $trim) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $trim -Port $Port -KeepMax 1

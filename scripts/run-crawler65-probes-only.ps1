@@ -3,7 +3,6 @@ $Root = "C:\maxinfluencer"
 Set-Location $Root
 
 for ($i = 1; $i -le 3; $i++) {
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\purge-cdp-access-denied.ps1") -Port 9222
   $tabs = Invoke-RestMethod "http://127.0.0.1:9222/json/list" -TimeoutSec 8
   $pages = @($tabs | Where-Object { $_.type -eq "page" })
   $ok = @($pages | Where-Object { $_.url -match "^https://www\.tiktok\.com" -and $_.title -notmatch "Access Denied" })

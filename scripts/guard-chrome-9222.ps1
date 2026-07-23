@@ -42,14 +42,6 @@ if (-not $visible) {
 }
 
 $profileDirPattern = [Regex]::Escape($chromeDir)
-$scriptsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $scriptsDir) { $scriptsDir = "C:\maxinfluencer\scripts" }
-$purgeDeniedScript = Join-Path $scriptsDir "purge-cdp-access-denied.ps1"
-$skipTiktokPurge = $false
-if ($env:CDP_9222_SKIP_TIKTOK_PURGE) {
-  $v = "$($env:CDP_9222_SKIP_TIKTOK_PURGE)".ToLowerInvariant()
-  $skipTiktokPurge = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
-}
 $unhealthySince = $null
 $lastStartAt = $null
 $lastTabEnsureAt = $null
@@ -122,16 +114,6 @@ while ($true) {
     if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
       Ensure-LaunchUrlTabs
       $lastTabEnsureAt = Get-Date
-    }
-    if ((-not $skipTiktokPurge) -and (Test-Path $purgeDeniedScript)) {
-      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $purgeDeniedScript -Port 9222 -Quiet 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 2) {
-        Write-Host "[guard-9222] Access Denied persists; restarting Chrome 9222..."
-        Stop-Chrome9222
-        Start-Sleep -Seconds 2
-        Start-Chrome9222
-        Start-Sleep -Seconds 12
-      }
     }
   } else {
     $profileProcs = @(Get-Chrome9222ProfileProcesses)

@@ -38,7 +38,6 @@ function Restart-Chrome9222 {
   $signal = Join-Path $Root "signals\restart-chrome-9222.flag"
   New-Item -ItemType File -Path $signal -Force | Out-Null
   Start-Sleep -Seconds 18
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\purge-cdp-access-denied.ps1") -Port 9222
 }
 
 function Set-LiteEnv {
