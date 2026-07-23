@@ -37,6 +37,7 @@ if (-not $visible) {
 $profileDirPattern = [Regex]::Escape($chromeDir)
 $unhealthySince = $null
 $lastStartAt = $null
+$lastTabEnsureAt = $null
 $startGraceSec = if ($env:CHROME_GUARD_START_GRACE_SEC) { [int]$env:CHROME_GUARD_START_GRACE_SEC } else { 90 }
 
 function Test-Cdp9223Healthy {
@@ -69,6 +70,63 @@ function Start-Chrome9223 {
   }
 }
 
+function Normalize-TabUrl([string]$Url) {
+  $u = "$Url".Trim()
+  if (-not $u) { return "" }
+  $u = ($u -split "#")[0]
+  $u = ($u -split "\?")[0]
+  return $u.TrimEnd("/")
+}
+
+function Get-LaunchTabRank($Tab) {
+  $u = [string]$Tab.url
+  $normalized = Normalize-TabUrl $u
+  $launch = Normalize-TabUrl $launchUrl
+  if ($normalized -eq $launch) { return 0 }
+  if ($u -match ("^" + [Regex]::Escape($launch) + "([/?#]|$)")) { return 1 }
+  if ($u -eq "about:blank" -or $u -match "^chrome://newtab") { return 8 }
+  return 9
+}
+
+function Ensure-SingleLaunchUrlTab {
+  try {
+    $allTargets = Invoke-RestMethod -Uri "http://127.0.0.1:9223/json/list" -TimeoutSec 5
+    $pages = @(
+      $allTargets |
+        Where-Object { $_.type -eq "page" }
+    )
+
+    if ($pages.Count -eq 0) {
+      $url = [uri]::EscapeDataString($launchUrl)
+      Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:9223/json/new?$url" -TimeoutSec 5 | Out-Null
+      return
+    }
+
+    $ranked = @(
+      $pages | Sort-Object `
+        @{ Expression = { Get-LaunchTabRank $_ }; Ascending = $true }, `
+        @{ Expression = { [string]$_.url }; Ascending = $true }
+    )
+
+    $bestRank = Get-LaunchTabRank $ranked[0]
+    if ($bestRank -gt 1) {
+      foreach ($p in $pages) {
+        try { Invoke-RestMethod -Uri "http://127.0.0.1:9223/json/close/$($p.id)" -TimeoutSec 5 | Out-Null } catch {}
+      }
+      Start-Sleep -Milliseconds 500
+      $url = [uri]::EscapeDataString($launchUrl)
+      Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:9223/json/new?$url" -TimeoutSec 5 | Out-Null
+      return
+    }
+
+    $keeperId = [string]$ranked[0].id
+    foreach ($p in $pages) {
+      if ([string]$p.id -eq $keeperId) { continue }
+      try { Invoke-RestMethod -Uri "http://127.0.0.1:9223/json/close/$($p.id)" -TimeoutSec 5 | Out-Null } catch {}
+    }
+  } catch {}
+}
+
 while ($true) {
   if (Test-Path $signalFile) {
     try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
@@ -90,6 +148,10 @@ while ($true) {
 
   if (Test-Cdp9223Healthy) {
     $unhealthySince = $null
+    if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
+      Ensure-SingleLaunchUrlTab
+      $lastTabEnsureAt = Get-Date
+    }
   } else {
     $profileProcs = @(Get-Chrome9223ProfileProcesses)
     if ($profileProcs.Count -eq 0) {

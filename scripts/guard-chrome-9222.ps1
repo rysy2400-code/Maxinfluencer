@@ -77,6 +77,64 @@ function Start-Chrome9222 {
   }
 }
 
+function Normalize-TabUrl([string]$Url) {
+  $u = "$Url".Trim()
+  if (-not $u) { return "" }
+  $u = ($u -split "#")[0]
+  $u = ($u -split "\?")[0]
+  return $u.TrimEnd("/")
+}
+
+function Get-LaunchTabRank($Tab) {
+  $u = [string]$Tab.url
+  $normalized = Normalize-TabUrl $u
+  $launch = Normalize-TabUrl $launchUrls[0]
+  if ($normalized -eq $launch) { return 0 }
+  if ($u -match ("^" + [Regex]::Escape($launch) + "([/?#]|$)")) { return 1 }
+  if ($u -eq "about:blank" -or $u -match "^chrome://newtab") { return 8 }
+  return 9
+}
+
+function Ensure-SingleLaunchUrlTab {
+  if ($launchUrls.Count -ne 1) { return }
+  try {
+    $allTargets = Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/list" -TimeoutSec 5
+    $pages = @(
+      $allTargets |
+        Where-Object { $_.type -eq "page" }
+    )
+
+    if ($pages.Count -eq 0) {
+      $url = [uri]::EscapeDataString($launchUrls[0])
+      Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:9222/json/new?$url" -TimeoutSec 5 | Out-Null
+      return
+    }
+
+    $ranked = @(
+      $pages | Sort-Object `
+        @{ Expression = { Get-LaunchTabRank $_ }; Ascending = $true }, `
+        @{ Expression = { [string]$_.url }; Ascending = $true }
+    )
+
+    $bestRank = Get-LaunchTabRank $ranked[0]
+    if ($bestRank -gt 1) {
+      foreach ($p in $pages) {
+        try { Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/close/$($p.id)" -TimeoutSec 5 | Out-Null } catch {}
+      }
+      Start-Sleep -Milliseconds 500
+      $url = [uri]::EscapeDataString($launchUrls[0])
+      Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:9222/json/new?$url" -TimeoutSec 5 | Out-Null
+      return
+    }
+
+    $keeperId = [string]$ranked[0].id
+    foreach ($p in $pages) {
+      if ([string]$p.id -eq $keeperId) { continue }
+      try { Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/close/$($p.id)" -TimeoutSec 5 | Out-Null } catch {}
+    }
+  } catch {}
+}
+
 function Ensure-LaunchUrlTabs {
   if ($launchUrls.Count -le 1) { return }
   try {
@@ -112,7 +170,11 @@ while ($true) {
   if (Test-Cdp9222Healthy) {
     $unhealthySince = $null
     if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
-      Ensure-LaunchUrlTabs
+      if ($launchUrls.Count -eq 1) {
+        Ensure-SingleLaunchUrlTab
+      } else {
+        Ensure-LaunchUrlTabs
+      }
       $lastTabEnsureAt = Get-Date
     }
   } else {
