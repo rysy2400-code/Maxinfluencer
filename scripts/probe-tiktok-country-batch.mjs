@@ -42,9 +42,13 @@ if (apiOnlyFlag || process.env.TT_LITE_COUNTRY_API_ONLY === "1") {
 }
 
 const keyword = argv[0] || "AI design tool demo";
-const maxCount = Math.min(Math.max(Number(argv[1] || 20), 1), 40);
-const endpoint =
+const maxCount = Math.min(Math.max(Number(argv[1] || 20), 1), 300);
+const searchEndpoint =
+  process.env.CDP_ENDPOINT ||
+  "http://127.0.0.1:9222";
+const countryEndpoint =
   process.env.TT_LITE_COUNTRY_CDP ||
+  process.env.CDP_ENDPOINT_ENRICH ||
   process.env.CDP_ENDPOINT ||
   "http://127.0.0.1:9222";
 const probeDelay = Number(process.env.TT_LITE_COUNTRY_PROBE_DELAY_MS || 400);
@@ -54,7 +58,7 @@ const concurrency = Math.max(
     Number.isFinite(concurrencyArg) && concurrencyArg > 0
       ? concurrencyArg
       : Number(process.env.TT_LITE_COUNTRY_CONCURRENCY || 3),
-    10
+    150
   )
 );
 const apiOnly =
@@ -75,14 +79,14 @@ const { orderInfluencersForCountryCheck } = await import(
 );
 
 console.log(
-  `[probe] mode=${apiOnly ? "api-only (signed item_detail + item_list, no page nav)" : "lite+nav"} endpoint=${endpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
+  `[probe] mode=${apiOnly ? "api-only (signed item_detail + item_list, no page nav)" : "lite+nav"} search=${searchEndpoint} country=${countryEndpoint} keyword="${keyword}" batch=${maxCount} concurrency=${concurrency}`
 );
 
 /** @type {Array<{ page: object, dispose: Function }>} */
 const pool = [];
 let searchSession = null;
 try {
-  searchSession = await acquireTiktokApiSession(null, { endpointKey: endpoint });
+  searchSession = await acquireTiktokApiSession(null, { endpointKey: searchEndpoint });
   const batches = await fetchSearchItemFullAll(searchSession.page, keyword, {
     maxPages: 3,
   });
@@ -94,13 +98,12 @@ try {
     `[probe] search done: ${videos.length} videos, ${queue.length} influencers to check`
   );
 
-  pool.push(searchSession);
-  searchSession = null;
+  pool.push(await acquireTiktokApiSession(null, { endpointKey: countryEndpoint }));
   const { resolveLiteCdpTabPoolSize } = await import("../lib/scraper/resolve-scraper-mode.js");
   const tabPoolSize = resolveLiteCdpTabPoolSize();
   for (let i = 1; i < tabPoolSize; i += 1) {
     const session = await acquireTiktokApiSession(null, {
-      endpointKey: endpoint,
+      endpointKey: countryEndpoint,
       forceNewTab: false,
     });
     pool.push(session);
@@ -138,7 +141,6 @@ try {
         videoId: primaryVid,
         altVideoIds,
         secUid: rec.secUid || rec.tiktokSecUid || src?.creator?.secUid || "",
-        searchLocation: src?.locationCreated || null,
       });
     } catch (e) {
       return {
