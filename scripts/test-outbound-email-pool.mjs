@@ -32,7 +32,7 @@ dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
 const WITH_POLL = process.argv.includes("--with-poll");
-const COOLDOWN_MS = 60_000;
+const LEGACY_COOLDOWN_MS = 40 * 60_000;
 
 function accountEmail(account) {
   return normalizePoolEmail(getOpContactEmail(account));
@@ -96,7 +96,7 @@ async function countEligibleFromDb() {
       continue;
     }
     const lastMs = new Date(lastAt).getTime();
-    if (Number.isFinite(lastMs) && now - lastMs >= COOLDOWN_MS) {
+    if (Number.isFinite(lastMs) && now - lastMs >= LEGACY_COOLDOWN_MS) {
       eligible++;
     } else {
       cooling++;
@@ -200,7 +200,7 @@ async function testLruPicker() {
 }
 
 async function testCooldownWithFixture() {
-  console.log("\n=== 4. 首封 60s 冷却（DB 夹具，不发信） ===");
+  console.log("\n=== 4. 首封 20–40 分钟冷却（DB 夹具，不发信） ===");
   const picked = await pickOutboundAccountForNewOutreach();
   const fromEmail = accountEmail(picked);
   const testInfluencerId = `__pool_test_${Date.now()}`;
@@ -212,9 +212,16 @@ async function testCooldownWithFixture() {
       INSERT INTO tiktok_influencer_conversation_messages (
         influencer_id, campaign_id, direction, channel,
         from_email, to_email, subject, body_text,
-        source_type, sent_at, created_at
+        source_type, payload, sent_at, created_at
       ) VALUES (?, ?, 'bin', 'email', ?, 'cooldown-test@example.com',
-                'Pool cooldown test', 'fixture', 'seed_outreach', NOW(), NOW())
+                'Pool cooldown test', 'fixture', 'seed_outreach',
+                JSON_OBJECT('outreachCooldown', JSON_OBJECT(
+                  'durationMs', 1800000,
+                  'nextEligibleAt', DATE_FORMAT(
+                    DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE),
+                    '%Y-%m-%dT%H:%i:%s.000Z'
+                  )
+                )), NOW(), NOW())
     `,
       [testInfluencerId, testCampaignId, fromEmail]
     );
@@ -238,7 +245,7 @@ async function testCooldownWithFixture() {
     if (!blockedSameEmail) {
       fail("冷却未生效", `仍可选中 ${fromEmail}`);
     } else {
-      ok(`刚用于首封的 ${fromEmail} 在 60s 内不可再选`);
+      ok(`刚用于首封的 ${fromEmail} 在其持久化冷却截止时间前不可再选`);
     }
   } finally {
     await queryTikTok(
