@@ -399,6 +399,11 @@ export default function CrawlerOpsPage() {
         </div>
       </header>
 
+      <nav style={{ display: "flex", gap: 18, borderBottom: `1px solid ${COLORS.border}` }}>
+        <span style={{ padding: "11px 0 9px", borderBottom: `2px solid ${COLORS.text}`, fontSize: 12, fontWeight: 750 }}>虚拟机运维</span>
+        <Link href="/ops/email" style={{ color: COLORS.info, padding: "11px 0", fontSize: 12, textDecoration: "none" }}>邮箱运维</Link>
+      </nav>
+
       {error ? <div style={{ margin: "12px 0", padding: "9px 11px", color: COLORS.fault, background: COLORS.faultBg, border: `1px solid #FECACA`, borderRadius: 5, fontSize: 12 }}>{error}</div> : null}
       {snapshot?.registryBacked === false ? <div style={{ margin: "12px 0", padding: "9px 11px", color: COLORS.degraded, background: COLORS.degradedBg, border: `1px solid #FDE68A`, borderRadius: 5, fontSize: 12 }}>机器注册表尚未迁移，当前为兼容只读模式，运维操作已禁用。</div> : null}
 
