@@ -10,9 +10,9 @@
     "start": "next start",
     "lint": "next lint",
     "test:account-admin": "node scripts/test-account-admin-validation.mjs",
-    "test:email-ops": "node --experimental-default-type=module scripts/test-email-delivery-classification.mjs",
-    "migrate:email-ops": "node --experimental-default-type=module scripts/migrate-email-ops-facts.mjs",
-    "backfill:email-ops": "node --experimental-default-type=module scripts/backfill-email-ops-facts.mjs",
+    "test:email-ops": "node scripts/run-esm-script.cjs scripts/test-email-delivery-classification.mjs",
+    "migrate:email-ops": "node scripts/run-esm-script.cjs scripts/migrate-email-ops-facts.mjs",
+    "backfill:email-ops": "node scripts/run-esm-script.cjs scripts/backfill-email-ops-facts.mjs",
     "migrate:topup-reference": "node scripts/migrate-topup-reference-global-unique.js"
   },
   "dependencies": {
