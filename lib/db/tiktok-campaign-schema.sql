@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   UNIQUE KEY uk_campaign_influencer (campaign_id, tiktok_username),
   INDEX idx_execution_platform_influencer_id (influencer_id),
   INDEX idx_campaign_stage (campaign_id, stage),
+  INDEX idx_campaign_stage_created_cursor (campaign_id, stage, created_at DESC, id DESC),
+  INDEX idx_campaign_stage_updated_cursor (campaign_id, stage, updated_at DESC, id DESC),
   INDEX idx_stage (stage)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='TikTok Campaign 执行明细（按红人）';
-

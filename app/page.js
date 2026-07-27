@@ -1113,6 +1113,8 @@ const EXECUTION_EXPORTABLE_STAGES = new Set([
   "published",
 ]);
 
+const EXECUTION_CACHE_TTL_MS = 20_000;
+
 /** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
 function partitionAnalyzedCandidates(items) {
   const recommendedItems = [];
@@ -2431,6 +2433,13 @@ export default function HomePage() {
   const [analyzedDbNotRecommendedCount, setAnalyzedDbNotRecommendedCount] = useState(null);
   const analyzedPagingInFlightRef = useRef(false);
   const executionPagingInFlightRef = useRef(false);
+  const executionCacheRef = useRef(new Map());
+  const analyzedCacheRef = useRef(new Map());
+  const executionStageByCampaignRef = useRef(new Map());
+  const executionRequestRef = useRef(new Map());
+  const executionRequestSequenceRef = useRef(0);
+  const executionCampaignSessionRef = useRef(null);
+  const analyzedRequestRef = useRef(null);
   const executionProgressListRef = useRef(null);
   const executionInfiniteSentinelRef = useRef(null);
   const analyzedInfiniteSentinelRef = useRef(null);
@@ -2694,6 +2703,7 @@ export default function HomePage() {
 
   // 切换会话时按 DB 解析 tiktok_campaign；已发布列表元数据用于切换瞬间乐观展示
   useEffect(() => {
+    if (sessionSwitchingRef.current) return;
     if (!currentSessionId) {
       setResolvedCampaignId(null);
       setResolvedCampaignStatus(null);
@@ -2819,7 +2829,13 @@ export default function HomePage() {
       const incoming = Array.isArray(incomingColumns[stageKey])
         ? incomingColumns[stageKey]
         : [];
-      nextColumns[stageKey] = append ? [...nextColumns[stageKey], ...incoming] : incoming;
+      nextColumns[stageKey] = append
+        ? Array.from(
+            new Map(
+              [...nextColumns[stageKey], ...incoming].map((item) => [item?.id, item])
+            ).values()
+          )
+        : incoming;
     } else {
       for (const key of ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"]) {
         nextColumns[key] = Array.isArray(incomingColumns[key]) ? incomingColumns[key] : [];
@@ -2831,40 +2847,84 @@ export default function HomePage() {
       ...data,
       columns: nextColumns,
       totalByStage: data.totalByStage || base.totalByStage || {},
-      page: data.page || base.page || null,
+      page: {
+        ...(base.page || {}),
+        ...(data.page || {}),
+        nextCursorByStage: {
+          ...(base.page?.nextCursorByStage || {}),
+          ...(stageKey
+            ? { [stageKey]: data.page?.nextCursorByStage?.[stageKey] ?? data.page?.nextCursor ?? null }
+            : data.page?.nextCursorByStage || {}),
+        },
+      },
     };
   }, []);
 
   const loadExecutionStatusPage = useCallback(
-    async (stageKey, { append = false } = {}) => {
-      const cid = resolvedCampaignId;
+    async (stageKey, { append = false, campaignId = resolvedCampaignId, quiet = false } = {}) => {
+      const cid = campaignId;
       if (!cid || stageKey === "analyzed") return;
       if (append && executionPagingInFlightRef.current) return;
-      const currentCount = executionStatus?.columns?.[stageKey]?.length || 0;
-      const offset = append ? currentCount : 0;
+      const requestKey = `${cid}:${stageKey}`;
+      const boundSessionId = executionCampaignSessionRef.current;
+      if (!append) executionRequestRef.current.get(requestKey)?.controller.abort();
+      const controller = new AbortController();
+      const requestId = ++executionRequestSequenceRef.current;
+      executionRequestRef.current.set(requestKey, { controller, requestId });
+      const cachedStatus = executionCacheRef.current.get(cid)?.data;
+      const currentStatus = executionStatus?.campaignId === cid ? executionStatus : cachedStatus;
+      const cursor = append
+        ? currentStatus?.page?.nextCursorByStage?.[stageKey] || null
+        : null;
+      if (append && !cursor) return;
       if (append) executionPagingInFlightRef.current = true;
       try {
         if (append) setExecutionLoadingMore(true);
-        else setExecutionLoading(true);
+        else if (!quiet) setExecutionLoading(true);
         setExecutionError(null);
         const q = new URLSearchParams({
           stage: stageKey,
           limit: "40",
-          offset: String(offset),
         });
-        const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`);
+        if (cursor) q.set("cursor", cursor);
+        const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`, {
+          signal: controller.signal,
+        });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (!data.success) throw new Error(data.error || "获取执行进度失败");
-        setExecutionStatus((prev) => mergeExecutionStatusPage(prev, data, stageKey, append));
+        const activeRequest = executionRequestRef.current.get(requestKey);
+        if (
+          activeRequest?.requestId !== requestId ||
+          resolvedCampaignIdRef.current !== cid ||
+          executionCampaignSessionRef.current !== boundSessionId ||
+          String(data.campaignId) !== String(cid)
+        ) return;
+        setExecutionStatus((prev) => {
+          const next = mergeExecutionStatusPage(prev, data, stageKey, append);
+          const previousCache = executionCacheRef.current.get(cid);
+          executionCacheRef.current.set(cid, {
+            data: next,
+            fetchedAtByStage: {
+              ...(previousCache?.fetchedAtByStage || {}),
+              [stageKey]: Date.now(),
+            },
+          });
+          return next;
+        });
       } catch (e) {
+        if (e?.name === "AbortError") return;
+        if (resolvedCampaignIdRef.current !== cid) return;
         console.error("[HomePage] 获取执行进度失败:", e);
         setExecutionError(e.message || "获取执行进度失败");
       } finally {
+        const activeRequest = executionRequestRef.current.get(requestKey);
+        if (activeRequest?.requestId !== requestId) return;
+        executionRequestRef.current.delete(requestKey);
         if (append) {
           setExecutionLoadingMore(false);
           executionPagingInFlightRef.current = false;
-        } else {
+        } else if (!quiet && resolvedCampaignIdRef.current === cid) {
           setExecutionLoading(false);
         }
       }
@@ -2874,7 +2934,15 @@ export default function HomePage() {
 
   useEffect(() => {
     resolvedCampaignIdRef.current = resolvedCampaignId;
-  }, [resolvedCampaignId]);
+    if (!sessionSwitchingRef.current) {
+      executionCampaignSessionRef.current = currentSessionId;
+    }
+  }, [resolvedCampaignId, currentSessionId]);
+
+  useEffect(() => {
+    if (!resolvedCampaignId) return;
+    executionStageByCampaignRef.current.set(resolvedCampaignId, activeExecutionStage);
+  }, [resolvedCampaignId, activeExecutionStage]);
 
   useEffect(() => {
     const handle = pendingFocusExecutionUsernameRef.current;
@@ -2913,6 +2981,31 @@ export default function HomePage() {
     loadExecutionStatusPage,
   ]);
 
+  // 当前阶段首屏完成后，逐个低优先级预取其余 execution 阶段首屏。
+  useEffect(() => {
+    const cid = resolvedCampaignId;
+    if (!cid || !isExecutionPhaseGlobal || executionLoading) return undefined;
+    const cachedStatus = executionCacheRef.current.get(cid)?.data;
+    const nextStage = ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"].find(
+      (stage) =>
+        stage !== activeExecutionStage &&
+        (cachedStatus?.columns?.[stage]?.length || 0) === 0 &&
+        (cachedStatus?.totalByStage?.[stage] || 0) > 0
+    );
+    if (!nextStage) return undefined;
+    const timer = window.setTimeout(() => {
+      void loadExecutionStatusPage(nextStage, { campaignId: cid, quiet: true });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [
+    resolvedCampaignId,
+    isExecutionPhaseGlobal,
+    activeExecutionStage,
+    executionStatus,
+    executionLoading,
+    loadExecutionStatusPage,
+  ]);
+
   useEffect(() => {
     if (activePendingPriceSubTab !== "rejected") return;
     const rejectedCount =
@@ -2934,6 +3027,21 @@ export default function HomePage() {
     setAnalyzedCandidatesLoading(false);
     setAnalyzedCandidatesLoadingMore(false);
   }, [resolvedCampaignId]);
+
+  useEffect(() => {
+    const cid = resolvedCampaignId;
+    if (!cid || activeExecutionStage !== "analyzed") return;
+    const cached = analyzedCacheRef.current.get(cid);
+    if (!cached) return;
+    setAnalyzedCandidatesItems(cached.items || []);
+    setAnalyzedCandidatesNextBeforeId(cached.nextBeforeId || null);
+    setAnalyzedCandidatesTotal(cached.total ?? null);
+    setAnalyzedDbRecommendedCount(cached.recommendedCount ?? null);
+    setAnalyzedDbNotRecommendedCount(cached.notRecommendedCount ?? null);
+    if (Date.now() - cached.fetchedAt <= EXECUTION_CACHE_TTL_MS) {
+      setAnalyzedCandidatesReadyCampaignId(cid);
+    }
+  }, [resolvedCampaignId, activeExecutionStage]);
 
   // 执行阶段：预取「已分析」总人数（Tab 数字与数据库一致，无需先点开 Tab）
   useEffect(() => {
@@ -2971,18 +3079,24 @@ export default function HomePage() {
     if (!cid || !isExecutionPhaseGlobal || activeExecutionStage !== "analyzed") return;
     if (analyzedCandidatesReadyCampaignId === cid) return;
 
+    analyzedRequestRef.current?.abort();
+    const controller = new AbortController();
+    analyzedRequestRef.current = controller;
     let cancelled = false;
     (async () => {
       try {
         setAnalyzedCandidatesLoading(true);
         setAnalyzedCandidatesError(null);
-        const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&limit=30`);
+        const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&limit=30`, {
+          signal: controller.signal,
+        });
         const data = await res.json().catch(() => ({}));
         if (resolvedCampaignIdRef.current !== cid) return;
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (!data.success) throw new Error(data.error || "获取已分析候选失败");
         if (cancelled) return;
-        setAnalyzedCandidatesItems(Array.isArray(data.data) ? data.data : []);
+        const items = Array.isArray(data.data) ? data.data : [];
+        setAnalyzedCandidatesItems(items);
         setAnalyzedCandidatesNextBeforeId(
           data.nextBeforeId != null && data.nextBeforeId !== ""
             ? String(data.nextBeforeId)
@@ -2999,7 +3113,19 @@ export default function HomePage() {
           setAnalyzedDbNotRecommendedCount(Number(data.analyzedNotRecommendedDbCount));
         }
         setAnalyzedCandidatesReadyCampaignId(cid);
+        analyzedCacheRef.current.set(cid, {
+          items,
+          nextBeforeId:
+            data.nextBeforeId != null && data.nextBeforeId !== ""
+              ? String(data.nextBeforeId)
+              : null,
+          total: data.totalMatchAnalysisCount,
+          recommendedCount: data.analyzedRecommendedDbCount,
+          notRecommendedCount: data.analyzedNotRecommendedDbCount,
+          fetchedAt: Date.now(),
+        });
       } catch (e) {
+        if (e?.name === "AbortError") return;
         if (!cancelled) {
           console.error("[HomePage] 获取已分析候选失败:", e);
           setAnalyzedCandidatesError(e.message || "获取已分析候选失败");
@@ -3012,6 +3138,7 @@ export default function HomePage() {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [
     resolvedCampaignId,
@@ -3037,13 +3164,26 @@ export default function HomePage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (!data.success) throw new Error(data.error || "加载更多失败");
+      if (resolvedCampaignIdRef.current !== cid) return;
       const next = Array.isArray(data.data) ? data.data : [];
-      setAnalyzedCandidatesItems((prev) => [...prev, ...next]);
-      setAnalyzedCandidatesNextBeforeId(
+      const nextBeforeId =
         data.nextBeforeId != null && data.nextBeforeId !== ""
           ? String(data.nextBeforeId)
-          : null
-      );
+          : null;
+      setAnalyzedCandidatesItems((prev) => {
+        const items = Array.from(
+          new Map([...prev, ...next].map((item) => [item?.id, item])).values()
+        );
+        const cached = analyzedCacheRef.current.get(cid) || {};
+        analyzedCacheRef.current.set(cid, {
+          ...cached,
+          items,
+          nextBeforeId,
+          fetchedAt: Date.now(),
+        });
+        return items;
+      });
+      setAnalyzedCandidatesNextBeforeId(nextBeforeId);
     } catch (e) {
       console.error("[HomePage] 加载更多已分析候选失败:", e);
       setAnalyzedCandidatesError(e.message || "加载更多失败");
@@ -3825,8 +3965,39 @@ export default function HomePage() {
       return;
     }
 
-    setExecutionStatus(null);
-    void loadExecutionStatusPage(activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage);
+    const rememberedStage = executionStageByCampaignRef.current.get(campaignId) || "contacted";
+    const nextStage = EXECUTION_EXPORTABLE_STAGES.has(rememberedStage) || rememberedStage === "analyzed"
+      ? rememberedStage
+      : "contacted";
+    setActiveExecutionStage(nextStage);
+
+    const cached = executionCacheRef.current.get(campaignId);
+    const cacheIsFresh =
+      cached &&
+      Date.now() - (cached.fetchedAtByStage?.[nextStage === "analyzed" ? "contacted" : nextStage] || 0) <=
+        EXECUTION_CACHE_TTL_MS;
+    setExecutionStatus(cached?.data || null);
+    setExecutionError(null);
+    setExecutionLoading(!cached?.data);
+
+    if (nextStage === "analyzed") {
+      const analyzedCached = analyzedCacheRef.current.get(campaignId);
+      if (analyzedCached) {
+        setAnalyzedCandidatesItems(analyzedCached.items || []);
+        setAnalyzedCandidatesNextBeforeId(analyzedCached.nextBeforeId || null);
+        setAnalyzedCandidatesTotal(analyzedCached.total ?? null);
+        setAnalyzedDbRecommendedCount(analyzedCached.recommendedCount ?? null);
+        setAnalyzedDbNotRecommendedCount(analyzedCached.notRecommendedCount ?? null);
+        setAnalyzedCandidatesReadyCampaignId(
+          Date.now() - analyzedCached.fetchedAt <= EXECUTION_CACHE_TTL_MS ? campaignId : null
+        );
+      }
+    }
+
+    void loadExecutionStatusPage(nextStage === "analyzed" ? "contacted" : nextStage, {
+      campaignId,
+      quiet: Boolean(cacheIsFresh),
+    });
   }, [resolvedCampaignId, isExecutionPhaseGlobal]);
 
   // 在「执行阶段」加载执行节奏 & 汇报配置（用于工作笔记）
@@ -3926,23 +4097,9 @@ export default function HomePage() {
   const refreshExecutionStatusQuiet = useCallback(async () => {
     const cid = resolvedCampaignId;
     if (!cid) return;
-    try {
-      const stageKey = activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage;
-      const currentCount = Math.max(executionStatus?.columns?.[stageKey]?.length || 40, 40);
-      const q = new URLSearchParams({
-        stage: stageKey,
-        limit: String(Math.min(currentCount, 100)),
-        offset: "0",
-      });
-      const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`);
-      const data = await res.json();
-      if (data.success) {
-        setExecutionStatus((prev) => mergeExecutionStatusPage(prev, data, stageKey, false));
-      }
-    } catch (e) {
-      console.error("[HomePage] 刷新执行进度失败:", e);
-    }
-  }, [resolvedCampaignId, activeExecutionStage, executionStatus, mergeExecutionStatusPage]);
+    const stageKey = activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage;
+    await loadExecutionStatusPage(stageKey, { campaignId: cid, quiet: true });
+  }, [resolvedCampaignId, activeExecutionStage, loadExecutionStatusPage]);
 
   const refreshAuthUser = useCallback(async () => {
     try {
@@ -5449,6 +5606,9 @@ export default function HomePage() {
     if (sessionId === currentSessionId) return;
 
     const reqId = ++switchSessionRequestRef.current;
+    // 使旧 session 的 campaign 解析请求立即失效，避免切换期间把目标 campaign 改回旧值。
+    resolveCampaignRequestRef.current += 1;
+    resolveCampaignSessionRef.current = sessionId;
     setMessages(cloneWelcomeMessages());
     messagesBoundSessionIdRef.current = null;
 
@@ -5461,8 +5621,28 @@ export default function HomePage() {
       pub?.campaignId &&
       isExecutionUiCampaignStatus(pub.campaignStatus || "running")
     ) {
-      setResolvedCampaignId(String(pub.campaignId));
+      const nextCampaignId = String(pub.campaignId);
+      for (const request of executionRequestRef.current.values()) {
+        request.controller.abort();
+      }
+      executionRequestRef.current.clear();
+      analyzedRequestRef.current?.abort();
+      executionPagingInFlightRef.current = false;
+      analyzedPagingInFlightRef.current = false;
+      resolvedCampaignIdRef.current = nextCampaignId;
+      executionCampaignSessionRef.current = sessionId;
+      setResolvedCampaignId(nextCampaignId);
       setResolvedCampaignStatus(pub.campaignStatus || "running");
+      setExecutionStatus(executionCacheRef.current.get(nextCampaignId)?.data || null);
+      setExecutionError(null);
+      setExecutionLoading(!executionCacheRef.current.has(nextCampaignId));
+    } else {
+      resolvedCampaignIdRef.current = null;
+      executionCampaignSessionRef.current = sessionId;
+      setResolvedCampaignId(null);
+      setResolvedCampaignStatus(null);
+      setExecutionStatus(null);
+      setExecutionLoading(false);
     }
 
     const prevSessionId = currentSessionId;
@@ -6602,6 +6782,8 @@ export default function HomePage() {
                     return (
                       <div
                         key={session.id}
+                        data-session-id={session.id}
+                        data-campaign-id={session.campaignId || ""}
                         onClick={() => {
                           if (renamingSessionId === session.id) return;
                           handleSwitchSession(session.id);

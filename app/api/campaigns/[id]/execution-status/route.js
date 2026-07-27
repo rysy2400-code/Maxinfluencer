@@ -20,7 +20,7 @@ export async function GET(req, { params }) {
     const data = await getCampaignExecutionStatus(campaignId, {
       stage: searchParams.get("stage"),
       limit: searchParams.get("limit"),
-      offset: searchParams.get("offset"),
+      cursor: searchParams.get("cursor"),
     });
 
     if (!data) {
