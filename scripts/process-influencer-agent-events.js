@@ -666,6 +666,23 @@ async function processInfluencerAgentEvent(eventRow) {
 
   const payload = parseJsonOrObject(eventRow.payload) || {};
   const type = eventRow.event_type || payload.type || "generic";
+  const campaignId = payload.campaignId || eventRow.campaign_id || null;
+  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+    campaignId,
+    eventRow,
+    payload
+  );
+  if (platformInfluencerId) {
+    const influencer = await getInfluencerById(platformInfluencerId).catch(() => null);
+    if (influencer?.contactStatus === "do_not_contact") {
+      await markInfluencerAgentEventStatus(
+        eventRow.id,
+        "skipped",
+        "influencer_do_not_contact"
+      );
+      return;
+    }
+  }
 
   if (type === "first_outreach") {
     await handleFirstOutreach(eventRow, payload);

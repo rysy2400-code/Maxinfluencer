@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   stage ENUM(
     'pending_quote',
     'quote_submitted',
+    'pending_creator_confirmation',
     'pending_sample',
     'pending_draft',
     'draft_submitted',
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
   flat_fee DECIMAL(10,2) NULL COMMENT '当前最新报价金额（数值，币种见 currency）',
   currency VARCHAR(8) NOT NULL DEFAULT 'USD' COMMENT '报价币种 ISO 4217，如 USD、EUR',
   quote_negotiation JSON NULL COMMENT '报价/砍价时间线：[{role,amount,currency,reason,at,source}]',
+  quote_origin VARCHAR(32) NULL COMMENT 'creator_quote|commerce_profile_estimate',
   sku VARCHAR(255) NULL COMMENT 'SKU（用于寄样/对账）',
   shipping_info JSON NULL COMMENT '本次寄样信息快照（地址/收件人/电话/备注等）',
   video_draft JSON NULL COMMENT '草稿与修改建议（建议存数组：[{draftLink, feedback, status, createdAt}]）',
