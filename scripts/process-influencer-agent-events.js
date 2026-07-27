@@ -117,14 +117,24 @@ async function resolvePlatformInfluencerIdForAgentEvent(campaignId, eventRow, pa
   return null;
 }
 
-async function markInfluencerAgentEventStatus(id, status, errorMessage = null) {
+async function markInfluencerAgentEventStatus(
+  id,
+  status,
+  errorMessage = null,
+  senderEmail = null
+) {
   await queryTikTok(
     `
     UPDATE tiktok_influencer_agent_event
-    SET status = ?, error_message = ?, updated_at = NOW()
+    SET status = ?, error_message = ?,
+        payload = CASE WHEN ? IS NULL THEN payload ELSE JSON_SET(
+          COALESCE(payload, JSON_OBJECT()), '$.deliveryAudit',
+          JSON_OBJECT('senderEmail', ?)
+        ) END,
+        updated_at = NOW()
     WHERE id = ?
   `,
-    [status, errorMessage, id]
+    [status, errorMessage, senderEmail, senderEmail, id]
   );
 }
 
@@ -745,7 +755,8 @@ async function main() {
       await markInfluencerAgentEventStatus(
         ev.id,
         "failed",
-        `未捕获错误: ${err?.message || String(err)}`
+        `未捕获错误: ${err?.message || String(err)}`,
+        err?.senderEmail || null
       );
     }
   }
