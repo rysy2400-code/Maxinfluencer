@@ -306,14 +306,19 @@ export async function PATCH(req, { params }) {
 
     try {
       const executionRow = await getExecutionRow(campaignId, influencerId);
-      await enqueueAdvertiserExecutionFollowup({
-        campaignId,
-        influencerId,
-        action,
-        campaign,
-        executionRow,
-        payload,
-      });
+      const silentSystemQuoteRejection =
+        action === "rejectQuote" &&
+        executionRow?.quote_origin === "commerce_profile_estimate";
+      if (!silentSystemQuoteRejection) {
+        await enqueueAdvertiserExecutionFollowup({
+          campaignId,
+          influencerId,
+          action,
+          campaign,
+          executionRow,
+          payload,
+        });
+      }
     } catch (enqueueErr) {
       console.warn(
         "[Campaign Execution API] 写入 Influencer Agent 跟进队列失败（不影响 stage 更新）:",

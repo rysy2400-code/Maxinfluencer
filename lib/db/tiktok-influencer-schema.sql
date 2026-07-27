@@ -16,6 +16,13 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer (
   avg_views INT NULL COMMENT '近似平均播放量（如有）',
 
   influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）',
+  business_profile_markdown MEDIUMTEXT NULL COMMENT '红人商务档案（固定 Markdown 模板，唯一内容存储）',
+  business_profile_updated_at DATETIME NULL COMMENT '商务档案最近更新时间',
+  business_profile_source_message_id VARCHAR(255) NULL COMMENT '最近一次更新档案的来源邮件 Message-ID',
+  contact_status VARCHAR(32) NOT NULL DEFAULT 'contactable' COMMENT 'contactable|do_not_contact',
+  do_not_contact_at DATETIME NULL COMMENT '红人明确要求停止联系的时间',
+  do_not_contact_reason TEXT NULL COMMENT '停止联系的原始原因摘要',
+  do_not_contact_source_message_id VARCHAR(255) NULL COMMENT '停止联系的来源邮件 Message-ID',
   source VARCHAR(32) NULL COMMENT '数据来源，如 echotik',
   source_ref VARCHAR(128) NULL COMMENT '来源侧 ID，如 creator_oecuid',
   source_payload JSON COMMENT '来源原始快照（可选，用于调试/补字段）',

@@ -988,6 +988,10 @@ function ExecutionProgressPlatformBadge({ platform }) {
 /** 红人来源标签：用户导入 vs 平台发现 */
 function ExecutionProgressSourceLabel({ source }) {
   const isUser = source === "user_upload";
+  const isAlgorithm = source === "algorithm_recommendation";
+  const backgroundColor = isUser ? "#ECFDF5" : isAlgorithm ? "#FFFBEB" : "#EEF2FF";
+  const color = isUser ? "#047857" : isAlgorithm ? "#92400E" : "#4338CA";
+  const borderColor = isUser ? "#A7F3D0" : isAlgorithm ? "#FDE68A" : "#C7D2FE";
   return (
     <span
       style={{
@@ -995,14 +999,14 @@ function ExecutionProgressSourceLabel({ source }) {
         fontWeight: 500,
         padding: "1px 6px",
         borderRadius: 6,
-        backgroundColor: isUser ? "#ECFDF5" : "#EEF2FF",
-        color: isUser ? "#047857" : "#4338CA",
-        border: `1px solid ${isUser ? "#A7F3D0" : "#C7D2FE"}`,
+        backgroundColor,
+        color,
+        border: `1px solid ${borderColor}`,
         whiteSpace: "nowrap",
         flexShrink: 0,
       }}
     >
-      来源：{isUser ? "用户" : "平台"}
+      来源：{isUser ? "用户" : isAlgorithm ? "系统算法推荐" : "平台"}
     </span>
   );
 }
@@ -1868,11 +1872,30 @@ function ExecutionProgressRow({
             useMarkdown
           />
           {labelRow(
-            `红人最新报价 (${item.currency || "USD"})`,
+            `${item.quoteOrigin === "commerce_profile_estimate" ? "系统建议价" : "红人最新报价"} (${item.currency || "USD"})`,
             flatUsd != null && flatUsd !== ""
               ? `${Number(flatUsd)} ${item.currency || "USD"}`
               : "—"
           )}
+          {item.quoteOrigin === "commerce_profile_estimate" && item.systemQuote?.deliveryNote ? (
+            <div
+              style={{
+                padding: 8,
+                border: "1px solid #F59E0B",
+                backgroundColor: "#FFFBEB",
+                color: "#92400E",
+                fontSize: 11,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {item.systemQuote.deliveryNote}
+            </div>
+          ) : null}
+          {item.stage === "pending_creator_confirmation" ? (
+            <div style={{ fontSize: 11, color: "#6B7280" }}>
+              品牌已同意并扣款，等待红人确认本次合作和价格。
+            </div>
+          ) : null}
           {labelRow("eCPM", ecpmDisplay)}
 
           {quoteNegotiation.length > 0 && (

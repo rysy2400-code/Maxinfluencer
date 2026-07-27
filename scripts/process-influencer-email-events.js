@@ -24,7 +24,18 @@ import {
 import {
   CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES,
 } from "../lib/execution/content-brief.js";
-import { getInfluencerById } from "../lib/db/influencer-dao.js";
+import {
+  getInfluencerById,
+  markInfluencerDoNotContact,
+  updateInfluencerBusinessProfile,
+} from "../lib/db/influencer-dao.js";
+import {
+  isExplicitDoNotContact,
+  updateBusinessProfileFromReply,
+} from "../lib/influencer/business-profile.js";
+import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-quote.js";
+import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
+import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 
 const AUTO_REPLY_PATTERNS = [
@@ -120,6 +131,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
     SELECT e.campaign_id,
            e.tiktok_username AS influencer_id,
            e.stage,
+           e.quote_origin,
            e.influencer_snapshot,
            e.last_event,
            c.product_info,
@@ -135,6 +147,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
     campaignId: r.campaign_id,
     influencerId: r.influencer_id,
     stage: r.stage,
+    quoteOrigin: r.quote_origin || null,
     influencerSnapshot: parseJsonOrObject(r.influencer_snapshot),
     lastEvent: parseJsonOrObject(r.last_event),
     productInfo: parseJsonOrObject(r.product_info),
@@ -246,6 +259,7 @@ async function handleOutboundEmails(decision, event, executions) {
 
     const influencerRow =
       influencerId && (await getInfluencerById(influencerId).catch(() => null));
+    if (influencerRow?.contactStatus === "do_not_contact") continue;
 
     const ctx = await resolveInfluencerThreadMailContext({
       influencerId,
@@ -425,6 +439,38 @@ async function handleAgentEvents(decision, event, executions) {
   }
 }
 
+async function applySystemQuoteResponses(decision, event, executions) {
+  const responses = Array.isArray(decision?.systemQuoteResponses)
+    ? decision.systemQuoteResponses
+    : [];
+  for (const item of responses) {
+    const exec = executions.find((row) => row.campaignId === item?.campaignId);
+    if (!exec || exec.stage !== "pending_creator_confirmation") continue;
+    const result = await applySystemQuoteCreatorResponse({
+      campaignId: exec.campaignId,
+      influencerId: event.influencer_id || exec.influencerId,
+      response: item.response,
+      newAmountUsd: item.newAmountUsd,
+      note: item.note || event.body_text || null,
+      sourceMessageId: event.message_id || null,
+    });
+    if (result?.success && item.response === "accepted") {
+      const [campaign, executionRow] = await Promise.all([
+        getCampaignById(exec.campaignId),
+        getExecutionRow(exec.campaignId, exec.influencerId),
+      ]);
+      await enqueueAdvertiserExecutionFollowup({
+        campaignId: exec.campaignId,
+        influencerId: exec.influencerId,
+        action: "approveQuote",
+        campaign,
+        executionRow,
+        payload: { source: "creator_system_quote_acceptance" },
+      });
+    }
+  }
+}
+
 async function applyDecision(decision, event, executions) {
   // 目前支持的最小决策格式：
   // decision = { updates: [ { campaignId, newStage, note } ] }
@@ -565,6 +611,55 @@ async function processEvent(event) {
   const influencerRow =
     event.influencer_id &&
     (await getInfluencerById(event.influencer_id).catch(() => null));
+  let profileMaintenance = null;
+  if (influencerRow && isExplicitDoNotContact(event.body_text)) {
+    await markInfluencerDoNotContact({
+      influencerId: event.influencer_id,
+      reason: event.body_text,
+      sourceMessageId: event.message_id || null,
+    });
+    await markEventStatus(event.id, "succeeded", null);
+    return;
+  }
+  if (
+    influencerRow &&
+    !isLikelyAutoReply(event.subject, event.body_text) &&
+    !isBodyEffectivelyEmpty(event.body_text)
+  ) {
+    try {
+      profileMaintenance = await updateBusinessProfileFromReply({
+        influencer: influencerRow,
+        email: {
+          subject: event.subject || "",
+          bodyText: event.body_text || "",
+          messageId: event.message_id || null,
+          receivedAt: event.received_at || event.created_at || null,
+        },
+        conversationHistory,
+      });
+      if (profileMaintenance?.doNotContact) {
+        await markInfluencerDoNotContact({
+          influencerId: event.influencer_id,
+          reason: profileMaintenance.doNotContactReason || event.body_text,
+          sourceMessageId: event.message_id || null,
+        });
+        await markEventStatus(event.id, "succeeded", null);
+        return;
+      }
+      if (profileMaintenance?.changed && profileMaintenance.profileMarkdown) {
+        await updateInfluencerBusinessProfile({
+          influencerId: event.influencer_id,
+          markdown: profileMaintenance.profileMarkdown,
+          sourceMessageId: event.message_id || null,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        "[ProcessInfluencerEmailEvents] 商务档案更新失败:",
+        err?.message || err
+      );
+    }
+  }
   const threadMailCtx = await resolveInfluencerThreadMailContext({
     influencerId: event.influencer_id,
     influencer: influencerRow,
@@ -593,6 +688,7 @@ async function processEvent(event) {
       parentMessageId: threadMailCtx.parentMessageId,
       suggestedSubjectForReply: threadMailCtx.subjectForSend,
     },
+    profileMaintenance,
   };
 
   // 读取附件并提取可读文本（给 LLM）
@@ -635,6 +731,7 @@ ${influencerAgentBasePrompt}
   - activeExecutions：该红人在各个 campaign 下当前的执行状态；
   - threadInfo：规范化线程标题（canonicalThreadSubject）、根/父 Message-ID、以及建议的续信标题（suggestedSubjectForReply，通常为 Re: + 规范化标题）。
 - 你的目标是：在尊重红人体验的前提下，做出合理的业务决策，并通过结构化 JSON 告诉系统要做什么。
+- profileMaintenance.questions 若非空，须在正常业务回复结尾自然询问这些缺失或待确认项目；不要重复询问已有信息。
 
 输入 JSON 中包含：
 - email：当前这封邮件的关键信息；
@@ -696,10 +793,22 @@ ${influencerAgentBasePrompt}
         "creatorMessage": "I can do 300 for 2 + 200 for 1 more, and prefer posting on March 20.",
         "note": "用简明中文总结红人态度和关键信息，方便执行侧阅读"
       }
+    ],
+    "systemQuoteResponses": [
+      {
+        "campaignId": "CAMP-xxx",
+        "response": "accepted|declined|countered",
+        "newAmountUsd": 800,
+        "note": "红人对系统建议合作和价格的明确回复摘要"
+      }
     ]
   }
 
 - updates 会被写入 tiktok_advertiser_agent_event，由后台 worker 落库；**stage 变更受状态机约束**，越权变更会被拦截，但报价/寄样/草稿/视频链接等字段仍可能写入。
+- activeExecutions 中 stage=pending_creator_confirmation 时，只能在红人明确接受、拒绝或提出新价格后填写 systemQuoteResponses。不要同时为同一 campaign 填 updates。
+- 填写 systemQuoteResponses 后不要再为该 campaign 生成 outboundEmails；系统会按最终状态发送下一步邮件，拒绝或新报价则无需自动回复。
+- 红人接受时 response=accepted；拒绝时 response=declined；提出不同价格时 response=countered，并将外币报价合理估算为 USD 后填 newAmountUsd。
+- 含糊回复、自动回复或“稍后答复”不得填写 systemQuoteResponses。
 - **你只能推进以下 stage 变更**（其它阶段必须由广告主在 Portal 操作）：
   - pending_quote → quote_submitted：红人同意品牌报价或给出 counter 报价
   - quote_rejected → quote_submitted：红人拒绝后再给出新报价
@@ -800,6 +909,7 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   }
 
   try {
+    await applySystemQuoteResponses(decision, event, executions);
     await applyDecision(decision, event, executions);
     await handleOutboundEmails(decision, event, executions);
     await handleAgentEvents(decision, event, executions);

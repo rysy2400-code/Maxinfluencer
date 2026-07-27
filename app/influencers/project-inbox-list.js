@@ -8,6 +8,7 @@ import { formatTime, Pill } from "./shared-ui";
 const EXECUTION_STAGE_ORDER = [
   "pending_quote",
   "quote_submitted",
+  "pending_creator_confirmation",
   "quote_rejected",
   "pending_sample",
   "pending_draft",
@@ -18,6 +19,7 @@ const EXECUTION_STAGE_ORDER = [
 const STAGE_LABEL = {
   pending_quote: "待报价",
   quote_submitted: "已提交报价",
+  pending_creator_confirmation: "待红人确认",
   quote_rejected: "报价被拒",
   pending_sample: "待寄样",
   pending_draft: "待交稿",

@@ -145,7 +145,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   const execRows = await queryTikTok(
     `
-    SELECT stage, flat_fee, currency, quote_negotiation, last_event
+    SELECT stage, flat_fee, currency, quote_negotiation, quote_origin, last_event
     FROM tiktok_campaign_execution
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
@@ -177,6 +177,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
   }
 
   let nextCurrency = normalizeCurrencyCode(cur.currency, "USD");
+  let nextQuoteOrigin = cur.quote_origin || null;
   let negotiation = parseQuoteNegotiationColumn(cur.quote_negotiation);
   let mergedLastEvent = parseJsonOrObject(cur.last_event) || {};
 
@@ -185,6 +186,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
         ? "advertiser"
         : "influencer";
+    if (role === "influencer") nextQuoteOrigin = "creator_quote";
     nextCurrency = normalizeCurrencyCode(payload.currency || cur.currency, nextCurrency);
     negotiation = [
       ...negotiation,
@@ -266,6 +268,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         flat_fee = COALESCE(?, flat_fee),
         currency = ?,
         quote_negotiation = ?,
+        quote_origin = ?,
         video_link = COALESCE(?, video_link),
         shipping_info = COALESCE(?, shipping_info),
         last_event = ?
@@ -276,6 +279,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       flatFee,
       nextCurrency,
       JSON.stringify(negotiation),
+      nextQuoteOrigin,
       videoLink,
       shippingInfo ? JSON.stringify(shippingInfo) : null,
       JSON.stringify(mergedLastEvent),
