@@ -123,9 +123,10 @@ if (\$role -eq "youtube") {
   foreach (\$needle in @(
     '\$env:SEARCH_WORKER_SLOTS = "1"',
     '\$env:IG_LITE_TAB_POOL_SIZE = "1"',
-    '\$env:LITE_IG_ENRICH_CONCURRENCY = "3"',
-    '\$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "3"',
-    '\$env:LITE_IG_ENRICH_HARD_MAX = "3"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY = "1"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "1"',
+    '\$env:LITE_IG_ENRICH_HARD_MAX = "1"',
+    '\$env:CDP_RPC_TIMEOUTS_BEFORE_RESTART = "3"',
     '\$env:IG_LITE_EVALUATE_CONCURRENCY = "1"',
     '\$env:IG_REQUEST_DELAY_MIN_MS = "1000"',
     '\$env:IG_REQUEST_DELAY_MAX_MS = "3000"',
@@ -137,7 +138,7 @@ if (\$role -eq "youtube") {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing Instagram guard env: \$needle" }
   }
   if (\$igTabs -ne 1) { throw "Instagram role expected exactly 1 Instagram tab, got \$igTabs" }
-  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs=\$igTabs platforms=instagram taskSlots=1 enrich=3 evaluate=1 about=1 requestDelay=1000-3000ms"
+  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs=\$igTabs platforms=instagram taskSlots=1 enrich=1 evaluate=1 about=1 requestDelay=1000-3000ms"
 }
 PS
 }
