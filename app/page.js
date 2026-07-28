@@ -4175,33 +4175,89 @@ export default function HomePage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) throw new Error(data.error || "更新失败");
-        if (action === "submitQuote" && data.quoteEntry) {
-          setExecutionStatus((prev) => {
-            if (!prev?.columns) return prev;
-            const columns = { ...prev.columns };
-            for (const stageKey of Object.keys(columns)) {
-              if (!Array.isArray(columns[stageKey])) continue;
-              columns[stageKey] = columns[stageKey].map((row) => {
-                if (row?.id !== influencerId) return row;
-                const history = Array.isArray(row.quoteNegotiation)
-                  ? row.quoteNegotiation
-                  : [];
-                return {
-                  ...row,
-                  flatFeeUsd: data.flatFeeUsd,
-                  currency: data.currency || row.currency,
-                  quoteNegotiation: [...history, data.quoteEntry],
-                };
-              });
-            }
-            return { ...prev, columns };
-          });
-          void refreshExecutionStatusQuiet();
-        } else {
-          await refreshExecutionStatusQuiet();
-        }
+        setExecutionStatus((prev) => {
+          if (!prev?.columns) return prev;
+          const columns = Object.fromEntries(
+            Object.entries(prev.columns).map(([key, rows]) => [
+              key,
+              Array.isArray(rows) ? [...rows] : rows,
+            ])
+          );
+          let currentColumn = null;
+          let currentRow = null;
+          for (const [key, rows] of Object.entries(columns)) {
+            if (!Array.isArray(rows)) continue;
+            const index = rows.findIndex((row) => row?.id === influencerId);
+            if (index < 0) continue;
+            currentColumn = key;
+            currentRow = rows[index];
+            rows.splice(index, 1);
+            break;
+          }
+          if (!currentRow) return prev;
+
+          const nextStage = data.stage || currentRow.stage;
+          const nextRow = {
+            ...currentRow,
+            stage: nextStage,
+            ...(action === "rejectQuote"
+              ? {
+                  quoteRejectedAt: new Date().toISOString(),
+                  rejectReason: payload.rejectReason,
+                }
+              : {}),
+            ...(data.flatFeeUsd != null ? { flatFeeUsd: data.flatFeeUsd } : {}),
+            ...(data.currency ? { currency: data.currency } : {}),
+          };
+          if (data.quoteEntry) {
+            const history = Array.isArray(currentRow.quoteNegotiation)
+              ? currentRow.quoteNegotiation
+              : [];
+            nextRow.quoteNegotiation = [...history, data.quoteEntry];
+          }
+
+          const targetColumn =
+            nextStage === "pending_sample"
+              ? "pendingSample"
+              : nextStage === "pending_draft" || nextStage === "draft_submitted"
+                ? "pendingDraft"
+                : nextStage === "published"
+                  ? "published"
+                  : nextStage === "pending_quote"
+                    ? "contacted"
+                    : "pendingPrice";
+          if (!Array.isArray(columns[targetColumn])) columns[targetColumn] = [];
+          columns[targetColumn] = [nextRow, ...columns[targetColumn]];
+
+          const totalByStage = { ...(prev.totalByStage || {}) };
+          if (currentColumn !== targetColumn) {
+            totalByStage[currentColumn] = Math.max(
+              0,
+              Number(totalByStage[currentColumn] || 0) - 1
+            );
+            totalByStage[targetColumn] = Number(totalByStage[targetColumn] || 0) + 1;
+          }
+          if (action === "rejectQuote") {
+            totalByStage.pendingPricePending = Math.max(
+              0,
+              Number(totalByStage.pendingPricePending || 0) - 1
+            );
+            totalByStage.pendingPriceRejected =
+              Number(totalByStage.pendingPriceRejected || 0) + 1;
+          } else if (action === "approveQuote") {
+            totalByStage.pendingPricePending = Math.max(
+              0,
+              Number(totalByStage.pendingPricePending || 0) - 1
+            );
+          }
+          return { ...prev, columns, totalByStage };
+        });
+
+        // The mutation is complete. Re-fetch only to reconcile with server state;
+        // it must not keep the row controls or confirmation modal busy.
+        void refreshExecutionStatusQuiet();
         if (action === "approveQuote") {
-          await refreshAuthUser();
+          void refreshAuthUser();
         }
         return { ok: true, ...data };
       } catch (err) {
