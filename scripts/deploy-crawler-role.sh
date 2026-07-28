@@ -101,7 +101,8 @@ if (\$role -eq "youtube") {
     '\$env:YT_LITE_TAB_POOL_SIZE = "3"',
     '\$env:LITE_YT_ENRICH_CONCURRENCY = "150"',
     '\$env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"',
-    '\$env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"'
+    '\$env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"',
+    '\$env:YT_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"'
   )) {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing YouTube guard env: \$needle" }
   }

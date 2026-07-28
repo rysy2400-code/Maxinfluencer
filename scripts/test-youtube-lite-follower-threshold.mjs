@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   YOUTUBE_LITE_MIN_FOLLOWERS_FOR_ANALYSIS,
+  hasYoutubeAboutEmail,
+  isYoutubeLiteEmailGateEnabled,
   shouldSkipYoutubeLiteLowFollowers,
 } from "../lib/tools/influencer-functions/youtube/extract-youtube-channel-lite.js";
 
@@ -15,6 +17,41 @@ test("YouTube Lite skips known follower counts below 500", () => {
   assert.equal(
     shouldSkipYoutubeLiteLowFollowers({ followers: { count: 499 } }),
     true
+  );
+});
+
+test("YouTube Lite email gate is disabled by default and enabled only with 1", () => {
+  assert.equal(isYoutubeLiteEmailGateEnabled(undefined), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled(""), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled("0"), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled("true"), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled("1"), true);
+  assert.equal(isYoutubeLiteEmailGateEnabled(" 1 "), true);
+});
+
+test("YouTube Lite accepts only emails parsed from the current About data", () => {
+  for (const aboutEmailSource of [
+    "about_description",
+    "about_mailto_link",
+    "about_external_link",
+  ]) {
+    assert.equal(
+      hasYoutubeAboutEmail({ email: "creator@example.com", aboutEmailSource }),
+      true
+    );
+  }
+
+  assert.equal(hasYoutubeAboutEmail({ email: "creator@example.com" }), false);
+  assert.equal(
+    hasYoutubeAboutEmail({
+      email: "creator@example.com",
+      aboutEmailSource: "persisted_record",
+    }),
+    false
+  );
+  assert.equal(
+    hasYoutubeAboutEmail({ email: null, aboutEmailSource: "about_description" }),
+    false
   );
 });
 
