@@ -113,6 +113,12 @@ function draftStatusLabel(status) {
   return "待审核";
 }
 
+function isPendingDraftItem(item) {
+  if (item?.eventType !== "draft_outbound") return false;
+  const status = item.payloadSafe?.draft?.status || item.payloadSafe?.status || "pending";
+  return status === "pending";
+}
+
 export default function InfluencerChatPage() {
   const params = useParams();
   const influencerId = params?.influencerId ? String(params.influencerId) : null;
@@ -132,21 +138,24 @@ export default function InfluencerChatPage() {
   const [composerText, setComposerText] = useState("");
   const [composerFiles, setComposerFiles] = useState([]);
   const [composerDraftId, setComposerDraftId] = useState(null);
+  const [approvedDraftIds, setApprovedDraftIds] = useState([]);
+  const [composerHeight, setComposerHeight] = useState(178);
   const [sending, setSending] = useState(false);
   const [outboundFromEmail, setOutboundFromEmail] = useState(null);
   const [outboundEmailLoading, setOutboundEmailLoading] = useState(false);
   const fileInputRef = useRef(null);
   const scrollRef = useRef(null);
+  const composerDragRef = useRef(null);
   /** 加载更早一页后恢复滚动位置；为 null 时表示滚到最新消息 */
   const prependAdjustRef = useRef(null);
 
   const pendingDrafts = useMemo(() => {
+    const hiddenIds = new Set(approvedDraftIds.map((x) => String(x)));
     return timelineItems.filter((x) => {
-      if (x.eventType !== "draft_outbound") return false;
-      const status = x.payloadSafe?.draft?.status || x.payloadSafe?.status || "pending";
-      return status === "pending";
+      if (hiddenIds.has(String(x.id))) return false;
+      return isPendingDraftItem(x);
     });
-  }, [timelineItems]);
+  }, [timelineItems, approvedDraftIds]);
 
   const latestPendingDraft = useMemo(() => {
     return pendingDrafts.length ? pendingDrafts[pendingDrafts.length - 1] : null;
@@ -247,8 +256,10 @@ export default function InfluencerChatPage() {
           el != null ? { prevHeight: el.scrollHeight, prevTop: el.scrollTop } : null;
         setTimelineItems((prev) => [...chronological, ...prev]);
       }
+      return chronological;
     } catch (e) {
       setTimelineError(e?.message || String(e));
+      return null;
     } finally {
       setTimelineLoading(false);
     }
@@ -266,6 +277,7 @@ export default function InfluencerChatPage() {
     setComposerText("");
     setComposerFiles([]);
     setComposerDraftId(null);
+    setApprovedDraftIds([]);
   }, [influencerId, loadMode, loadCampaignCards, loadOutboundFromEmail, loadTimeline]);
 
   useEffect(() => {
@@ -320,9 +332,38 @@ export default function InfluencerChatPage() {
     setComposerFiles((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
+  const startComposerResize = useCallback((e) => {
+    if (e.button != null && e.button !== 0) return;
+    const clientY = e.clientY ?? e.touches?.[0]?.clientY;
+    if (clientY == null) return;
+    e.preventDefault();
+    composerDragRef.current = { startY: clientY, startHeight: composerHeight };
+
+    const move = (ev) => {
+      const nextY = ev.clientY ?? ev.touches?.[0]?.clientY;
+      const drag = composerDragRef.current;
+      if (nextY == null || !drag) return;
+      const nextHeight = Math.max(132, Math.min(420, drag.startHeight + drag.startY - nextY));
+      setComposerHeight(nextHeight);
+    };
+    const stop = () => {
+      composerDragRef.current = null;
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", stop);
+    };
+
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", stop);
+  }, [composerHeight]);
+
   const onSend = useCallback(async () => {
     if (!influencerId) return;
     if (!composerText.trim()) return;
+    const sentDraftId = composerDraftId ? String(composerDraftId) : null;
     setSending(true);
     try {
       const fd = new FormData();
@@ -354,8 +395,19 @@ export default function InfluencerChatPage() {
       setComposerText("");
       setComposerFiles([]);
       setComposerDraftId(null);
+      if (sentDraftId) setApprovedDraftIds((prev) => [...prev, sentDraftId]);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      await loadTimeline({ id: influencerId, cursor: null, reset: true });
+      const nextTimeline = await loadTimeline({ id: influencerId, cursor: null, reset: true });
+      if (sentDraftId && Array.isArray(nextTimeline)) {
+        const nextDrafts = nextTimeline.filter(
+          (item) => isPendingDraftItem(item) && String(item.id) !== sentDraftId
+        );
+        const nextDraft = nextDrafts.length ? nextDrafts[nextDrafts.length - 1] : null;
+        if (nextDraft?.bodyText) {
+          setComposerDraftId(nextDraft.id);
+          setComposerText(nextDraft.bodyText);
+        }
+      }
       await inbox?.refreshConversations?.({ afterSend: true });
       await loadOutboundFromEmail(influencerId);
     } catch (e) {
@@ -596,11 +648,42 @@ export default function InfluencerChatPage() {
       <div
         style={{
           flexShrink: 0,
+          height: composerHeight,
           background: "#F7F7F7",
           borderTop: "1px solid rgba(0,0,0,0.1)",
-          padding: "10px 12px",
+          padding: "0 12px 10px",
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 132,
+          maxHeight: 420,
         }}
       >
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          title="拖动调整输入区高度"
+          onMouseDown={startComposerResize}
+          onTouchStart={startComposerResize}
+          style={{
+            height: 12,
+            margin: "0 -12px 6px",
+            cursor: "ns-resize",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            touchAction: "none",
+          }}
+        >
+          <span
+            style={{
+              width: 44,
+              height: 3,
+              borderRadius: 999,
+              background: "rgba(0,0,0,0.18)",
+            }}
+          />
+        </div>
         {mode === "assist" && pendingDrafts.length ? (
           <div
             style={{
@@ -610,6 +693,7 @@ export default function InfluencerChatPage() {
               flexWrap: "wrap",
               marginBottom: 8,
               fontSize: 12,
+              flexShrink: 0,
             }}
           >
             <span style={{ fontWeight: 800 }}>待审核草稿</span>
@@ -657,12 +741,12 @@ export default function InfluencerChatPage() {
           placeholder="输入消息…（Enter 发送，Shift+Enter 换行；主题与收件人由服务器按邮件线程自动匹配）"
           style={{
             width: "100%",
-            minHeight: 72,
-            maxHeight: 200,
+            flex: 1,
+            minHeight: 58,
             padding: "10px 12px",
             borderRadius: 8,
             border: "1px solid rgba(0,0,0,0.12)",
-            resize: "vertical",
+            resize: "none",
             fontFamily: "inherit",
             fontSize: 15,
             boxSizing: "border-box",
