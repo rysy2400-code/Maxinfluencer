@@ -106,6 +106,8 @@ if (\$role -eq "youtube") {
   )) {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing YouTube guard env: \$needle" }
   }
+  & node --experimental-default-type=module -e "import('./lib/tools/influencer-functions/youtube/extract-youtube-channel-lite.js').then(m=>{if(!m.isYoutubeLiteEmailGateEnabled(undefined)||m.isYoutubeLiteEmailGateEnabled('0'))process.exit(1)})"
+  if (\$LASTEXITCODE -ne 0) { throw "YouTube email gate fail-closed self-check failed" }
   \$pages = Get-CdpPages 9222
   \$ytTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "youtube\\.com" }).Count
   \$wrongTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "(instagram|tiktok)\\.com" }).Count

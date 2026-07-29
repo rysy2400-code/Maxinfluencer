@@ -20,11 +20,12 @@ test("YouTube Lite skips known follower counts below 500", () => {
   );
 });
 
-test("YouTube Lite email gate is disabled by default and enabled only with 1", () => {
-  assert.equal(isYoutubeLiteEmailGateEnabled(undefined), false);
-  assert.equal(isYoutubeLiteEmailGateEnabled(""), false);
+test("YouTube Lite email gate is fail-closed unless explicitly disabled with 0", () => {
+  assert.equal(isYoutubeLiteEmailGateEnabled(undefined), true);
+  assert.equal(isYoutubeLiteEmailGateEnabled(""), true);
   assert.equal(isYoutubeLiteEmailGateEnabled("0"), false);
-  assert.equal(isYoutubeLiteEmailGateEnabled("true"), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled(" 0 "), false);
+  assert.equal(isYoutubeLiteEmailGateEnabled("true"), true);
   assert.equal(isYoutubeLiteEmailGateEnabled("1"), true);
   assert.equal(isYoutubeLiteEmailGateEnabled(" 1 "), true);
 });
