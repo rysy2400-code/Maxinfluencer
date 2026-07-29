@@ -17,7 +17,7 @@ export async function GET(req, { params }) {
         { status: 400 }
       );
     }
-    const mode = (await getInfluencerHandoverMode(influencerId)) || "assist";
+    const mode = (await getInfluencerHandoverMode(influencerId)) || "auto";
     return NextResponse.json({ success: true, mode });
   } catch (error) {
     console.error("[Influencer Mode API] 获取失败:", error);
@@ -58,4 +58,3 @@ export async function PATCH(req, { params }) {
     );
   }
 }
-

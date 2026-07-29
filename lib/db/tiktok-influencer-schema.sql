@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer (
   do_not_contact_at DATETIME NULL COMMENT '红人明确要求停止联系的时间',
   do_not_contact_reason TEXT NULL COMMENT '停止联系的原始原因摘要',
   do_not_contact_source_message_id VARCHAR(255) NULL COMMENT '停止联系的来源邮件 Message-ID',
+  handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'auto' COMMENT '红人对话托管模式：auto=全托管，assist=半托管',
   source VARCHAR(32) NULL COMMENT '数据来源，如 echotik',
   source_ref VARCHAR(128) NULL COMMENT '来源侧 ID，如 creator_oecuid',
   source_payload JSON COMMENT '来源原始快照（可选，用于调试/补字段）',
