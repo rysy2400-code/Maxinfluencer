@@ -8,7 +8,6 @@ import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { createWorkLiveStepBridge } from "../lib/utils/work-live-step-bridge.js";
 import { publishWorkLiveFromWorker } from "../lib/realtime/work-live-worker-publisher.js";
-import { runExecutionHeartbeatTick } from "../lib/heartbeat/execution-heartbeat.js";
 import { detectPrimaryIpv4 } from "../lib/utils/net-ip.js";
 import { resolveAllowedCountriesFromCampaign } from "../lib/influencer/campaign-country-codes.js";
 import {
@@ -615,48 +614,33 @@ async function processTask(task, platformSlug) {
     };
   }
 
-  const [{ generateSearchKeywords }, { searchAndExtractInfluencers }] =
-    await Promise.all([
-      import("../lib/tools/influencer-functions/generate-search-keywords.js"),
-      import("../lib/tools/influencer-functions/search-and-extract-influencers.js"),
-    ]);
-
-  const kwResult = taskKeyword
-    ? { success: true, search_queries: [taskKeyword] }
-    : await generateSearchKeywords({
-        productInfo,
-        campaignInfo,
-        influencerProfile,
-        userMessage: payload.userMessage || "",
-        keywordStrategy: keywordStrategy || "",
-        targetPlatform: taskPlatformSlug,
-      });
-
-  if (
-    !kwResult?.success ||
-    !Array.isArray(kwResult.search_queries) ||
-    kwResult.search_queries.length === 0
-  ) {
-    await markTaskStatus(task.id, "failed", "生成搜索关键词失败或为空");
+  if (!taskKeyword) {
+    const error = "missing_task_keyword";
+    await markTaskStatus(task.id, "failed", error);
     await upsertKeywordRunResult({
       campaignId,
       sessionId,
       runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
       taskId: task.id,
-      keyword: taskKeyword || "(llm_empty)",
+      keyword: "(missing_task_keyword)",
       keywordType: taskKeywordType,
       platform: taskPlatformSlug,
       workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
-      metrics: { failCount: 1, failReason: "keyword_empty", elapsedMs: Date.now() - taskStartMs },
+      metrics: { failCount: 1, failReason: error, elapsedMs: Date.now() - taskStartMs },
     });
     await publishKeywordNote({
       status: "failed",
-      error: "生成搜索关键词失败或为空",
+      error,
     });
     return;
   }
+
+  const { searchAndExtractInfluencers } = await import(
+    "../lib/tools/influencer-functions/search-and-extract-influencers.js"
+  );
+  const kwResult = { success: true, search_queries: [taskKeyword] };
 
   const defaultTarget = Math.max(influencersPerDay * 2, 10);
   const target = requestedBatch > 0 ? requestedBatch : defaultTarget;
@@ -1067,16 +1051,6 @@ async function importTaskLoop() {
         () => processImportTaskRow(task)
       );
 
-      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
-        try {
-          await runExecutionHeartbeatTick(new Date());
-        } catch (hbErr) {
-          console.warn(
-            `[worker-influencer-search][import] heartbeat 失败：`,
-            hbErr?.message || hbErr
-          );
-        }
-      }
     } catch (err) {
       console.error(
         `[worker-influencer-search][import] loop error:`,
@@ -1151,16 +1125,6 @@ async function platformLoop(platformSlug) {
         () => processTask(task, platformSlug)
       );
 
-      if (String(process.env.SEARCH_WORKER_TRIGGER_HEARTBEAT || "true") !== "false") {
-        try {
-          await runExecutionHeartbeatTick(new Date());
-        } catch (hbErr) {
-          console.warn(
-            `[worker-influencer-search][${platformSlug}] 任务后 heartbeat 失败：`,
-            hbErr?.message || hbErr
-          );
-        }
-      }
     } catch (err) {
       console.error(
         `[worker-influencer-search][${platformSlug}] 处理任务时出错：`,
