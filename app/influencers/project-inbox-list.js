@@ -158,12 +158,17 @@ export function ProjectInboxList({
     const open = isCampaignOpen(camp.campaignId, onPath, campPref);
     const statusTag = STATUS_LABEL[camp.campaignStatus] || camp.campaignStatus;
 
+    const assistRows = [];
     const byStage = new Map();
     for (const s of EXECUTION_STAGE_ORDER) {
       byStage.set(s, []);
     }
     const other = [];
     for (const inf of camp.influencers || []) {
+      if (inf.handoverMode === "assist") {
+        assistRows.push(inf);
+        continue;
+      }
       if (byStage.has(inf.executionStage)) {
         byStage.get(inf.executionStage).push(inf);
       } else {
@@ -201,6 +206,28 @@ export function ProjectInboxList({
         </button>
         {open ? (
           <div style={{ paddingBottom: 4 }}>
+            {assistRows.length ? (
+              <div>
+                <div
+                  data-stage-anchor="_assist"
+                  data-send-scroll={
+                    influencerId && assistRows.some((r) => r.influencerId === influencerId)
+                      ? "1"
+                      : undefined
+                  }
+                  style={{
+                    padding: "4px 12px",
+                    fontSize: 11,
+                    fontWeight: 800,
+                    color: "#555",
+                    background: "rgba(0,0,0,0.04)",
+                  }}
+                >
+                  半托管
+                </div>
+                {assistRows.map((inf) => renderInfluencerRow(inf))}
+              </div>
+            ) : null}
             {EXECUTION_STAGE_ORDER.map((stage) => {
               const rows = byStage.get(stage) || [];
               if (!rows.length) return null;
