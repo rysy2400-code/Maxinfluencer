@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  getCampaignById,
+  getCampaignCoreById,
   getExecutionRow,
   updateExecutionStage,
 } from "../../../../../lib/db/campaign-dao.js";
@@ -56,14 +56,6 @@ export async function PATCH(req, { params }) {
       return NextResponse.json(
         { success: false, error: "缺少 influencerId 或 action" },
         { status: 400 }
-      );
-    }
-
-    const campaign = await getCampaignById(campaignId);
-    if (!campaign) {
-      return NextResponse.json(
-        { success: false, error: "Campaign 不存在" },
-        { status: 404 }
       );
     }
 
@@ -310,6 +302,7 @@ export async function PATCH(req, { params }) {
         action === "rejectQuote" &&
         executionRow?.quote_origin === "commerce_profile_estimate";
       if (!silentSystemQuoteRejection) {
+        const campaign = await getCampaignCoreById(campaignId);
         await enqueueAdvertiserExecutionFollowup({
           campaignId,
           influencerId,

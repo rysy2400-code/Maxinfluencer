@@ -4135,10 +4135,13 @@ export default function HomePage() {
   const precheckApproveQuote = useCallback(async (influencerId) => {
     const cid = resolvedCampaignId;
     if (!cid) return { ok: false, error: "缺少 Campaign" };
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch(`/api/campaigns/${cid}/execution`, {
         method: "PATCH",
         credentials: "include",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ influencerId, action: "precheckApproveQuote" }),
       });
@@ -4157,7 +4160,12 @@ export default function HomePage() {
         balanceAfter: data.balanceAfter,
       };
     } catch (err) {
+      if (err?.name === "AbortError") {
+        return { ok: false, error: "余额预检超时，请稍后重试" };
+      }
       return { ok: false, error: err?.message || "余额预检失败" };
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }, [resolvedCampaignId]);
 
