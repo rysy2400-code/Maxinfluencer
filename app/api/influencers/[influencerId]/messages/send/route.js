@@ -5,6 +5,7 @@ import { queryTikTok } from "../../../../../../lib/db/mysql-tiktok.js";
 import { resolveInfluencerThreadMailContext } from "../../../../../../lib/email/influencer-thread-mail.js";
 import { sendMail } from "../../../../../../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../../../../../../lib/db/influencer-conversation-dao.js";
+import { markDraftOutboundSent } from "../../../../../../lib/db/influencer-draft-dao.js";
 import {
   attachOutboundAttachmentsToConversationMessage,
   insertOutboundAttachment,
@@ -216,6 +217,14 @@ export async function POST(req, { params }) {
       }
     }
 
+    if (!sendErr && draftEventId) {
+      await markDraftOutboundSent({
+        draftEventId,
+        sentMessageId: result?.messageId || `client:${clientMessageId}`,
+        sentAt: new Date(),
+      });
+    }
+
     return NextResponse.json({
       success: !sendErr,
       messageId: result?.messageId || null,
@@ -230,4 +239,3 @@ export async function POST(req, { params }) {
     );
   }
 }
-

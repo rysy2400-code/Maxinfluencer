@@ -135,6 +135,7 @@ async function createTables() {
         followers_count BIGINT NULL,
         avg_views BIGINT NULL,
         influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）',
+        handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'auto' COMMENT '红人对话托管模式：auto=全托管，assist=半托管',
         source VARCHAR(32) NULL,
         source_ref VARCHAR(128) NULL,
         source_payload JSON NULL,
@@ -174,8 +175,13 @@ async function createTables() {
     );
     await ensureColumn(
       "tiktok_influencer",
+      "handover_mode",
+      "handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'auto' COMMENT '红人对话托管模式：auto=全托管，assist=半托管' AFTER influencer_email"
+    );
+    await ensureColumn(
+      "tiktok_influencer",
       "source",
-      "source VARCHAR(32) NULL COMMENT '数据来源，如 echotik' AFTER influencer_email"
+      "source VARCHAR(32) NULL COMMENT '数据来源，如 echotik' AFTER handover_mode"
     );
     await ensureColumn(
       "tiktok_influencer",
@@ -225,4 +231,3 @@ createTables().catch((err) => {
   console.error("❌ 创建/迁移表失败:", err.message);
   process.exit(1);
 });
-

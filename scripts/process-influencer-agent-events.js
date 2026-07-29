@@ -23,6 +23,8 @@ import {
 import { sendMail, OutboundCooldownError } from "../lib/email/enterprise-mail-client.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
+import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
 import { generateAdvertiserExecutionFollowupEmailBody } from "../lib/agents/advertiser-execution-followup-email.js";
@@ -117,15 +119,104 @@ async function resolvePlatformInfluencerIdForAgentEvent(campaignId, eventRow, pa
   return null;
 }
 
-async function markInfluencerAgentEventStatus(id, status, errorMessage = null) {
+async function markInfluencerAgentEventStatus(
+  id,
+  status,
+  errorMessage = null,
+  senderEmail = null
+) {
   await queryTikTok(
     `
     UPDATE tiktok_influencer_agent_event
-    SET status = ?, error_message = ?, updated_at = NOW()
+    SET status = ?, error_message = ?,
+        payload = CASE WHEN ? IS NULL THEN payload ELSE JSON_SET(
+          COALESCE(payload, JSON_OBJECT()), '$.deliveryAudit',
+          JSON_OBJECT('senderEmail', ?)
+        ) END,
+        updated_at = NOW()
     WHERE id = ?
   `,
-    [status, errorMessage, id]
+    [status, errorMessage, senderEmail, senderEmail, id]
   );
+}
+
+async function sendOrDraftAgentEmail({
+  influencerId,
+  campaignId = null,
+  fromAccount,
+  toEmail,
+  subject,
+  bodyText,
+  headers,
+  sourceType,
+  sourceEventId,
+  triggerType,
+  traceId,
+  emailPayload = {},
+  payload = {},
+}) {
+  const fromEmail =
+    fromAccount.email ||
+    fromAccount.email_address ||
+    fromAccount.username ||
+    fromAccount.account ||
+    null;
+  const handoverMode = (await getInfluencerHandoverMode(influencerId)) || "auto";
+
+  if (handoverMode === "assist") {
+    await logDraftOutboundMessage({
+      influencerId,
+      campaignId,
+      fromEmail,
+      toEmail,
+      subject,
+      bodyText,
+      sourceType,
+      sourceEventTable: "tiktok_influencer_agent_event",
+      sourceEventId,
+      triggerType,
+      traceId,
+      payload: {
+        ...payload,
+        email: {
+          to: toEmail,
+          subject,
+          inReplyTo: emailPayload.inReplyTo || null,
+          ...(payload.email || {}),
+        },
+        source: {
+          eventTable: "tiktok_influencer_agent_event",
+          eventId: sourceEventId,
+          triggerType,
+        },
+      },
+    });
+    return { drafted: true, fromEmail, result: null, sendErr: null };
+  }
+
+  const delivery = await sendOrDraftAgentEmail({
+    influencerId: platformInfluencerId,
+    campaignId,
+    fromAccount,
+    toEmail,
+    subject,
+    bodyText,
+    headers,
+    sourceType: "ask_influencer_special_request",
+    sourceEventId: eventRow.id,
+    triggerType: "ask_influencer_special_request",
+    traceId,
+    emailPayload: { inReplyTo: payload.inReplyTo || null },
+    payload: {
+      specialRequest: {
+        specialRequestId,
+        specialRequestStatus,
+      },
+    },
+  });
+  if (delivery.drafted) return;
+  const { result, sendErr, fromEmail } = delivery;
+  return { drafted: false, fromEmail, result, sendErr };
 }
 
 async function handleFirstOutreach(eventRow, payload) {
@@ -171,6 +262,7 @@ async function handleFirstOutreach(eventRow, payload) {
     platformInfluencerId: platformId,
     tiktokUsername,
     snapshot,
+    sourceEventId: eventRow.id,
   });
 }
 
@@ -232,19 +324,22 @@ async function handleOutboundEmail(eventRow, payload) {
     ? buildTraceIdFromInboundMessageId(inboundMessageId)
     : buildTraceIdFromSourceKey(`influencer_agent_event:${eventRow.id}`);
 
-  let result = null;
-  let sendErr = null;
-  try {
-    result = await sendMail({
-      fromAccount,
-      to,
-      subject,
-      text: body,
-      headers,
-    });
-  } catch (err) {
-    sendErr = err;
-  }
+  const delivery = await sendOrDraftAgentEmail({
+    influencerId: platformInfluencerId || influencerId,
+    campaignId,
+    fromAccount,
+    toEmail: to,
+    subject,
+    bodyText: body,
+    headers,
+    sourceType: payload.sourceType || "outbound_email",
+    sourceEventId: eventRow.id,
+    triggerType: "outbound_email",
+    traceId,
+    emailPayload: { inReplyTo: inboundMessageId },
+  });
+  if (delivery.drafted) return;
+  const { result, sendErr, fromEmail } = delivery;
 
   // 记录到对话记忆表
   try {
@@ -253,12 +348,7 @@ async function handleOutboundEmail(eventRow, payload) {
       campaignId,
       direction: "bin",
       channel: "email",
-      fromEmail:
-        fromAccount.email ||
-        fromAccount.email_address ||
-        fromAccount.username ||
-        fromAccount.account ||
-        null,
+      fromEmail,
       toEmail: to,
       subject,
       bodyText: body,
@@ -410,19 +500,28 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
     `special_request:${specialRequestId || eventRow.id}`
   );
 
-  let result = null;
-  let sendErr = null;
-  try {
-    result = await sendMail({
-      fromAccount,
-      to: toEmail,
-      subject,
-      text: bodyText,
-      headers,
-    });
-  } catch (err) {
-    sendErr = err;
-  }
+  const delivery = await sendOrDraftAgentEmail({
+    influencerId: platformInfluencerId,
+    campaignId,
+    fromAccount,
+    toEmail,
+    subject,
+    bodyText,
+    headers,
+    sourceType: "ask_influencer_special_request",
+    sourceEventId: eventRow.id,
+    triggerType: "ask_influencer_special_request",
+    traceId,
+    emailPayload: { inReplyTo: payload.inReplyTo || null },
+    payload: {
+      specialRequest: {
+        specialRequestId,
+        specialRequestStatus,
+      },
+    },
+  });
+  if (delivery.drafted) return;
+  const { result, sendErr, fromEmail } = delivery;
 
   // 记录到对话记忆表
   try {
@@ -431,12 +530,7 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
       campaignId,
       direction: "bin",
       channel: "email",
-      fromEmail:
-        fromAccount.email ||
-        fromAccount.email_address ||
-        fromAccount.username ||
-        fromAccount.account ||
-        null,
+      fromEmail,
       toEmail,
       subject,
       bodyText,
@@ -589,19 +683,28 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     `advertiser_followup:${action}:${eventRow.id}`
   );
 
-  let result = null;
-  let sendErr = null;
-  try {
-    result = await sendMail({
-      fromAccount,
-      to: toEmail,
-      subject,
-      text: bodyText,
-      headers,
-    });
-  } catch (err) {
-    sendErr = err;
-  }
+  const delivery = await sendOrDraftAgentEmail({
+    influencerId: platformInfluencerId,
+    campaignId,
+    fromAccount,
+    toEmail,
+    subject,
+    bodyText,
+    headers,
+    sourceType: "advertiser_execution_followup",
+    sourceEventId: eventRow.id,
+    triggerType: `advertiser_execution_followup:${action}`,
+    traceId,
+    payload: {
+      advertiserFollowup: {
+        action,
+        needSample: payload.needSample === true,
+        hasShippingInfo: payload.hasShippingInfo === true,
+      },
+    },
+  });
+  if (delivery.drafted) return;
+  const { result, sendErr, fromEmail } = delivery;
 
   try {
     await logConversationMessage({
@@ -609,12 +712,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
       campaignId,
       direction: "bin",
       channel: "email",
-      fromEmail:
-        fromAccount.email ||
-        fromAccount.email_address ||
-        fromAccount.username ||
-        fromAccount.account ||
-        null,
+      fromEmail,
       toEmail,
       subject,
       bodyText,
@@ -745,7 +843,8 @@ async function main() {
       await markInfluencerAgentEventStatus(
         ev.id,
         "failed",
-        `未捕获错误: ${err?.message || String(err)}`
+        `未捕获错误: ${err?.message || String(err)}`,
+        err?.senderEmail || null
       );
     }
   }

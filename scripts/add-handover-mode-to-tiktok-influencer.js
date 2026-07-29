@@ -31,14 +31,21 @@ async function columnExists() {
 async function main() {
   const exists = await columnExists();
   if (exists) {
-    console.log("[add-handover-mode] handover_mode 已存在，跳过。");
+    await queryTikTok(
+      `
+      ALTER TABLE tiktok_influencer
+      MODIFY COLUMN handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'auto'
+      COMMENT '红人对话托管模式：auto=全托管，assist=半托管'
+    `
+    );
+    console.log("[add-handover-mode] handover_mode 已存在，已确保默认值为 auto。");
     return;
   }
 
   await queryTikTok(
     `
     ALTER TABLE tiktok_influencer
-    ADD COLUMN handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'assist'
+    ADD COLUMN handover_mode ENUM('auto','assist') NOT NULL DEFAULT 'auto'
     COMMENT '红人对话托管模式：auto=全托管，assist=半托管'
   `
   );
@@ -52,4 +59,3 @@ main()
     console.error("[add-handover-mode] 运行失败：", err?.message || err);
     process.exit(1);
   });
-

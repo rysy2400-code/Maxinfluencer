@@ -95,12 +95,30 @@ function renderTimelineAttachments(items) {
   );
 }
 
+function draftTriggerLabel(triggerType) {
+  const t = triggerType || "";
+  if (t === "first_outreach") return "首封邀约";
+  if (t === "inbound_auto_reply") return "红人回复";
+  if (t === "ask_influencer_special_request") return "特殊请求";
+  if (t.startsWith("advertiser_execution_followup:")) {
+    return `执行跟进 · ${t.split(":")[1] || "操作"}`;
+  }
+  if (t === "outbound_email") return "Agent 回复";
+  return "Agent 草稿";
+}
+
+function draftStatusLabel(status) {
+  if (status === "approved_sent") return "已发送";
+  if (status === "discarded") return "已废弃";
+  return "待审核";
+}
+
 export default function InfluencerChatPage() {
   const params = useParams();
   const influencerId = params?.influencerId ? String(params.influencerId) : null;
   const inbox = useInfluencerInbox();
 
-  const [mode, setMode] = useState("assist");
+  const [mode, setMode] = useState("auto");
   const [modeSaving, setModeSaving] = useState(false);
 
   const [campaignCards, setCampaignCards] = useState([]);
@@ -113,6 +131,7 @@ export default function InfluencerChatPage() {
 
   const [composerText, setComposerText] = useState("");
   const [composerFiles, setComposerFiles] = useState([]);
+  const [composerDraftId, setComposerDraftId] = useState(null);
   const [sending, setSending] = useState(false);
   const [outboundFromEmail, setOutboundFromEmail] = useState(null);
   const [outboundEmailLoading, setOutboundEmailLoading] = useState(false);
@@ -121,22 +140,29 @@ export default function InfluencerChatPage() {
   /** 加载更早一页后恢复滚动位置；为 null 时表示滚到最新消息 */
   const prependAdjustRef = useRef(null);
 
-  const latestDraft = useMemo(() => {
-    const drafts = timelineItems.filter((x) => x.eventType === "draft_outbound");
-    return drafts.length ? drafts[drafts.length - 1] : null;
+  const pendingDrafts = useMemo(() => {
+    return timelineItems.filter((x) => {
+      if (x.eventType !== "draft_outbound") return false;
+      const status = x.payloadSafe?.draft?.status || x.payloadSafe?.status || "pending";
+      return status === "pending";
+    });
   }, [timelineItems]);
 
-  const latestInbound = useMemo(() => {
-    const inb = timelineItems.filter((x) => x.eventType === "email_inbound");
-    return inb.length ? inb[inb.length - 1] : null;
-  }, [timelineItems]);
+  const latestPendingDraft = useMemo(() => {
+    return pendingDrafts.length ? pendingDrafts[pendingDrafts.length - 1] : null;
+  }, [pendingDrafts]);
+
+  const composerDraft = useMemo(() => {
+    if (!composerDraftId) return null;
+    return pendingDrafts.find((x) => String(x.id) === String(composerDraftId)) || null;
+  }, [composerDraftId, pendingDrafts]);
 
   const loadMode = useCallback(async (id) => {
     if (!id) return;
     try {
       const res = await fetch(`/api/influencers/${id}/mode`);
       const data = await res.json();
-      if (data?.success) setMode(data.mode || "assist");
+      if (data?.success) setMode(data.mode || "auto");
     } catch {
       // ignore
     }
@@ -239,13 +265,38 @@ export default function InfluencerChatPage() {
     loadTimeline({ id: influencerId, cursor: null, reset: true });
     setComposerText("");
     setComposerFiles([]);
+    setComposerDraftId(null);
   }, [influencerId, loadMode, loadCampaignCards, loadOutboundFromEmail, loadTimeline]);
 
   useEffect(() => {
     if (mode !== "assist") return;
-    if (!latestDraft?.bodyText) return;
-    setComposerText((prev) => (prev && prev.trim() ? prev : latestDraft.bodyText));
-  }, [mode, latestDraft]);
+    if (!latestPendingDraft?.bodyText) return;
+    if (composerText.trim()) return;
+    setComposerDraftId(latestPendingDraft.id);
+    setComposerText(latestPendingDraft.bodyText);
+  }, [mode, latestPendingDraft, composerText]);
+
+  useEffect(() => {
+    if (!composerDraftId) return;
+    if (pendingDrafts.some((x) => String(x.id) === String(composerDraftId))) return;
+    setComposerDraftId(null);
+  }, [composerDraftId, pendingDrafts]);
+
+  const loadDraftIntoComposer = useCallback(
+    (draft) => {
+      if (!draft?.bodyText) return;
+      if (
+        composerText.trim() &&
+        String(composerDraftId || "") !== String(draft.id) &&
+        !window.confirm("输入框已有内容，是否用这条草稿替换？")
+      ) {
+        return;
+      }
+      setComposerDraftId(draft.id);
+      setComposerText(draft.bodyText);
+    },
+    [composerDraftId, composerText]
+  );
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -276,7 +327,11 @@ export default function InfluencerChatPage() {
     try {
       const fd = new FormData();
       fd.set("text", composerText);
-      if (mode === "assist" && latestInbound?.messageId) {
+      if (composerDraftId) {
+        fd.set("draftEventId", String(composerDraftId));
+        if (composerDraft?.campaignId) {
+          fd.set("campaignId", String(composerDraft.campaignId));
+        }
         fd.set("sendMode", "human_approved");
         fd.set("contentOrigin", "human_edited_agent");
       } else {
@@ -298,6 +353,7 @@ export default function InfluencerChatPage() {
 
       setComposerText("");
       setComposerFiles([]);
+      setComposerDraftId(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadTimeline({ id: influencerId, cursor: null, reset: true });
       await inbox?.refreshConversations?.({ afterSend: true });
@@ -311,8 +367,8 @@ export default function InfluencerChatPage() {
     influencerId,
     composerText,
     composerFiles,
-    mode,
-    latestInbound,
+    composerDraftId,
+    composerDraft,
     loadTimeline,
     inbox,
     loadOutboundFromEmail,
@@ -381,6 +437,9 @@ export default function InfluencerChatPage() {
           <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>
             {item.eventType}
             {item.actorType ? ` · ${item.actorType}` : ""}
+            {item.eventType === "draft_outbound" ? (
+              <> · {draftStatusLabel(item.payloadSafe?.draft?.status)}</>
+            ) : null}
             <span style={{ marginLeft: 8 }}>{formatTime(item.eventTime)}</span>
           </div>
           {item.subject && item.eventType !== "draft_outbound" ? (
@@ -542,6 +601,49 @@ export default function InfluencerChatPage() {
           padding: "10px 12px",
         }}
       >
+        {mode === "assist" && pendingDrafts.length ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 8,
+              fontSize: 12,
+            }}
+          >
+            <span style={{ fontWeight: 800 }}>待审核草稿</span>
+            {pendingDrafts.map((draft) => {
+              const active = String(composerDraftId || "") === String(draft.id);
+              const label = draftTriggerLabel(draft.payloadSafe?.draft?.triggerType);
+              return (
+                <button
+                  key={draft.id}
+                  type="button"
+                  onClick={() => loadDraftIntoComposer(draft)}
+                  title={draft.subject || label}
+                  style={{
+                    maxWidth: 220,
+                    border: active
+                      ? "1px solid rgba(180,83,9,0.55)"
+                      : "1px solid rgba(0,0,0,0.12)",
+                    background: active ? "#FFF7D6" : "#fff",
+                    borderRadius: 8,
+                    padding: "5px 8px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {label} · {formatTime(draft.eventTime)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <textarea
           value={composerText}
           onChange={(e) => setComposerText(e.target.value)}

@@ -16,6 +16,8 @@ import {
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
+import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
 import {
   loadConversationHistoryForInfluencer,
@@ -129,7 +131,8 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
   const rows = await queryTikTok(
     `
     SELECT e.campaign_id,
-           e.tiktok_username AS influencer_id,
+           e.tiktok_username,
+           e.influencer_id AS platform_influencer_id,
            e.stage,
            e.quote_origin,
            e.influencer_snapshot,
@@ -145,7 +148,9 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
 
   return rows.map((r) => ({
     campaignId: r.campaign_id,
-    influencerId: r.influencer_id,
+    influencerId: r.platform_influencer_id || r.tiktok_username,
+    platformInfluencerId: r.platform_influencer_id || null,
+    tiktokUsername: r.tiktok_username || null,
     stage: r.stage,
     quoteOrigin: r.quote_origin || null,
     influencerSnapshot: parseJsonOrObject(r.influencer_snapshot),
@@ -167,6 +172,48 @@ async function fetchAttachmentsForEvent(eventId) {
     [eventId]
   );
   return rows || [];
+}
+
+function cleanId(value) {
+  const s = value == null ? "" : String(value).trim();
+  return s || null;
+}
+
+function lowerId(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveCanonicalInfluencerId({ requestedInfluencerId, event, exec }) {
+  const execPlatformId = cleanId(exec?.platformInfluencerId);
+  const eventInfluencerId = cleanId(event?.influencer_id);
+  const requested = cleanId(requestedInfluencerId);
+
+  if (!requested) {
+    return execPlatformId || eventInfluencerId || cleanId(exec?.influencerId);
+  }
+
+  const requestedLower = lowerId(requested);
+  const execHandleLower = lowerId(exec?.tiktokUsername);
+  const execIdLower = lowerId(exec?.influencerId);
+  const eventIdLower = lowerId(eventInfluencerId);
+
+  if (
+    execPlatformId &&
+    (requestedLower === execHandleLower ||
+      requestedLower === lowerId(execPlatformId) ||
+      requestedLower === execIdLower)
+  ) {
+    return execPlatformId;
+  }
+
+  if (
+    eventInfluencerId &&
+    (requestedLower === eventIdLower || requestedLower === execHandleLower)
+  ) {
+    return eventInfluencerId;
+  }
+
+  return execPlatformId || eventInfluencerId || requested || cleanId(exec?.influencerId);
 }
 
 async function extractAttachmentText(att) {
@@ -237,6 +284,71 @@ async function createCampaignAgentEvent({
   return r?.insertId || null;
 }
 
+async function sendOrDraftReplyEmail({
+  influencerId,
+  campaignId = null,
+  fromAccount,
+  toEmail,
+  subject,
+  bodyText,
+  headers,
+  sourceEventId,
+  traceId,
+  inboundMessageId = null,
+}) {
+  const fromEmail =
+    fromAccount.email ||
+    fromAccount.email_address ||
+    fromAccount.username ||
+    fromAccount.account ||
+    null;
+  const handoverMode = (await getInfluencerHandoverMode(influencerId)) || "auto";
+
+  if (handoverMode === "assist") {
+    await logDraftOutboundMessage({
+      influencerId,
+      campaignId,
+      fromEmail,
+      toEmail,
+      subject,
+      bodyText,
+      sourceType: "llm_outbound_email",
+      sourceEventTable: "tiktok_influencer_email_events",
+      sourceEventId,
+      triggerType: "inbound_auto_reply",
+      traceId,
+      payload: {
+        email: {
+          to: toEmail,
+          subject,
+          inReplyTo: inboundMessageId,
+        },
+        source: {
+          eventTable: "tiktok_influencer_email_events",
+          eventId: sourceEventId,
+          triggerType: "inbound_auto_reply",
+        },
+      },
+    });
+    return { drafted: true, fromEmail, result: null, sendErr: null };
+  }
+
+  let result = null;
+  let sendErr = null;
+  try {
+    result = await sendMail({
+      fromAccount,
+      to: toEmail,
+      subject,
+      text: bodyText,
+      headers,
+    });
+  } catch (err) {
+    sendErr = err;
+  }
+  return { drafted: false, fromEmail, result, sendErr };
+}
+
 async function handleOutboundEmails(decision, event, executions) {
   if (!decision || !Array.isArray(decision.outboundEmails)) return;
 
@@ -251,9 +363,12 @@ async function handleOutboundEmails(decision, event, executions) {
       executions[0] ||
       null;
 
-    const influencerId =
-      email.influencerId || event.influencer_id || exec?.influencerId || null;
     const campaignId = email.campaignId || exec?.campaignId || null;
+    const influencerId = resolveCanonicalInfluencerId({
+      requestedInfluencerId: email.influencerId,
+      event,
+      exec,
+    });
 
     const to = email.to || event.from_email;
 
@@ -286,20 +401,20 @@ async function handleOutboundEmails(decision, event, executions) {
       headers["References"] = ctx.references;
     }
 
-    // 直接发信（失败也要落时间线事件，方便排查）
-    let result = null;
-    let sendErr = null;
-    try {
-      result = await sendMail({
-        fromAccount,
-        to,
-        subject,
-        text: body,
-        headers,
-      });
-    } catch (err) {
-      sendErr = err;
-    }
+    const delivery = await sendOrDraftReplyEmail({
+      influencerId,
+      campaignId,
+      fromAccount,
+      toEmail: to,
+      subject,
+      bodyText: body,
+      headers,
+      sourceEventId: event.id,
+      traceId,
+      inboundMessageId,
+    });
+    if (delivery.drafted) continue;
+    const { result, sendErr, fromEmail } = delivery;
 
     // 写入对话记忆表
     try {
@@ -308,12 +423,7 @@ async function handleOutboundEmails(decision, event, executions) {
         campaignId,
         direction: "bin",
         channel: "email",
-        fromEmail:
-          fromAccount.email ||
-          fromAccount.email_address ||
-          fromAccount.username ||
-          fromAccount.account ||
-          null,
+        fromEmail,
         toEmail: to,
         subject,
         bodyText: body,
@@ -369,10 +479,13 @@ async function handleAgentEvents(decision, event, executions) {
       null;
 
     const campaignId = ae.campaignId || exec?.campaignId || null;
-    const influencerId =
-      ae.influencerId || event.influencer_id || exec?.influencerId || null;
+    const influencerId = resolveCanonicalInfluencerId({
+      requestedInfluencerId: ae.influencerId,
+      event,
+      exec,
+    });
     const execHandle =
-      exec?.influencerId != null ? String(exec.influencerId).trim() : "";
+      exec?.tiktokUsername != null ? String(exec.tiktokUsername).trim() : "";
     const tiktokUsername =
       (typeof ae.tiktokUsername === "string" && ae.tiktokUsername.trim()
         ? ae.tiktokUsername.trim().replace(/^@/, "")
@@ -446,9 +559,14 @@ async function applySystemQuoteResponses(decision, event, executions) {
   for (const item of responses) {
     const exec = executions.find((row) => row.campaignId === item?.campaignId);
     if (!exec || exec.stage !== "pending_creator_confirmation") continue;
+    const influencerId = resolveCanonicalInfluencerId({
+      requestedInfluencerId: item.influencerId,
+      event,
+      exec,
+    });
     const result = await applySystemQuoteCreatorResponse({
       campaignId: exec.campaignId,
-      influencerId: event.influencer_id || exec.influencerId,
+      influencerId,
       response: item.response,
       newAmountUsd: item.newAmountUsd,
       note: item.note || event.body_text || null,
@@ -602,19 +720,22 @@ async function processEvent(event) {
   const executions = await fetchActiveExecutionsForInfluencer(
     event.influencer_id
   );
+  const canonicalEventInfluencerId =
+    cleanId(executions.find((e) => e.platformInfluencerId)?.platformInfluencerId) ||
+    cleanId(event.influencer_id);
 
   const conversationHistory = await loadConversationHistoryForInfluencer(
-    event.influencer_id,
+    canonicalEventInfluencerId,
     20
   );
 
   const influencerRow =
-    event.influencer_id &&
-    (await getInfluencerById(event.influencer_id).catch(() => null));
+    canonicalEventInfluencerId &&
+    (await getInfluencerById(canonicalEventInfluencerId).catch(() => null));
   let profileMaintenance = null;
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
     await markInfluencerDoNotContact({
-      influencerId: event.influencer_id,
+      influencerId: canonicalEventInfluencerId,
       reason: event.body_text,
       sourceMessageId: event.message_id || null,
     });
@@ -639,7 +760,7 @@ async function processEvent(event) {
       });
       if (profileMaintenance?.doNotContact) {
         await markInfluencerDoNotContact({
-          influencerId: event.influencer_id,
+          influencerId: canonicalEventInfluencerId,
           reason: profileMaintenance.doNotContactReason || event.body_text,
           sourceMessageId: event.message_id || null,
         });
@@ -648,7 +769,7 @@ async function processEvent(event) {
       }
       if (profileMaintenance?.changed && profileMaintenance.profileMarkdown) {
         await updateInfluencerBusinessProfile({
-          influencerId: event.influencer_id,
+          influencerId: canonicalEventInfluencerId,
           markdown: profileMaintenance.profileMarkdown,
           sourceMessageId: event.message_id || null,
         });
@@ -661,13 +782,13 @@ async function processEvent(event) {
     }
   }
   const threadMailCtx = await resolveInfluencerThreadMailContext({
-    influencerId: event.influencer_id,
+    influencerId: canonicalEventInfluencerId,
     influencer: influencerRow,
     preferredInReplyToMessageId: event.message_id || null,
   });
 
   const payload = {
-    influencerId: event.influencer_id || null,
+    influencerId: canonicalEventInfluencerId || null,
     email: {
       from: event.from_email,
       to: event.to_email,

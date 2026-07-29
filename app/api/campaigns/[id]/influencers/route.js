@@ -77,7 +77,7 @@ export async function GET(req, { params }) {
       username: r.username || null,
       avatarUrl: r.avatar_url || null,
       influencerEmail: r.influencer_email || null,
-      handoverMode: r.handover_mode || "assist",
+      handoverMode: r.handover_mode || "auto",
       lastEventTime: r.last_event_time || null,
       lastPreview: {
         eventType: r.last_event_type || null,
