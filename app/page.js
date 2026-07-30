@@ -2393,8 +2393,12 @@ export default function HomePage() {
   const sessionSwitchingRef = useRef(false);
   /** 进行中的聊天回合草稿（sessionId + messages），切换 Campaign 后仍保存到发起会话 */
   const chatDraftRef = useRef(null);
+  /** 进行中的聊天回合草稿（按 sessionId 分桶），允许切换 Campaign 后旧回复仍归位 */
+  const chatDraftsBySessionRef = useRef(new Map());
   /** 本轮 send 绑定的 sessionId（与 ref 同步，避免 setState 滞后导致 UI 不更新） */
   const activeChatSessionRef = useRef(null);
+  /** 正在等待回复的 sessionId 集合，用于避免不同 Campaign 互相阻塞 */
+  const activeChatSessionIdsRef = useRef(new Set());
   /** 各 session 待发送附件（切换 Campaign 时保留，回到原会话可继续发送） */
   const pendingAttachmentsBySessionRef = useRef(new Map());
   /** 各 session 输入框文字草稿（切换 Campaign 时保留，回到原会话可继续编辑） */
@@ -3463,7 +3467,11 @@ export default function HomePage() {
     let intervalId = null;
 
     const pollSessionMessages = async () => {
-      if (cancelled || loadingRef.current || activeChatSessionRef.current) return;
+      if (
+        cancelled ||
+        loadingRef.current ||
+        activeChatSessionIdsRef.current.has(sessionId)
+      ) return;
       if (document.visibilityState !== "visible") return;
       try {
         const res = await fetch(
@@ -3641,8 +3649,14 @@ export default function HomePage() {
         const res = await fetch(`/api/sessions/${currentSessionId}`, { credentials: "include" });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (loadingRef.current || activeChatSessionRef.current) return;
-        if (chatDraftRef.current?.sessionId === currentSessionId) return;
+        if (
+          loadingRef.current ||
+          activeChatSessionIdsRef.current.has(currentSessionId)
+        ) return;
+        if (
+          chatDraftRef.current?.sessionId === currentSessionId ||
+          chatDraftsBySessionRef.current.has(currentSessionId)
+        ) return;
         if (res.ok && data.success && data.session) {
           const serverMessages = Array.isArray(data.session.messages)
             ? data.session.messages
@@ -4348,7 +4362,14 @@ export default function HomePage() {
   async function handleSend(e) {
     e.preventDefault();
     const hasAttachments = pendingChatAttachments.length > 0;
-    if ((!input.trim() && !hasAttachments) || loading) return;
+    const activeSessionId =
+      messagesBoundSessionIdRef.current ||
+      currentSessionIdRef.current ||
+      currentSessionId;
+    if (
+      (!input.trim() && !hasAttachments) ||
+      (activeSessionId && activeChatSessionIdsRef.current.has(activeSessionId))
+    ) return;
     if (sessionSwitchingRef.current) return;
     if (!authChecked) return;
     const trimmed = input.trim();
@@ -4362,7 +4383,10 @@ export default function HomePage() {
 
   async function refreshCurrentSessionMessages() {
     if (!currentSessionId) return;
-    if (loadingRef.current || activeChatSessionRef.current) return;
+    if (
+      loadingRef.current ||
+      activeChatSessionIdsRef.current.has(currentSessionId)
+    ) return;
     try {
       const bundle = await fetchSessionBundleFromServer(currentSessionId);
       setMessages(bundle.messages);
@@ -4594,18 +4618,26 @@ export default function HomePage() {
         sessionId: sessionIdForChat,
         messages: [...nextMessages, initialAssistantMessage],
       };
+      chatDraftsBySessionRef.current.set(sessionIdForChat, [
+        ...nextMessages,
+        initialAssistantMessage,
+      ]);
       activeChatSessionRef.current = sessionIdForChat;
+      activeChatSessionIdsRef.current.add(sessionIdForChat);
 
       const shouldApplyChatToUi = () =>
-        currentSessionIdRef.current === sessionIdForChat ||
-        activeChatSessionRef.current === sessionIdForChat;
+        currentSessionIdRef.current === sessionIdForChat &&
+        messagesBoundSessionIdRef.current === sessionIdForChat;
 
       const applyChatDraft = (updater) => {
-        const draft = chatDraftRef.current;
-        if (!draft || draft.sessionId !== sessionIdForChat) return null;
+        const draftMessages = chatDraftsBySessionRef.current.get(sessionIdForChat);
+        if (!draftMessages) return null;
         const updated =
-          typeof updater === "function" ? updater(draft.messages) : updater;
-        draft.messages = updated;
+          typeof updater === "function" ? updater(draftMessages) : updater;
+        chatDraftsBySessionRef.current.set(sessionIdForChat, updated);
+        if (chatDraftRef.current?.sessionId === sessionIdForChat) {
+          chatDraftRef.current = { sessionId: sessionIdForChat, messages: updated };
+        }
         if (shouldApplyChatToUi()) {
           setMessages(updated);
         }
@@ -4613,14 +4645,17 @@ export default function HomePage() {
       };
 
       const scheduleChatRoundPersist = (messagesSnapshot, contextSnapshot) => {
-        setTimeout(() => {
-          saveCurrentSession({
+        setTimeout(async () => {
+          await saveCurrentSession({
             sessionId: sessionIdForChat,
             messages: messagesSnapshot,
             context: contextSnapshot,
             reloadSessions: false,
             force: true,
           });
+          if (!activeChatSessionIdsRef.current.has(sessionIdForChat)) {
+            chatDraftsBySessionRef.current.delete(sessionIdForChat);
+          }
         }, 1000);
       };
 
@@ -4902,8 +4937,12 @@ export default function HomePage() {
         if (activeChatSessionRef.current === sessionIdForChat) {
           activeChatSessionRef.current = null;
         }
-        loadingRef.current = false;
-        setLoading(false);
+        activeChatSessionIdsRef.current.delete(sessionIdForChat);
+        const currentStillLoading = activeChatSessionIdsRef.current.has(
+          currentSessionIdRef.current
+        );
+        loadingRef.current = currentStillLoading;
+        setLoading(currentStillLoading);
         return;
       }
       
@@ -4924,18 +4963,30 @@ export default function HomePage() {
         }
         return updated;
       };
-      const draft = chatDraftRef.current;
-      if (draft?.sessionId === sessionIdForChat) {
-        const updated = patchAssistantError(draft.messages);
-        draft.messages = updated;
+      const draftMessages =
+        chatDraftsBySessionRef.current.get(sessionIdForChat) ||
+        (chatDraftRef.current?.sessionId === sessionIdForChat
+          ? chatDraftRef.current.messages
+          : null);
+      if (draftMessages) {
+        const updated = patchAssistantError(draftMessages);
+        chatDraftsBySessionRef.current.set(sessionIdForChat, updated);
+        if (chatDraftRef.current?.sessionId === sessionIdForChat) {
+          chatDraftRef.current = { sessionId: sessionIdForChat, messages: updated };
+        }
         if (
-          currentSessionIdRef.current === sessionIdForChat ||
-          activeChatSessionRef.current === sessionIdForChat
+          currentSessionIdRef.current === sessionIdForChat &&
+          messagesBoundSessionIdRef.current === sessionIdForChat
         ) {
           setMessages(updated);
         }
       } else {
-        setMessages(patchAssistantError);
+        if (
+          currentSessionIdRef.current === sessionIdForChat &&
+          messagesBoundSessionIdRef.current === sessionIdForChat
+        ) {
+          setMessages(patchAssistantError);
+        }
       }
     } finally {
       if (
@@ -4947,8 +4998,12 @@ export default function HomePage() {
       if (activeChatSessionRef.current === sessionIdForChat) {
         activeChatSessionRef.current = null;
       }
-      loadingRef.current = false;
-      setLoading(false);
+      activeChatSessionIdsRef.current.delete(sessionIdForChat);
+      const currentStillLoading = activeChatSessionIdsRef.current.has(
+        currentSessionIdRef.current
+      );
+      loadingRef.current = currentStillLoading;
+      setLoading(currentStillLoading);
     }
   }
 
@@ -5691,11 +5746,14 @@ export default function HomePage() {
     if (sessionId === currentSessionId) return;
 
     const reqId = ++switchSessionRequestRef.current;
+    const prevMessagesBoundSessionId = messagesBoundSessionIdRef.current;
     // 使旧 session 的 campaign 解析请求立即失效，避免切换期间把目标 campaign 改回旧值。
     resolveCampaignRequestRef.current += 1;
     resolveCampaignSessionRef.current = sessionId;
     setMessages(cloneWelcomeMessages());
     messagesBoundSessionIdRef.current = null;
+    loadingRef.current = activeChatSessionIdsRef.current.has(sessionId);
+    setLoading(activeChatSessionIdsRef.current.has(sessionId));
 
     setKeywordWorkNotes([]);
     keywordWorkNotesCampaignRef.current = null;
@@ -5739,7 +5797,7 @@ export default function HomePage() {
     if (prevSessionId) {
       pendingAttachmentsBySessionRef.current.set(prevSessionId, pendingChatAttachments);
       inputDraftBySessionRef.current.set(prevSessionId, input);
-      if (messagesBoundSessionIdRef.current === prevSessionId) {
+      if (prevMessagesBoundSessionId === prevSessionId) {
         try {
           const prevMsgsJson = JSON.stringify(
             stripNonChatMessages(sortSessionMessagesByTime(prevMessages)).slice(-50)
@@ -5775,11 +5833,15 @@ export default function HomePage() {
         sessionCreatedAt,
         data.session.title || null
       );
+      const activeDraftMessages = chatDraftsBySessionRef.current.get(sessionId);
+      const messagesForSession = activeDraftMessages || normalized;
 
       setCurrentSessionId(sessionId);
-      setMessages(normalized);
+      setMessages(messagesForSession);
       setContext(loadedContext);
       messagesBoundSessionIdRef.current = sessionId;
+      loadingRef.current = activeChatSessionIdsRef.current.has(sessionId);
+      setLoading(activeChatSessionIdsRef.current.has(sessionId));
       currentSessionCreatedAtRef.current = sessionCreatedAt;
       setPendingChatAttachments(
         pendingAttachmentsBySessionRef.current.get(sessionId) || []
@@ -5791,7 +5853,7 @@ export default function HomePage() {
       rememberSessionPersistBaseline(
         sessionPersistSnapshotRef,
         sessionId,
-        normalized,
+        messagesForSession,
         loadedContext
       );
 
