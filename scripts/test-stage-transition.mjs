@@ -45,6 +45,15 @@ assert(
   "pending_draft → draft_submitted"
 );
 
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+    requestedStage: EXECUTION_STAGES.PENDING_SAMPLE,
+    lastEventRaw: quoteApproved,
+  }).effectiveStage === EXECUTION_STAGES.PENDING_SAMPLE,
+  "pending_shipping_address → pending_sample"
+);
+
 // 越权拦截
 for (const to of [
   EXECUTION_STAGES.PENDING_SAMPLE,
@@ -62,7 +71,7 @@ for (const to of [
   );
 }
 
-// 电商：quote_submitted 阶段可写 shipping，stage 不变
+// 报价阶段红人主动给地址：不写本次 execution 快照，由邮件 worker 写红人级记忆
 const shipCase = resolveInfluencerAgentUpdate({
   currentStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
   requestedStage: EXECUTION_STAGES.PENDING_SAMPLE,
@@ -70,8 +79,8 @@ const shipCase = resolveInfluencerAgentUpdate({
 });
 assert(
   shipCase.effectiveStage === EXECUTION_STAGES.QUOTE_SUBMITTED &&
-    shipCase.allowShippingInfoUpdate,
-  "pending_sample 请求被拦但允许写 shipping"
+    !shipCase.allowShippingInfoUpdate,
+  "报价未确认时 pending_sample 请求被拦且不写 execution shipping"
 );
 
 // 已发布仅更新链接

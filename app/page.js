@@ -2179,7 +2179,9 @@ function ExecutionProgressRow({
         </>
       )}
 
-      {(stageKey === "pendingSample" || stageKey === "pendingDraft") && (
+      {(stageKey === "pendingShippingAddress" ||
+        stageKey === "pendingSample" ||
+        stageKey === "pendingDraft") && (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合作价格</span>
           <span style={{ flex: 1, wordBreak: "break-word" }}>
@@ -2441,6 +2443,7 @@ export default function HomePage() {
   const [activeExecutionStage, setActiveExecutionStage] = useState("contacted"); // 执行进度当前选中的阶段
   const [activeAnalyzedSubTab, setActiveAnalyzedSubTab] = useState("recommended"); // 已分析子 Tab
   const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
+  const [activePendingSampleSubTab, setActivePendingSampleSubTab] = useState("confirmInfo"); // 待寄样品子 Tab
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
   const pendingFocusExecutionUsernameRef = useRef(null);
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
@@ -2795,6 +2798,7 @@ export default function HomePage() {
       const stageOrder = [
         "contacted",
         "pendingPrice",
+        "pendingShippingAddress",
         "pendingSample",
         "pendingDraft",
         "published",
@@ -2802,7 +2806,9 @@ export default function HomePage() {
       let targetStage = null;
       for (const key of stageOrder) {
         if ((cols[key] || []).some((row) => row?.id === handle)) {
-          targetStage = key;
+          targetStage = key === "pendingShippingAddress" ? "pendingSample" : key;
+          if (key === "pendingShippingAddress") setActivePendingSampleSubTab("confirmInfo");
+          if (key === "pendingSample") setActivePendingSampleSubTab("ready");
           break;
         }
       }
@@ -2836,6 +2842,7 @@ export default function HomePage() {
             columns: {
               contacted: [],
               pendingPrice: [],
+              pendingShippingAddress: [],
               pendingSample: [],
               pendingDraft: [],
               published: [],
@@ -2845,12 +2852,24 @@ export default function HomePage() {
     const nextColumns = {
       contacted: base.columns?.contacted || [],
       pendingPrice: base.columns?.pendingPrice || [],
+      pendingShippingAddress: base.columns?.pendingShippingAddress || [],
       pendingSample: base.columns?.pendingSample || [],
       pendingDraft: base.columns?.pendingDraft || [],
       published: base.columns?.published || [],
     };
 
-    if (stageKey && nextColumns[stageKey]) {
+    if (stageKey === "pendingSample") {
+      for (const key of ["pendingShippingAddress", "pendingSample"]) {
+        const incoming = Array.isArray(incomingColumns[key]) ? incomingColumns[key] : [];
+        nextColumns[key] = append
+          ? Array.from(
+              new Map(
+                [...nextColumns[key], ...incoming].map((item) => [item?.id, item])
+              ).values()
+            )
+          : incoming;
+      }
+    } else if (stageKey && nextColumns[stageKey]) {
       const incoming = Array.isArray(incomingColumns[stageKey])
         ? incomingColumns[stageKey]
         : [];
@@ -2862,7 +2881,7 @@ export default function HomePage() {
           )
         : incoming;
     } else {
-      for (const key of ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"]) {
+      for (const key of ["contacted", "pendingPrice", "pendingShippingAddress", "pendingSample", "pendingDraft", "published"]) {
         nextColumns[key] = Array.isArray(incomingColumns[key]) ? incomingColumns[key] : [];
       }
     }
@@ -2986,6 +3005,8 @@ export default function HomePage() {
       setActiveAnalyzedSubTab("recommended");
     } else if (activeExecutionStage === "pendingPrice") {
       setActivePendingPriceSubTab("pending");
+    } else if (activeExecutionStage === "pendingSample") {
+      setActivePendingSampleSubTab("confirmInfo");
     }
   }, [activeExecutionStage]);
 
@@ -2993,7 +3014,11 @@ export default function HomePage() {
     if (!resolvedCampaignId || !isExecutionPhaseGlobal) return;
     if (activeExecutionStage === "analyzed") return;
     const total = executionStatus?.totalByStage?.[activeExecutionStage] ?? 0;
-    const loaded = executionStatus?.columns?.[activeExecutionStage]?.length ?? 0;
+    const loaded =
+      activeExecutionStage === "pendingSample"
+        ? (executionStatus?.columns?.pendingShippingAddress?.length ?? 0) +
+          (executionStatus?.columns?.pendingSample?.length ?? 0)
+        : executionStatus?.columns?.[activeExecutionStage]?.length ?? 0;
     if (loaded === 0 && total > 0 && !executionLoading) {
       void loadExecutionStatusPage(activeExecutionStage);
     }
@@ -3012,10 +3037,18 @@ export default function HomePage() {
     if (!cid || !isExecutionPhaseGlobal || executionLoading) return undefined;
     const cachedStatus = executionCacheRef.current.get(cid)?.data;
     const nextStage = ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"].find(
-      (stage) =>
-        stage !== activeExecutionStage &&
-        (cachedStatus?.columns?.[stage]?.length || 0) === 0 &&
-        (cachedStatus?.totalByStage?.[stage] || 0) > 0
+      (stage) => {
+        const loaded =
+          stage === "pendingSample"
+            ? (cachedStatus?.columns?.pendingShippingAddress?.length || 0) +
+              (cachedStatus?.columns?.pendingSample?.length || 0)
+            : cachedStatus?.columns?.[stage]?.length || 0;
+        return (
+          stage !== activeExecutionStage &&
+          loaded === 0 &&
+          (cachedStatus?.totalByStage?.[stage] || 0) > 0
+        );
+      }
     );
     if (!nextStage) return undefined;
     const timer = window.setTimeout(() => {
@@ -3040,6 +3073,17 @@ export default function HomePage() {
       ).length;
     if (rejectedCount === 0) setActivePendingPriceSubTab("pending");
   }, [activePendingPriceSubTab, executionStatus]);
+
+  useEffect(() => {
+    if (activePendingSampleSubTab !== "confirmInfo") return;
+    const confirmCount =
+      executionStatus?.totalByStage?.pendingShippingAddress ??
+      (executionStatus?.columns?.pendingShippingAddress || []).length;
+    const readyCount =
+      executionStatus?.totalByStage?.pendingSampleReady ??
+      (executionStatus?.columns?.pendingSample || []).length;
+    if (confirmCount === 0 && readyCount > 0) setActivePendingSampleSubTab("ready");
+  }, [activePendingSampleSubTab, executionStatus]);
 
   useEffect(() => {
     setAnalyzedCandidatesItems([]);
@@ -4241,6 +4285,8 @@ export default function HomePage() {
           const targetColumn =
             nextStage === "pending_sample"
               ? "pendingSample"
+              : nextStage === "pending_shipping_address"
+              ? "pendingShippingAddress"
               : nextStage === "pending_draft" || nextStage === "draft_submitted"
                 ? "pendingDraft"
                 : nextStage === "published"
@@ -4253,11 +4299,39 @@ export default function HomePage() {
 
           const totalByStage = { ...(prev.totalByStage || {}) };
           if (currentColumn !== targetColumn) {
-            totalByStage[currentColumn] = Math.max(
-              0,
-              Number(totalByStage[currentColumn] || 0) - 1
-            );
-            totalByStage[targetColumn] = Number(totalByStage[targetColumn] || 0) + 1;
+            const mainColumn = (key) =>
+              key === "pendingShippingAddress" || key === "pendingSample"
+                ? "pendingSample"
+                : key;
+            const currentMain = mainColumn(currentColumn);
+            const targetMain = mainColumn(targetColumn);
+            if (currentMain !== targetMain) {
+              totalByStage[currentMain] = Math.max(
+                0,
+                Number(totalByStage[currentMain] || 0) - 1
+              );
+              totalByStage[targetMain] = Number(totalByStage[targetMain] || 0) + 1;
+            }
+            if (currentColumn === "pendingShippingAddress") {
+              totalByStage.pendingShippingAddress = Math.max(
+                0,
+                Number(totalByStage.pendingShippingAddress || 0) - 1
+              );
+            }
+            if (targetColumn === "pendingShippingAddress") {
+              totalByStage.pendingShippingAddress =
+                Number(totalByStage.pendingShippingAddress || 0) + 1;
+            }
+            if (currentColumn === "pendingSample") {
+              totalByStage.pendingSampleReady = Math.max(
+                0,
+                Number(totalByStage.pendingSampleReady || 0) - 1
+              );
+            }
+            if (targetColumn === "pendingSample") {
+              totalByStage.pendingSampleReady =
+                Number(totalByStage.pendingSampleReady || 0) + 1;
+            }
           }
           if (action === "rejectQuote") {
             totalByStage.pendingPricePending = Math.max(
@@ -7720,6 +7794,7 @@ export default function HomePage() {
                     for (const colKey of [
                       "contacted",
                       "pendingPrice",
+                      "pendingShippingAddress",
                       "pendingSample",
                       "pendingDraft",
                       "published",
@@ -7737,7 +7812,14 @@ export default function HomePage() {
                     },
                     { key: "contacted", title: "待红人报价", items: cols.contacted || [] },
                     { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
-                    { key: "pendingSample", title: "待寄样品", items: cols.pendingSample || [] },
+                    {
+                      key: "pendingSample",
+                      title: "待寄样品",
+                      items: [
+                        ...(cols.pendingShippingAddress || []),
+                        ...(cols.pendingSample || []),
+                      ],
+                    },
                     { key: "pendingDraft", title: "待审核草稿", items: cols.pendingDraft || [] },
                     { key: "published", title: "已发布视频", items: cols.published || [] },
                   ];
@@ -7757,11 +7839,23 @@ export default function HomePage() {
                     currentStage.key === "pendingPrice"
                       ? partitionPendingPriceItems(currentItems)
                       : { pendingReviewItems: [], rejectedItems: [] };
+                  const pendingShippingAddressItems =
+                    currentStage.key === "pendingSample"
+                      ? cols.pendingShippingAddress || []
+                      : [];
+                  const pendingSampleReadyItems =
+                    currentStage.key === "pendingSample"
+                      ? cols.pendingSample || []
+                      : [];
                   const activeExecutionItems =
                     currentStage.key === "pendingPrice"
                       ? activePendingPriceSubTab === "pending"
                         ? pendingReviewItems
                         : rejectedItems
+                      : currentStage.key === "pendingSample"
+                        ? activePendingSampleSubTab === "confirmInfo"
+                          ? pendingShippingAddressItems
+                          : pendingSampleReadyItems
                       : currentItems;
                   const currentStageTotal =
                     currentStage.key === "analyzed"
@@ -7777,6 +7871,22 @@ export default function HomePage() {
                     ...(pendingPriceRejectedTotal > 0
                       ? [{ key: "rejected", label: "已拒绝", count: pendingPriceRejectedTotal }]
                       : []),
+                  ];
+                  const pendingSampleSubTabs = [
+                    {
+                      key: "confirmInfo",
+                      label: "待确认寄样信息",
+                      count:
+                        executionStatus?.totalByStage?.pendingShippingAddress ??
+                        pendingShippingAddressItems.length,
+                    },
+                    {
+                      key: "ready",
+                      label: "待寄送样品",
+                      count:
+                        executionStatus?.totalByStage?.pendingSampleReady ??
+                        pendingSampleReadyItems.length,
+                    },
                   ];
                   const analyzedSubTabs = [
                     {
@@ -7797,7 +7907,9 @@ export default function HomePage() {
                     },
                   ];
                   const showExecutionSubTabs =
-                    currentStage.key === "analyzed" || currentStage.key === "pendingPrice";
+                    currentStage.key === "analyzed" ||
+                    currentStage.key === "pendingPrice" ||
+                    currentStage.key === "pendingSample";
 
                   // 工作笔记：来自执行节奏 + 汇报配置
                   const config = executionConfig;
@@ -8190,16 +8302,22 @@ export default function HomePage() {
                                   tabs={
                                     currentStage.key === "analyzed"
                                       ? analyzedSubTabs
+                                      : currentStage.key === "pendingSample"
+                                      ? pendingSampleSubTabs
                                       : pendingPriceSubTabs
                                   }
                                   activeKey={
                                     currentStage.key === "analyzed"
                                       ? activeAnalyzedSubTab
+                                      : currentStage.key === "pendingSample"
+                                      ? activePendingSampleSubTab
                                       : activePendingPriceSubTab
                                   }
                                   onChange={
                                     currentStage.key === "analyzed"
                                       ? setActiveAnalyzedSubTab
+                                      : currentStage.key === "pendingSample"
+                                      ? setActivePendingSampleSubTab
                                       : setActivePendingPriceSubTab
                                   }
                                 />
@@ -8368,6 +8486,29 @@ export default function HomePage() {
                                       ))
                                     )}
                                   </>
+                                ) : currentStage.key === "pendingSample" ? (
+                                  visibleExecutionItems.length === 0 ? (
+                                    <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                      暂无
+                                    </div>
+                                  ) : (
+                                    visibleExecutionItems.map((item) => (
+                                      <ExecutionProgressRow
+                                        key={item.id}
+                                        stageKey={
+                                          activePendingSampleSubTab === "confirmInfo"
+                                            ? "pendingShippingAddress"
+                                            : "pendingSample"
+                                        }
+                                        item={item}
+                                        needSample={needSampleFlag}
+                                        execPatchingId={execPatchingId}
+                                        patchExecution={patchExecution}
+                                        executionUsernameSet={executionUsernameSet}
+                                        highlightUsername={highlightExecutionUsername}
+                                      />
+                                    ))
+                                  )
                                 ) : (
                                   visibleExecutionItems.map((item) => (
                                     <ExecutionProgressRow

@@ -39,6 +39,12 @@ import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-qu
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
+import {
+  isCompleteShippingInfo,
+  normalizeShippingInfo,
+  resolveReusableShippingInfo,
+  upsertInfluencerShippingInfo,
+} from "../lib/execution/shipping-info.js";
 
 const AUTO_REPLY_PATTERNS = [
   /thank you for your email/i,
@@ -135,6 +141,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
            e.influencer_id AS platform_influencer_id,
            e.stage,
            e.quote_origin,
+           e.shipping_info,
            e.influencer_snapshot,
            e.last_event,
            c.product_info,
@@ -153,6 +160,7 @@ async function fetchActiveExecutionsForInfluencer(influencerId) {
     tiktokUsername: r.tiktok_username || null,
     stage: r.stage,
     quoteOrigin: r.quote_origin || null,
+    shippingInfo: parseJsonOrObject(r.shipping_info),
     influencerSnapshot: parseJsonOrObject(r.influencer_snapshot),
     lastEvent: parseJsonOrObject(r.last_event),
     productInfo: parseJsonOrObject(r.product_info),
@@ -621,8 +629,26 @@ async function applyDecision(decision, event, executions) {
 
     let shippingInfo =
       upd.shippingInfo && typeof upd.shippingInfo === "object"
-        ? upd.shippingInfo
+        ? normalizeShippingInfo(upd.shippingInfo)
         : null;
+    const shippingComplete = isCompleteShippingInfo(shippingInfo);
+    if (shippingInfo && shippingComplete) {
+      await upsertInfluencerShippingInfo({
+        influencerId: exec.platformInfluencerId || exec.influencerId,
+        shippingInfo,
+        sourceMessageId: event.message_id || null,
+        sourceCampaignId: campaignId,
+        source: "influencer_email",
+        confirmedAt: event.received_at
+          ? new Date(event.received_at).toISOString()
+          : new Date().toISOString(),
+      }).catch((err) => {
+        console.warn(
+          "[ProcessInfluencerEmailEvents] 红人常用寄样信息回写失败:",
+          err?.message || err
+        );
+      });
+    }
 
     // 简单兜底解析：从邮件正文中提取报价（如 "200 dollars"）和 TikTok 视频链接
     if (flatFee == null && event.body_text) {
@@ -728,6 +754,15 @@ async function processEvent(event) {
     canonicalEventInfluencerId,
     20
   );
+  const reusableShippingInfo = canonicalEventInfluencerId
+    ? await resolveReusableShippingInfo(canonicalEventInfluencerId).catch((err) => {
+        console.warn(
+          "[ProcessInfluencerEmailEvents] 读取历史寄样信息失败:",
+          err?.message || err
+        );
+        return null;
+      })
+    : null;
 
   const influencerRow =
     canonicalEventInfluencerId &&
@@ -802,6 +837,7 @@ async function processEvent(event) {
       attachments: [],
     },
     activeExecutions: executions,
+    reusableShippingInfo,
     conversationHistory,
     threadInfo: {
       canonicalThreadSubject: threadMailCtx.canonicalBase,
@@ -857,6 +893,7 @@ ${influencerAgentBasePrompt}
 输入 JSON 中包含：
 - email：当前这封邮件的关键信息；
 - activeExecutions：该红人当前所有相关执行记录；
+- reusableShippingInfo：系统从红人级记忆或最近历史对话中找到的最近一次完整寄样信息（如有）。当需要确认历史地址时，邮件中允许展示完整地址给红人确认。
 - conversationHistory：按时间倒序的最近若干条对话消息（Bin 与红人的往来，direction=bin/ influencer）。
   - 你需要基于 conversationHistory「续写对话」，而不是重新自我介绍或重复问过的问题。
   - 若 conversationHistory 含多条不同 campaignId，你必须在 outboundEmails 的 body / updates 的 note 中区分对应 campaignId，避免混淆。
@@ -933,10 +970,12 @@ ${influencerAgentBasePrompt}
 - **你只能推进以下 stage 变更**（其它阶段必须由广告主在 Portal 操作）：
   - pending_quote → quote_submitted：红人同意品牌报价或给出 counter 报价
   - quote_rejected → quote_submitted：红人拒绝后再给出新报价
+  - pending_shipping_address → pending_sample：红人已确认本次寄样地址，或提供了完整寄样地址
   - pending_draft → draft_submitted：红人提交素材草稿（需广告主已同意价格）
   - draft_submitted → draft_submitted：红人根据修改建议重新提交草稿
   - published → published：广告主已通过草稿后，红人提交最终发布视频链接（仅更新 videoLink，不改变 stage 语义）
-- **禁止**将 newStage 设为 pending_sample、pending_draft、published（从非 published 进入）、quote_rejected。
+- **禁止**将 newStage 设为 pending_shipping_address、pending_draft、published（从非 published 进入）、quote_rejected。
+- 只有当当前 activeExecution.stage 为 pending_shipping_address，且你能填出完整 shippingInfo（Full Name、Country、City、Address Line、Post/Zip Code、Telephone；State/Province 可选）时，才允许 newStage=pending_sample。
 - 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
 - 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
 - draftLink 可以是 TikTok、Google Drive、Dropbox、Box、WeTransfer、MediaFire、iCloud 等任意可访问链接；从正文/附件识别到链接时务必填入 draftLink（published 阶段交最终稿除外，才用 videoLink）。
@@ -955,6 +994,7 @@ ${influencerAgentBasePrompt}
   - **禁止**使用 confirmed / approved / let's proceed / move forward / start creating / start filming / shipping address 等暗示合作已定的表述；
   - **禁止**在此阶段填写 shippingInfo 或向红人索取寄样地址（寄样地址仅在品牌同意报价后、由系统 followup 另行处理）。
 - 当 lastEvent.quoteApprovedAt **不存在**时，无论 stage 为何，**禁止**在 outboundEmails 中确认合作、催促交稿/拍摄、或索取寄样信息。
+- 当 lastEvent.quoteApprovedAt 不存在但红人主动提供了寄样信息：可以在同一 campaign 的 updates 中填写 shippingInfo 用于系统记忆，但 newStage 仍必须遵守报价阶段规则（通常是 quote_submitted）；回复中不要确认合作已定。
 - 讨论素材草稿、提交 draftLink 的前提是 lastEvent.quoteApprovedAt 存在（pending_draft / pending_sample / draft_submitted 均可收到草稿，见下方草稿阶段纪律）。
 ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
 
@@ -963,6 +1003,14 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   - reference_script：可重发 contentBrief.scriptLink + 英文转述 contentBrief.scriptNotes（若有）；禁止粘贴脚本全文。
   - free_creative：说明无固定脚本，按产品卖点与个人风格创作 + 转述 scriptNotes（若有）；禁止提供脚本链接。
 - 若 quoteApprovedAt 存在但 contentBrief 缺失，按 free_creative 理解，勿编造脚本链接。
+
+【寄样地址确认 · 合作确认后】
+- 当前 activeExecution.stage 为 pending_shipping_address 时，说明合作已经确认，但本次寄样地址仍需红人确认。
+- 若 reusableShippingInfo 或 activeExecution.shippingInfo 中已有完整地址，outboundEmails 必须展示完整地址并询问红人是否可用于本次寄样；不要要求红人重新填写。
+- 若红人回复 yes / correct / same address / please use it 等确认历史地址，updates 必须设置 newStage="pending_sample"，shippingInfo 使用 reusableShippingInfo 或 activeExecution.shippingInfo 的完整地址，并在 note 中说明红人确认沿用历史地址。
+- 若红人提供了新的完整地址，updates 必须设置 newStage="pending_sample"，shippingInfo 填新地址；同时礼貌确认已记录并会安排品牌寄样。
+- 若缺少必填字段（Full Name、Country、City、Address Line、Post/Zip Code、Telephone），不要推进 stage；outboundEmails 只追问缺失字段。
+- State/Province 可选，不要因为缺少 State/Province 而阻塞。
 
 【草稿阶段 · 与红人沟通的纪律（极其重要）】
 - 前提：lastEvent.quoteApprovedAt 必须存在；否则禁止处理 draftLink 或在 outboundEmails 中讨论交稿/发布。

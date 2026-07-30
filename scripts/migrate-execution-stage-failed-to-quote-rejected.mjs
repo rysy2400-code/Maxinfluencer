@@ -19,6 +19,8 @@ const ENUM_WITH_BOTH = `
   ENUM(
     'pending_quote',
     'quote_submitted',
+    'pending_creator_confirmation',
+    'pending_shipping_address',
     'pending_sample',
     'sample_sent',
     'pending_draft',
@@ -33,6 +35,8 @@ const ENUM_FINAL = `
   ENUM(
     'pending_quote',
     'quote_submitted',
+    'pending_creator_confirmation',
+    'pending_shipping_address',
     'pending_sample',
     'sample_sent',
     'pending_draft',
