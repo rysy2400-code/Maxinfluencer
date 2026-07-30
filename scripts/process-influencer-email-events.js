@@ -39,6 +39,7 @@ import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-qu
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
+import { syncCountryFromReply } from "../lib/influencer/country-reply-sync.js";
 import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
@@ -768,6 +769,7 @@ async function processEvent(event) {
     canonicalEventInfluencerId &&
     (await getInfluencerById(canonicalEventInfluencerId).catch(() => null));
   let profileMaintenance = null;
+  let countryMaintenance = null;
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
     await markInfluencerDoNotContact({
       influencerId: canonicalEventInfluencerId,
@@ -782,6 +784,20 @@ async function processEvent(event) {
     !isLikelyAutoReply(event.subject, event.body_text) &&
     !isBodyEffectivelyEmpty(event.body_text)
   ) {
+    try {
+      countryMaintenance = await syncCountryFromReply({
+        influencerId: canonicalEventInfluencerId,
+        event,
+        executions,
+      });
+    } catch (err) {
+      countryMaintenance = { changed: false, error: err?.message || String(err) };
+      console.warn(
+        "[ProcessInfluencerEmailEvents] 国家信息回写失败:",
+        err?.message || err
+      );
+    }
+
     try {
       profileMaintenance = await updateBusinessProfileFromReply({
         influencer: influencerRow,
@@ -846,6 +862,7 @@ async function processEvent(event) {
       suggestedSubjectForReply: threadMailCtx.subjectForSend,
     },
     profileMaintenance,
+    countryMaintenance,
   };
 
   // 读取附件并提取可读文本（给 LLM）
@@ -889,6 +906,7 @@ ${influencerAgentBasePrompt}
   - threadInfo：规范化线程标题（canonicalThreadSubject）、根/父 Message-ID、以及建议的续信标题（suggestedSubjectForReply，通常为 Re: + 规范化标题）。
 - 你的目标是：在尊重红人体验的前提下，做出合理的业务决策，并通过结构化 JSON 告诉系统要做什么。
 - profileMaintenance.questions 若非空，须在正常业务回复结尾自然询问这些缺失或待确认项目；不要重复询问已有信息。
+- countryMaintenance.changed=true 表示系统已经从本封回复识别并回写了红人国家；后续邮件不要重复询问所在国家。
 
 输入 JSON 中包含：
 - email：当前这封邮件的关键信息；
