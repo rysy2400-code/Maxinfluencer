@@ -12,6 +12,6 @@ ALTER TABLE tiktok_campaign_execution
 
 ALTER TABLE tiktok_campaign_execution
   MODIFY COLUMN stage ENUM(
-    'pending_quote','quote_submitted','pending_creator_confirmation',
+    'pending_quote','quote_submitted','pending_creator_confirmation','pending_shipping_address',
     'pending_sample','pending_draft','draft_submitted','published','quote_rejected'
   ) NOT NULL DEFAULT 'pending_quote';

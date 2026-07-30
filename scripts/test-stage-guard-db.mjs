@@ -20,11 +20,11 @@ dotenv.config({ path: path.join(projectRoot, ".env.local") });
 async function main() {
   const rows = await queryTikTok(
     `SELECT campaign_id, tiktok_username, stage FROM tiktok_campaign_execution
-     WHERE stage = 'quote_submitted' ORDER BY updated_at DESC LIMIT 1`,
+     WHERE stage = 'pending_shipping_address' ORDER BY updated_at DESC LIMIT 1`,
     []
   );
   if (!rows?.length) {
-    console.log("跳过：无 quote_submitted 行");
+    console.log("跳过：无 pending_shipping_address 行");
     return;
   }
 
@@ -40,7 +40,7 @@ async function main() {
         campaignId,
         influencerId,
         newStage: "pending_sample",
-        note: "test illegal jump",
+        note: "test incomplete shipping",
         shippingInfo: { name: "Test User", city: "LA" },
       }),
     ]
@@ -65,21 +65,21 @@ async function main() {
   const stage = after[0]?.stage;
   const ship = after[0]?.shipping_info;
 
-  if (stage !== "quote_submitted") {
-    throw new Error(`stage 被错误改为 ${stage}，应为 quote_submitted`);
+  if (stage !== "pending_shipping_address") {
+    throw new Error(`stage 被错误改为 ${stage}，应为 pending_shipping_address`);
   }
 
   const shipObj =
     typeof ship === "object" ? ship : ship ? JSON.parse(ship) : null;
-  if (!shipObj?.city) {
-    throw new Error("shipping_info 未写入");
+  if (shipObj?.city === "LA") {
+    throw new Error("不完整 shipping_info 被错误写入");
   }
 
   await queryTikTok(`DELETE FROM tiktok_advertiser_agent_event WHERE id = ?`, [
     eventId,
   ]);
 
-  console.log("状态机落库测试通过：越权 stage 被拦截，shipping_info 仍写入 ✓");
+  console.log("状态机落库测试通过：不完整寄样信息不会推进或写入 ✓");
 }
 
 main().catch((e) => {

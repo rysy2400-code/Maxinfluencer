@@ -25,6 +25,10 @@ import {
   buildTraceIdFromInboundMessageId,
 } from "../lib/utils/timeline-ids.js";
 import { resolveInfluencerAgentUpdate } from "../lib/execution/stage-transition.js";
+import {
+  isCompleteShippingInfo,
+  normalizeShippingInfo,
+} from "../lib/execution/shipping-info.js";
 import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
 import { buildInboundImageMarkers } from "../lib/influencer/inbound-attachment-urls.js";
 import {
@@ -53,6 +57,7 @@ dotenv.config({ path: path.join(projectRoot, ".env.local") });
 const ALLOWED_EXECUTION_STAGES = new Set([
   "pending_quote",
   "quote_submitted",
+  "pending_shipping_address",
   "pending_sample",
   "pending_draft",
   "draft_submitted",
@@ -138,7 +143,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   let shippingInfo =
     payload.shippingInfo && typeof payload.shippingInfo === "object"
-      ? payload.shippingInfo
+      ? normalizeShippingInfo(payload.shippingInfo)
       : null;
 
   const emailEvent = payload.emailEvent || {};
@@ -164,7 +169,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     payload,
   });
 
-  const { effectiveStage, skippedStageReason, draftLinkOnly } = resolved;
+  let { effectiveStage, skippedStageReason, draftLinkOnly } = resolved;
 
   if (skippedStageReason && !draftLinkOnly) {
     console.warn(
@@ -211,6 +216,15 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   if (!resolved.allowShippingInfoUpdate) {
     shippingInfo = null;
+  }
+  if (
+    currentStage === "pending_shipping_address" &&
+    requestedStage === "pending_sample" &&
+    !isCompleteShippingInfo(shippingInfo)
+  ) {
+    shippingInfo = null;
+    effectiveStage = currentStage;
+    skippedStageReason = "寄样信息不完整，继续等待红人补充/确认。";
   }
 
   if (resolved.allowDraftLinkUpdate) {

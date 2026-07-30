@@ -646,6 +646,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     counterReason: payload.counterReason || null,
     contentBrief: payload.contentBrief || null,
     campaignContext,
+    shippingInfo: payload.shippingInfo || null,
     conversationHistory,
     influencer,
   });
@@ -691,6 +692,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
         action,
         needSample: payload.needSample === true,
         hasShippingInfo: payload.hasShippingInfo === true,
+        shippingInfo: payload.shippingInfo || null,
       },
     },
   });
@@ -726,6 +728,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
           action,
           needSample: payload.needSample === true,
           hasShippingInfo: payload.hasShippingInfo === true,
+          shippingInfo: payload.shippingInfo || null,
         },
         email: {
           to: toEmail,

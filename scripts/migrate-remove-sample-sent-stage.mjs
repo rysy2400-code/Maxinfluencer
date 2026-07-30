@@ -18,6 +18,8 @@ const ENUM_WITHOUT_SAMPLE_SENT = `
   ENUM(
     'pending_quote',
     'quote_submitted',
+    'pending_creator_confirmation',
+    'pending_shipping_address',
     'pending_sample',
     'pending_draft',
     'draft_submitted',

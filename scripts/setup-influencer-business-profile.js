@@ -33,7 +33,7 @@ async function main() {
   await addColumn("tiktok_influencer", "do_not_contact_source_message_id", "VARCHAR(255) NULL");
   await addColumn("tiktok_campaign_execution", "quote_origin", "VARCHAR(32) NULL COMMENT 'creator_quote|commerce_profile_estimate'");
   await queryTikTok(`ALTER TABLE tiktok_campaign_execution MODIFY COLUMN stage ENUM(
-    'pending_quote','quote_submitted','pending_creator_confirmation',
+    'pending_quote','quote_submitted','pending_creator_confirmation','pending_shipping_address',
     'pending_sample','pending_draft','draft_submitted','published','quote_rejected'
   ) NOT NULL DEFAULT 'pending_quote'`);
   console.log("Influencer business profile schema is ready.");

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer (
   avg_views INT NULL COMMENT '近似平均播放量（如有）',
 
   influencer_email VARCHAR(255) NULL COMMENT '主联系邮箱（主页抓取 profile_data.userInfo.email）',
+  shipping_info JSON NULL COMMENT '红人常用寄样信息（地址/收件人/电话/备注等）',
   business_profile_markdown MEDIUMTEXT NULL COMMENT '红人商务档案（固定 Markdown 模板，唯一内容存储）',
   business_profile_updated_at DATETIME NULL COMMENT '商务档案最近更新时间',
   business_profile_source_message_id VARCHAR(255) NULL COMMENT '最近一次更新档案的来源邮件 Message-ID',
