@@ -3077,17 +3077,6 @@ export default function HomePage() {
   }, [activePendingPriceSubTab, executionStatus]);
 
   useEffect(() => {
-    if (activePendingSampleSubTab !== "confirmInfo") return;
-    const confirmCount =
-      executionStatus?.totalByStage?.pendingShippingAddress ??
-      (executionStatus?.columns?.pendingShippingAddress || []).length;
-    const readyCount =
-      executionStatus?.totalByStage?.pendingSampleReady ??
-      (executionStatus?.columns?.pendingSample || []).length;
-    if (confirmCount === 0 && readyCount > 0) setActivePendingSampleSubTab("ready");
-  }, [activePendingSampleSubTab, executionStatus]);
-
-  useEffect(() => {
     setAnalyzedCandidatesItems([]);
     setAnalyzedCandidatesNextBeforeId(null);
     setAnalyzedCandidatesError(null);
@@ -8491,7 +8480,7 @@ export default function HomePage() {
                                 ) : currentStage.key === "pendingSample" ? (
                                   visibleExecutionItems.length === 0 ? (
                                     <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
-                                      暂无
+                                      该阶段暂无红人。
                                     </div>
                                   ) : (
                                     visibleExecutionItems.map((item) => (
