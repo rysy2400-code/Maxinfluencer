@@ -1,6 +1,6 @@
 /**
  * 幂等补齐：
- * - TikTok_influencer.video_publish_country / video_publish_country_checked_at
+ * - TikTok_influencer.video_publish_country / video_publish_country_source / video_publish_country_checked_at
  * - tiktok_influencer_search_task.progress_country_* / progress_enriched_count
  *
  * 用法: node scripts/add-video-publish-country-columns.js
@@ -42,6 +42,10 @@ async function main() {
     [
       "video_publish_country",
       "video_publish_country VARCHAR(16) NULL COMMENT '代表视频 locationCreated（发布地）'",
+    ],
+    [
+      "video_publish_country_source",
+      "video_publish_country_source VARCHAR(64) NULL COMMENT '国家来源：video_detail / about_page / email_reply 等'",
     ],
     [
       "video_publish_country_checked_at",
