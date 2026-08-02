@@ -21,6 +21,7 @@ export async function GET(req, { params }) {
       stage: searchParams.get("stage"),
       limit: searchParams.get("limit"),
       cursor: searchParams.get("cursor"),
+      username: searchParams.get("username"),
     });
 
     if (!data) {

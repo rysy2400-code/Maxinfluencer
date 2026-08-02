@@ -2447,6 +2447,11 @@ export default function HomePage() {
   const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
   const [activePendingSampleSubTab, setActivePendingSampleSubTab] = useState("confirmInfo"); // 待寄样品子 Tab
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
+  const [pendingPriceSearchOpen, setPendingPriceSearchOpen] = useState(false);
+  const [pendingPriceSearchQuery, setPendingPriceSearchQuery] = useState("");
+  const [pendingPriceSearchBusy, setPendingPriceSearchBusy] = useState(false);
+  const [pendingPriceSearchMessage, setPendingPriceSearchMessage] = useState("");
+  const pendingPriceSearchInputRef = React.useRef(null);
   const pendingFocusExecutionUsernameRef = useRef(null);
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
   const [analyzedCandidatesItems, setAnalyzedCandidatesItems] = useState([]);
@@ -2906,6 +2911,95 @@ export default function HomePage() {
     };
   }, []);
 
+  const searchPendingPriceInfluencer = React.useCallback(async () => {
+    const query = pendingPriceSearchQuery.trim().replace(/^@/, "");
+    if (!query) {
+      setPendingPriceSearchMessage("请输入卡片上显示的用户名");
+      pendingPriceSearchInputRef.current?.focus();
+      return;
+    }
+
+    setPendingPriceSearchBusy(true);
+    setPendingPriceSearchMessage("");
+    const normalizedQuery = query.toLowerCase();
+    const loadedItems = executionStatus?.columns?.pendingPrice || [];
+    const { pendingReviewItems: loadedPendingItems } =
+      partitionPendingPriceItems(loadedItems);
+    const loadedMatches = loadedPendingItems.filter((item) =>
+      String(item?.id || "").toLowerCase().includes(normalizedQuery)
+    );
+
+    try {
+      let matches = loadedMatches;
+      if (!matches.length && resolvedCampaignId) {
+        const q = new URLSearchParams({
+          stage: "pendingPrice",
+          limit: "50",
+          username: query,
+        });
+        const response = await fetch(
+          `/api/campaigns/${resolvedCampaignId}/execution-status?${q.toString()}`,
+          { cache: "no-store" }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "搜索失败");
+        }
+        matches = partitionPendingPriceItems(data.columns?.pendingPrice || [])
+          .pendingReviewItems;
+        if (matches.length) {
+          setExecutionStatus((prev) =>
+            mergeExecutionStatusPage(prev, data, "pendingPrice", true)
+          );
+        }
+      }
+
+      if (!matches.length) {
+        setPendingPriceSearchMessage(`未找到“${query}”`);
+        return;
+      }
+
+      const target = matches[0];
+      const handle = String(target.id || "").replace(/^@/, "");
+      setActiveExecutionStage("pendingPrice");
+      setActivePendingPriceSubTab("pending");
+      setHighlightExecutionUsername(handle);
+      pendingFocusExecutionUsernameRef.current = handle;
+      window.setTimeout(() => setHighlightExecutionUsername(null), 2500);
+      setPendingPriceSearchMessage(
+        matches.length > 1
+          ? `找到 ${matches.length} 位，已定位第一位`
+          : "已定位"
+      );
+    } catch (error) {
+      setPendingPriceSearchMessage(error.message || "搜索失败");
+    } finally {
+      setPendingPriceSearchBusy(false);
+    }
+  }, [
+    pendingPriceSearchQuery,
+    executionStatus,
+    resolvedCampaignId,
+    mergeExecutionStatusPage,
+  ]);
+
+  React.useEffect(() => {
+    if (!pendingPriceSearchOpen) return;
+    pendingPriceSearchInputRef.current?.focus();
+  }, [pendingPriceSearchOpen]);
+
+  React.useEffect(() => {
+    if (
+      activeExecutionStage === "pendingPrice" &&
+      activePendingPriceSubTab === "pending"
+    ) {
+      return;
+    }
+    setPendingPriceSearchOpen(false);
+    setPendingPriceSearchQuery("");
+    setPendingPriceSearchMessage("");
+  }, [activeExecutionStage, activePendingPriceSubTab]);
+
   const loadExecutionStatusPage = useCallback(
     async (stageKey, { append = false, campaignId = resolvedCampaignId, quiet = false } = {}) => {
       const cid = campaignId;
@@ -3000,7 +3094,12 @@ export default function HomePage() {
       pendingFocusExecutionUsernameRef.current = null;
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeExecutionStage, binComputerView, executionStatus]);
+  }, [
+    activeExecutionStage,
+    binComputerView,
+    executionStatus,
+    highlightExecutionUsername,
+  ]);
 
   useEffect(() => {
     if (activeExecutionStage === "analyzed") {
@@ -8312,6 +8411,132 @@ export default function HomePage() {
                                       : setActivePendingPriceSubTab
                                   }
                                 />
+                              ) : null}
+
+                              {currentStage.key === "pendingPrice" &&
+                              activePendingPriceSubTab === "pending" ? (
+                                <div
+                                  style={{
+                                    flexShrink: 0,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    minHeight: 28,
+                                  }}
+                                >
+                                  {pendingPriceSearchOpen ? (
+                                    <form
+                                      onSubmit={(event) => {
+                                        event.preventDefault();
+                                        void searchPendingPriceInfluencer();
+                                      }}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 6,
+                                        width: "min(360px, 100%)",
+                                      }}
+                                    >
+                                      <input
+                                        ref={pendingPriceSearchInputRef}
+                                        value={pendingPriceSearchQuery}
+                                        onChange={(event) => {
+                                          setPendingPriceSearchQuery(event.target.value);
+                                          setPendingPriceSearchMessage("");
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Escape") {
+                                            setPendingPriceSearchOpen(false);
+                                            setPendingPriceSearchMessage("");
+                                          }
+                                        }}
+                                        aria-label="搜索待审核价格红人"
+                                        placeholder="搜索卡片上的用户名"
+                                        style={{
+                                          flex: 1,
+                                          minWidth: 0,
+                                          boxSizing: "border-box",
+                                          height: 28,
+                                          padding: "4px 8px",
+                                          border: "1px solid #D1D5DB",
+                                          borderRadius: 6,
+                                          fontSize: 12,
+                                          color: "#374151",
+                                        }}
+                                      />
+                                      <button
+                                        type="submit"
+                                        disabled={pendingPriceSearchBusy}
+                                        style={{
+                                          padding: "4px 10px",
+                                          borderRadius: 6,
+                                          border: "1px solid #4F46E5",
+                                          backgroundColor: "#EEF2FF",
+                                          color: "#3730A3",
+                                          fontSize: 11,
+                                          cursor: pendingPriceSearchBusy
+                                            ? "not-allowed"
+                                            : "pointer",
+                                          whiteSpace: "nowrap",
+                                        }}
+                                      >
+                                        {pendingPriceSearchBusy ? "查找中…" : "定位"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPendingPriceSearchOpen(false);
+                                          setPendingPriceSearchQuery("");
+                                          setPendingPriceSearchMessage("");
+                                        }}
+                                        aria-label="关闭搜索"
+                                        title="关闭搜索"
+                                        style={{
+                                          padding: "3px 7px",
+                                          borderRadius: 6,
+                                          border: "1px solid #E5E7EB",
+                                          backgroundColor: "#FFFFFF",
+                                          color: "#6B7280",
+                                          fontSize: 14,
+                                          lineHeight: 1,
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        ×
+                                      </button>
+                                    </form>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPendingPriceSearchOpen(true)}
+                                      aria-label="搜索待审核价格红人"
+                                      title="搜索待审核价格红人"
+                                      style={{
+                                        padding: "4px 10px",
+                                        borderRadius: 6,
+                                        border: "1px solid #D1D5DB",
+                                        backgroundColor: "#FFFFFF",
+                                        color: "#374151",
+                                        fontSize: 11,
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      搜索用户名
+                                    </button>
+                                  )}
+                                  {pendingPriceSearchMessage ? (
+                                    <span
+                                      style={{
+                                        color: pendingPriceSearchMessage === "已定位"
+                                          ? "#047857"
+                                          : "#6B7280",
+                                        fontSize: 11,
+                                      }}
+                                    >
+                                      {pendingPriceSearchMessage}
+                                    </span>
+                                  ) : null}
+                                </div>
                               ) : null}
 
                               {/* 当前阶段的红人卡片列表 */}
