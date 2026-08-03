@@ -289,7 +289,7 @@ if ($validCrawlerPlatformRoles -notcontains $crawlerPlatformRole) {
 $isYoutubeDedicatedWorker = ($crawlerPlatformRole -eq "youtube")
 $isTiktokDedicatedWorker = ($crawlerPlatformRole -eq "tiktok")
 $isInstagramDedicatedWorker = ($crawlerPlatformRole -eq "instagram")
-$useCdp9223 = -not ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker)
+$useCdp9223 = -not $isYoutubeDedicatedWorker
 
 if ($isYoutubeDedicatedWorker) {
   $searchCdpEndpoint = "http://127.0.0.1:9222"
@@ -298,7 +298,7 @@ if ($isYoutubeDedicatedWorker) {
 } elseif ($isInstagramDedicatedWorker) {
   $searchCdpEndpoint = "http://127.0.0.1:9222"
   $enrichCdpEndpoint = "http://127.0.0.1:9222"
-  Write-Host "[deploy-crawler] role=instagram: Instagram-only worker, 9222-only CDP."
+  Write-Host "[deploy-crawler] role=instagram: Instagram-only worker, 9222 search + 9222/9223 enrich CDP canary."
 } elseif ($isTiktokDedicatedWorker) {
   Write-Host "[deploy-crawler] role=tiktok: TikTok-only worker, 9222 search + 9223 enrich CDP."
 } else {
@@ -313,6 +313,10 @@ if ($parallelCrawlerIps -contains $workerIp) {
 } else {
   $searchWorkerSlots = if ($env:SEARCH_WORKER_SLOTS) { "$($env:SEARCH_WORKER_SLOTS)".Trim() } else { "1" }
   $cdp9222Mode = if ($env:CDP_9222_MODE) { "$($env:CDP_9222_MODE)".Trim() } else { "serial" }
+}
+if ($isInstagramDedicatedWorker) {
+  $searchWorkerSlots = "1"
+  $cdp9222Mode = "serial"
 }
 $cdp9222LockTimeoutMs = if ($env:CDP_9222_LOCK_TIMEOUT_MS) { "$($env:CDP_9222_LOCK_TIMEOUT_MS)".Trim() } else { "300000" }
 Write-Host "[deploy-crawler] worker parallel: slots=$searchWorkerSlots cdp9222=$cdp9222Mode (ip=$workerIp)"
@@ -372,6 +376,12 @@ $guard9223 = Join-Path $scriptsDir "run-guard-chrome-9223.ps1"
 $guard9223Source = Join-Path $scriptsDir "guard-chrome-9223.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
+$tiktokLiteEndpointPoolScript = Join-Path $scriptsDir "setup-tiktok-lite-endpoint-pool.ps1"
+$launchUrl9223 = if ($isInstagramDedicatedWorker) {
+  "https://www.instagram.com/"
+} else {
+  "https://www.tiktok.com"
+}
 
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
@@ -396,27 +406,32 @@ $guard9223Content = @"
 `$env:CHROME_9223_USER_DATA_DIR = "$($chromeDir9223.Replace("\", "\\"))"
 `$env:CDP_9223_RESTART_SIGNAL_FILE = "$($chromeRestartSignal9223.Replace("\", "\\"))"
 `$env:CHROME_9223_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
-`$env:CHROME_9223_URL = "https://www.tiktok.com"
+`$env:CHROME_9223_URL = "$launchUrl9223"
 `$env:CHROME_9223_PROXY_SERVER = "http://127.0.0.1:7897"
 . "$($guard9223Source.Replace("\", "\\"))"
 "@
 
 $instagramGuardEnv = if ($isInstagramDedicatedWorker) {
   @'
-$env:IG_LITE_TAB_POOL_SIZE = "1"
-$env:LITE_IG_ENRICH_CONCURRENCY = "200"
-$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "200"
-$env:LITE_IG_ENRICH_HARD_MAX = "200"
+$env:IG_LITE_ENRICH_CDP_ENDPOINTS = "http://127.0.0.1:9222,http://127.0.0.1:9223"
+$env:IG_LITE_TAB_POOL_SIZE = "2"
+$env:LITE_IG_ENRICH_CONCURRENCY = "2"
+$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "2"
+$env:LITE_IG_ENRICH_HARD_MAX = "2"
+$env:IG_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"
+$env:CDP_RPC_TIMEOUTS_BEFORE_RESTART = "3"
 $env:SEARCH_MAX_POOL_SIZE = "200"
 $env:IG_SEARCH_MAX_INFLUENCERS = "200"
 $env:IG_LITE_SEARCH_HARD_MAX_INFLUENCERS = "200"
 $env:IG_LITE_DISABLE_EVALUATE_LOCK = "1"
-$env:IG_LITE_EVALUATE_CONCURRENCY = "10"
-$env:IG_API_ONLY_NO_NAVIGATION = "1"
-$env:IG_LITE_SKIP_RELAY_WARMUP = "1"
+$env:IG_LITE_EVALUATE_CONCURRENCY = "1"
+$env:IG_REQUEST_DELAY_MIN_MS = "1000"
+$env:IG_REQUEST_DELAY_MAX_MS = "3000"
+$env:IG_API_ONLY_NO_NAVIGATION = "0"
+$env:IG_LITE_SKIP_RELAY_WARMUP = "0"
 $env:IG_LITE_REQUIRE_RELAY_SESSION = "1"
 $env:IG_ALLOW_REELS_SCROLL_FALLBACK = "0"
-$env:IG_ABOUT_CONCURRENCY = "200"
+$env:IG_ABOUT_CONCURRENCY = "1"
 $env:IG_ABOUT_429_PROBE_SIZE = "10"
 $env:IG_ABOUT_429_CIRCUIT_THRESHOLD = "5"
 $env:LITE_ENRICH_SCREENSHOTS = "false"
@@ -456,31 +471,12 @@ $env:LITE_YT_ENRICH_CONCURRENCY = "150"
 $env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
 $env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"
 $env:YT_ALLOW_ABOUT_FALLBACK = "0"
+$env:YT_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"
 $env:LITE_ENRICH_SCREENSHOTS = "false"
 $env:ENRICH_BATCH_POLICY = "false"'
 } elseif ($isInstagramDedicatedWorker) {
 '$env:SEARCH_WORKER_LOOP = "true"
-$env:SEARCH_IMPORT_TASK_LOOP = "false"
-$env:IG_LITE_TAB_POOL_SIZE = "1"
-$env:LITE_IG_ENRICH_CONCURRENCY = "200"
-$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "200"
-$env:LITE_IG_ENRICH_HARD_MAX = "200"
-$env:SEARCH_MAX_POOL_SIZE = "200"
-$env:IG_SEARCH_MAX_INFLUENCERS = "200"
-$env:IG_LITE_SEARCH_HARD_MAX_INFLUENCERS = "200"
-$env:IG_LITE_DISABLE_EVALUATE_LOCK = "1"
-$env:IG_LITE_EVALUATE_CONCURRENCY = "10"
-$env:IG_API_ONLY_NO_NAVIGATION = "1"
-$env:IG_LITE_SKIP_RELAY_WARMUP = "1"
-$env:IG_LITE_REQUIRE_RELAY_SESSION = "1"
-$env:IG_ALLOW_REELS_SCROLL_FALLBACK = "0"
-$env:IG_ABOUT_CONCURRENCY = "200"
-$env:IG_ABOUT_429_PROBE_SIZE = "10"
-$env:IG_ABOUT_429_CIRCUIT_THRESHOLD = "5"
-$env:LITE_ENRICH_SCREENSHOTS = "false"
-$env:ENRICH_BATCH_POLICY = "true"
-$env:ENRICH_BATCH_SIZE = "200"
-$env:ENRICH_BATCH_STOP_ON_ZERO = "false"'
+$env:SEARCH_IMPORT_TASK_LOOP = "false"'
 } else { '' })
 while (`$true) {
   try {
@@ -578,6 +574,10 @@ if ($useCdp9223) {
   Ensure-Schtask -TaskName "maxin-guard-chrome-9223" -ScriptPath $guard9223
 } else {
   Disable-Cdp9223Guard
+}
+if ($isTiktokDedicatedWorker -and (Test-Path $tiktokLiteEndpointPoolScript)) {
+  Write-Host "[deploy-crawler] configure TikTok Lite enrich endpoint pool..."
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tiktokLiteEndpointPoolScript -ProjectRoot $Root -ChromeVisible "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })" -SkipProbe:$skipClashProbe
 }
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth

@@ -82,6 +82,17 @@ async function ensureIndex(table, index, ddl) {
   return true;
 }
 
+async function dropIndexIfExists(table, index) {
+  const rows = await queryTikTok(
+    `SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [table, index]
+  );
+  if (Number(rows?.[0]?.n || 0) === 0) return false;
+  await queryTikTok(`ALTER TABLE \`${table}\` DROP INDEX \`${index}\``);
+  return true;
+}
+
 function machineKey(ip) {
   return `crawler-${String(ip).replace(/[^a-zA-Z0-9]+/g, "-")}`;
 }
@@ -104,6 +115,43 @@ async function seedMachines() {
       [platform, machineKey(ip)]
     );
   }
+}
+
+async function normalizeWorkerHealthIdentity() {
+  if (!(await tableExists(T_WORKER))) return [];
+  const changed = [];
+  await queryTikTok(
+    `UPDATE ${T_WORKER} h
+     JOIN tiktok_crawler_machine m ON m.public_ip = h.worker_ip
+     SET h.machine_id = m.id
+     WHERE h.machine_id IS NULL`
+  );
+
+  await queryTikTok(
+    `DELETE h FROM ${T_WORKER} h
+     JOIN ${T_WORKER} newer
+       ON h.machine_id IS NOT NULL
+      AND newer.machine_id = h.machine_id
+      AND newer.id > h.id`
+  );
+  await queryTikTok(
+    `DELETE h FROM ${T_WORKER} h
+     JOIN ${T_WORKER} newer
+       ON h.worker_ip IS NOT NULL
+      AND newer.worker_ip = h.worker_ip
+      AND newer.id > h.id`
+  );
+
+  if (await dropIndexIfExists(T_WORKER, "uk_worker_host")) {
+    changed.push(`${T_WORKER}.drop_uk_worker_host`);
+  }
+  if (await ensureIndex(T_WORKER, "uk_worker_machine", "UNIQUE KEY uk_worker_machine (machine_id)")) {
+    changed.push(`${T_WORKER}.uk_worker_machine`);
+  }
+  if (await ensureIndex(T_WORKER, "uk_worker_ip", "UNIQUE KEY uk_worker_ip (worker_ip)")) {
+    changed.push(`${T_WORKER}.uk_worker_ip`);
+  }
+  return changed;
 }
 
 function splitSqlStatements(sqlText) {
@@ -182,6 +230,7 @@ async function main() {
     ["worker_loop_ok", "worker_loop_ok TINYINT(1) NULL AFTER worker_alive"],
     ["reported_platforms", "reported_platforms VARCHAR(255) NULL AFTER worker_id"],
     ["reported_release_sha", "reported_release_sha CHAR(40) NULL AFTER reported_platforms"],
+    ["tiktok_endpoint_health", "tiktok_endpoint_health JSON NULL AFTER cdp_9223_fail_streak"],
     ["last_claim_at", "last_claim_at DATETIME NULL AFTER last_seen_at"],
     ["last_progress_at", "last_progress_at DATETIME NULL AFTER last_claim_at"],
   ];
@@ -191,6 +240,7 @@ async function main() {
   if (await ensureIndex(T_WORKER, "idx_machine_seen", "INDEX idx_machine_seen (machine_id, last_seen_at DESC)")) {
     changed.push(`${T_WORKER}.idx_machine_seen`);
   }
+  changed.push(...(await normalizeWorkerHealthIdentity()));
 
   const logColumns = [
     ["machine_id", "machine_id BIGINT NULL AFTER id"],
