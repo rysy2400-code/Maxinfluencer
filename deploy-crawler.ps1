@@ -577,7 +577,15 @@ if ($useCdp9223) {
 }
 if ($isTiktokDedicatedWorker -and (Test-Path $tiktokLiteEndpointPoolScript)) {
   Write-Host "[deploy-crawler] configure TikTok Lite enrich endpoint pool..."
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tiktokLiteEndpointPoolScript -ProjectRoot $Root -ChromeVisible "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })" -SkipProbe:$skipClashProbe
+  $endpointPoolArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $tiktokLiteEndpointPoolScript,
+    "-ProjectRoot", $Root,
+    "-ChromeVisible", "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
+  )
+  if ($skipClashProbe) { $endpointPoolArgs += "-SkipProbe" }
+  & powershell.exe @endpointPoolArgs
 }
 Ensure-Schtask -TaskName "maxin-guard-crawler-search" -ScriptPath $guardCrawler
 Ensure-Schtask -TaskName "maxin-guard-worker-health" -ScriptPath $guardHealth
