@@ -3130,28 +3130,38 @@ export default function HomePage() {
     loadExecutionStatusPage,
   ]);
 
-  // 当前阶段首屏完成后，逐个低优先级预取其余 execution 阶段首屏。
+  // 当前阶段首屏完成后，并行低优先级预取其余 execution 阶段首屏。
+  // 顺序按日常使用优先：待审核价格 → 待寄样 → 待审核草稿 → 已发布视频 → 待红人报价；
+  // 并行发起，避免每个 stage 串行等一个完整请求（几万行 campaign 下单个请求数秒）。
   useEffect(() => {
     const cid = resolvedCampaignId;
     if (!cid || !isExecutionPhaseGlobal || executionLoading) return undefined;
     const cachedStatus = executionCacheRef.current.get(cid)?.data;
-    const nextStage = ["contacted", "pendingPrice", "pendingSample", "pendingDraft", "published"].find(
-      (stage) => {
-        const loaded =
-          stage === "pendingSample"
-            ? (cachedStatus?.columns?.pendingShippingAddress?.length || 0) +
-              (cachedStatus?.columns?.pendingSample?.length || 0)
-            : cachedStatus?.columns?.[stage]?.length || 0;
-        return (
-          stage !== activeExecutionStage &&
-          loaded === 0 &&
-          (cachedStatus?.totalByStage?.[stage] || 0) > 0
-        );
-      }
-    );
-    if (!nextStage) return undefined;
+    const pendingStages = [
+      "pendingPrice",
+      "pendingSample",
+      "pendingDraft",
+      "published",
+      "contacted",
+    ].filter((stage) => {
+      const loaded =
+        stage === "pendingSample"
+          ? (cachedStatus?.columns?.pendingShippingAddress?.length || 0) +
+            (cachedStatus?.columns?.pendingSample?.length || 0)
+          : cachedStatus?.columns?.[stage]?.length || 0;
+      return (
+        stage !== activeExecutionStage &&
+        loaded === 0 &&
+        (cachedStatus?.totalByStage?.[stage] || 0) > 0 &&
+        // 已在该 stage 的请求在途时不重复发起（并行预取下会同时有多个在途请求）
+        !executionRequestRef.current.has(`${cid}:${stage}`)
+      );
+    });
+    if (pendingStages.length === 0) return undefined;
     const timer = window.setTimeout(() => {
-      void loadExecutionStatusPage(nextStage, { campaignId: cid, quiet: true });
+      for (const stage of pendingStages) {
+        void loadExecutionStatusPage(stage, { campaignId: cid, quiet: true });
+      }
     }, 180);
     return () => window.clearTimeout(timer);
   }, [

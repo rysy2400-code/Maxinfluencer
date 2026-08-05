@@ -68,5 +68,5 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
   INDEX idx_campaign_contact (campaign_id, should_contact, picked_at),
   INDEX idx_campaign_email_contact (campaign_id, has_email, should_contact, picked_at),
   INDEX idx_campaign_score (campaign_id, match_score DESC),
-  INDEX idx_campaign_analyzed (campaign_id, analyzed_at DESC)
+  INDEX idx_campaign_analyzed_cursor (campaign_id, analyzed_at DESC, id DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Campaign 候选红人池 + 分析结果';
