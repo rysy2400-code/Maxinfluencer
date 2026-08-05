@@ -35,7 +35,10 @@ import {
   isExecutionUiCampaignStatus,
   shouldShowBinComputerPanel,
 } from "../lib/campaign/execution-ui-status.js";
-import { formatCountryForDisplay } from "../lib/influencer/campaign-country-codes.js";
+import {
+  formatCountryForDisplay,
+  isUnknownCountryValue,
+} from "../lib/influencer/campaign-country-codes.js";
 import { partitionPendingPriceItems } from "../lib/execution/pending-price-items.js";
 import { formatUsdAmount } from "../lib/billing/balance-messages.js";
 import { resolveLatestInfluencerQuote } from "../lib/execution/quote-resolution.js";
@@ -1088,9 +1091,8 @@ function ExecutionProgressLastReplyTime({ at }) {
 function ExecutionProgressMetricsLine({ item }) {
   const countryRaw = resolveVideoPublishCountry(item);
   const country =
-    countryRaw != null
-      ? formatCountryForDisplay(countryRaw) ?? countryRaw
-      : "—";
+    formatCountryForDisplay(countryRaw) ??
+    (isUnknownCountryValue(countryRaw) ? "—" : countryRaw);
   const followers = formatInfluencerStat(
     item?.followers ?? item?.followerCount ?? item?.follower_count
   );
@@ -1114,6 +1116,16 @@ const EXECUTION_EXPORTABLE_STAGES = new Set([
   "pendingDraft",
   "published",
 ]);
+
+/** 执行进度各阶段列（与后端 EXECUTION_STATUS_COLUMN_KEYS 对齐） */
+const EXECUTION_STAGE_COLUMN_KEYS = [
+  "contacted",
+  "pendingPrice",
+  "pendingShippingAddress",
+  "pendingSample",
+  "pendingDraft",
+  "published",
+];
 
 const EXECUTION_CACHE_TTL_MS = 20_000;
 
@@ -1579,7 +1591,9 @@ function ExecutionProgressRow({
     backgroundColor: "#FFFFFF",
     border: isHighlighted ? "2px solid #4F46E5" : "1px solid #E5E7EB",
     borderLeft:
-      platform === "Instagram"
+      isHighlighted
+        ? "3px solid #4F46E5"
+        : platform === "Instagram"
         ? "3px solid #E1306C"
         : platform === "YouTube"
           ? "3px solid #FF0000"
@@ -2451,6 +2465,10 @@ export default function HomePage() {
   const [pendingPriceSearchMessage, setPendingPriceSearchMessage] = useState("");
   const pendingPriceSearchInputRef = React.useRef(null);
   const pendingFocusExecutionUsernameRef = useRef(null);
+  const [executionLocateState, setExecutionLocateState] = useState(null); // { status, handle, message? }：点击特殊请求红人后的定位状态
+  const executionLocateStageRef = useRef(null); // 定位中正在加载的阶段；期间跳过正常首屏/翻页加载，避免并发覆盖
+  const executionLocateSubtabRef = useRef(null); // { stage, subtab }：定位指定子 Tab，防止被重置 effect 覆盖
+  const executionLocateAbortRef = useRef(null);
   /** 执行面板「已分析」Tab：match_analysis 分页列表（GET .../candidates?analyzed=1） */
   const [analyzedCandidatesItems, setAnalyzedCandidatesItems] = useState([]);
   const [analyzedCandidatesNextBeforeId, setAnalyzedCandidatesNextBeforeId] = useState(null);
@@ -2770,6 +2788,13 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!isExecutionPhaseGlobal) {
+      executionLocateAbortRef.current?.abort();
+      executionLocateAbortRef.current = null;
+      executionLocateStageRef.current = null;
+      executionLocateSubtabRef.current = null;
+      pendingFocusExecutionUsernameRef.current = null;
+      setExecutionLocateState(null);
+      setHighlightExecutionUsername(null);
       setBinComputerView("overview");
       setWorkLiveUnreadCount(0);
       setKeywordWorkNotes([]);
@@ -2787,55 +2812,6 @@ export default function HomePage() {
       setActiveExecutionStage("contacted");
     }
   }, [isExecutionPhaseGlobal]);
-
-  const focusExecutionInfluencer = React.useCallback(
-    (username) => {
-      const handle = String(username || "")
-        .trim()
-        .replace(/^@/, "");
-      if (!handle) return;
-
-      setBinComputerView("overview");
-      setHighlightExecutionUsername(handle);
-      window.setTimeout(() => setHighlightExecutionUsername(null), 2500);
-
-      const cols = executionStatus?.columns || {};
-      const stageOrder = [
-        "contacted",
-        "pendingPrice",
-        "pendingShippingAddress",
-        "pendingSample",
-        "pendingDraft",
-        "published",
-      ];
-      let targetStage = null;
-      for (const key of stageOrder) {
-        if ((cols[key] || []).some((row) => row?.id === handle)) {
-          targetStage = key === "pendingShippingAddress" ? "pendingSample" : key;
-          if (key === "pendingShippingAddress") setActivePendingSampleSubTab("confirmInfo");
-          if (key === "pendingSample") setActivePendingSampleSubTab("ready");
-          break;
-        }
-      }
-      if (!targetStage) {
-        if (analyzedCandidatesItems.some((row) => row?.id === handle)) {
-          targetStage = "analyzed";
-        }
-      }
-
-      pendingFocusExecutionUsernameRef.current = handle;
-      if (targetStage) {
-        setActiveExecutionStage(targetStage);
-      } else {
-        requestAnimationFrame(() => {
-          const el = document.getElementById(`execution-row-${handle}`);
-          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-          pendingFocusExecutionUsernameRef.current = null;
-        });
-      }
-    },
-    [executionStatus, analyzedCandidatesItems]
-  );
 
   const mergeExecutionStatusPage = React.useCallback((prev, data, stageKey, append = false) => {
     if (!data) return prev;
@@ -2908,6 +2884,306 @@ export default function HomePage() {
       },
     };
   }, []);
+
+  /** 定位已分析列表：按游标逐页加载，直到目标红人进入已加载 items（不依赖滚动触发翻页） */
+  const loadAnalyzedUntilFound = React.useCallback(
+    async (handle, cid, signal) => {
+      executionLocateStageRef.current = "analyzed";
+      setExecutionLocateState({ status: "loading", handle });
+      setActiveExecutionStage("analyzed");
+      const MAX_PAGES = 40;
+      try {
+        let cursor = null;
+        for (let page = 1; page <= MAX_PAGES; page += 1) {
+          if (signal?.aborted) return;
+          const q = new URLSearchParams({ analyzed: "1", limit: "30" });
+          if (cursor) q.set("beforeId", cursor);
+          const res = await fetch(`/api/campaigns/${cid}/candidates?${q.toString()}`, {
+            signal,
+            cache: "no-store",
+          });
+          const data = await res.json().catch(() => ({}));
+          if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
+          if (!res.ok || !data.success) throw new Error(data.error || "加载已分析列表失败");
+          const pageItems = Array.isArray(data.data) ? data.data : [];
+          const nextCursor =
+            data.nextBeforeId != null && data.nextBeforeId !== ""
+              ? String(data.nextBeforeId)
+              : null;
+          setAnalyzedCandidatesItems((prev) => {
+            const items = Array.from(
+              new Map([...prev, ...pageItems].map((item) => [item?.id, item])).values()
+            );
+            const cached = analyzedCacheRef.current.get(cid) || {};
+            analyzedCacheRef.current.set(cid, {
+              ...cached,
+              items,
+              nextBeforeId: nextCursor,
+              fetchedAt: Date.now(),
+            });
+            return items;
+          });
+          setAnalyzedCandidatesNextBeforeId(nextCursor);
+          if (page === 1) {
+            if (data.totalMatchAnalysisCount != null) {
+              setAnalyzedCandidatesTotal(Number(data.totalMatchAnalysisCount));
+            }
+            if (
+              data.analyzedRecommendedDbCount != null &&
+              data.analyzedNotRecommendedDbCount != null
+            ) {
+              setAnalyzedDbRecommendedCount(Number(data.analyzedRecommendedDbCount));
+              setAnalyzedDbNotRecommendedCount(Number(data.analyzedNotRecommendedDbCount));
+            }
+          }
+          if (pageItems.some((row) => row?.id === handle)) {
+            setAnalyzedCandidatesReadyCampaignId(cid);
+            return;
+          }
+          if (!nextCursor) break;
+          cursor = nextCursor;
+        }
+        if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
+        // 无论是否找到都标记首屏已就绪，避免定位结束后正常 effect 重新拉取覆盖已加载分页
+        setAnalyzedCandidatesReadyCampaignId(cid);
+        if (pendingFocusExecutionUsernameRef.current === handle) {
+          setExecutionLocateState({
+            status: "tooDeep",
+            handle,
+            message: "已加载前 1200 条仍未找到",
+          });
+          setHighlightExecutionUsername(null);
+          pendingFocusExecutionUsernameRef.current = null;
+        }
+      } finally {
+        executionLocateStageRef.current = null;
+      }
+    },
+    []
+  );
+
+  /** 定位执行阶段列表：按游标逐页加载，直到目标红人进入该阶段已加载列表 */
+  const loadExecutionStageUntilFound = React.useCallback(
+    async (handle, stage, cid, signal) => {
+      executionLocateStageRef.current = stage;
+      setExecutionLocateState({ status: "loading", handle });
+      setActiveExecutionStage(stage);
+      const columnKeys =
+        stage === "pendingSample"
+          ? ["pendingShippingAddress", "pendingSample"]
+          : [stage];
+      const MAX_PAGES = 40;
+      try {
+        let cursor = null;
+        for (let page = 1; page <= MAX_PAGES; page += 1) {
+          if (signal?.aborted) return;
+          const q = new URLSearchParams({ stage, limit: "40" });
+          if (cursor) q.set("cursor", cursor);
+          const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`, {
+            signal,
+            cache: "no-store",
+          });
+          const data = await res.json().catch(() => ({}));
+          if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
+          if (!res.ok || !data.success) throw new Error(data.error || "加载执行进度失败");
+          setExecutionStatus((prev) => {
+            const next = mergeExecutionStatusPage(prev, data, stage, true);
+            const prevCache = executionCacheRef.current.get(cid);
+            executionCacheRef.current.set(cid, {
+              data: next,
+              fetchedAtByStage: {
+                ...(prevCache?.fetchedAtByStage || {}),
+                [stage]: Date.now(),
+              },
+            });
+            return next;
+          });
+          const pageRows = columnKeys.flatMap(
+            (key) =>
+              data.columns && Array.isArray(data.columns[key]) ? data.columns[key] : []
+          );
+          if (pageRows.some((row) => row?.id === handle)) return;
+          const nextCursor =
+            data.page?.nextCursorByStage?.[stage] ?? data.page?.nextCursor ?? null;
+          if (!nextCursor) break;
+          cursor = nextCursor;
+        }
+        if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
+        if (pendingFocusExecutionUsernameRef.current === handle) {
+          setExecutionLocateState({
+            status: "tooDeep",
+            handle,
+            message: "已加载前 1600 条仍未找到",
+          });
+          setHighlightExecutionUsername(null);
+          pendingFocusExecutionUsernameRef.current = null;
+        }
+      } finally {
+        executionLocateStageRef.current = null;
+      }
+    },
+    [mergeExecutionStatusPage]
+  );
+
+  /** 定位红人所在阶段：先精确查询执行表（一次跨全部阶段），未命中再查候选表（已分析） */
+  const locateExecutionInfluencer = React.useCallback(
+    async (handle, cid) => {
+      const sessionId = executionCampaignSessionRef.current;
+      executionLocateAbortRef.current?.abort();
+      const controller = new AbortController();
+      executionLocateAbortRef.current = controller;
+      setExecutionLocateState({ status: "locating", handle });
+
+      const stillCurrent = () =>
+        !controller.signal.aborted &&
+        resolvedCampaignIdRef.current === cid &&
+        executionCampaignSessionRef.current === sessionId;
+
+      try {
+        // 1) 执行表：usernameExact=1 一次精确查询，跨全部阶段
+        const q1 = new URLSearchParams({ username: handle, usernameExact: "1", limit: "1" });
+        const res1 = await fetch(`/api/campaigns/${cid}/execution-status?${q1.toString()}`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const d1 = await res1.json().catch(() => ({}));
+        if (!stillCurrent()) return;
+        if (!res1.ok || !d1.success) throw new Error(d1.error || "查询执行进度失败");
+        let execColumn = null;
+        for (const key of EXECUTION_STAGE_COLUMN_KEYS) {
+          if ((d1.columns?.[key] || []).some((row) => row?.id === handle)) {
+            execColumn = key;
+            break;
+          }
+        }
+        if (execColumn) {
+          const stage =
+            execColumn === "pendingShippingAddress" ? "pendingSample" : execColumn;
+          if (execColumn === "pendingShippingAddress") {
+            executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "confirmInfo" };
+            setActivePendingSampleSubTab("confirmInfo");
+          } else if (execColumn === "pendingSample") {
+            executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "ready" };
+            setActivePendingSampleSubTab("ready");
+          } else if (execColumn === "pendingPrice") {
+            const row = (d1.columns.pendingPrice || []).find((r) => r?.id === handle);
+            const subtab = row?.stage === "quote_rejected" ? "rejected" : "pending";
+            executionLocateSubtabRef.current = { stage: "pendingPrice", subtab };
+            setActivePendingPriceSubTab(subtab);
+          }
+          await loadExecutionStageUntilFound(handle, stage, cid, controller.signal);
+          return;
+        }
+
+        // 2) 候选表（已分析）：username 精确查询定位
+        const q2 = new URLSearchParams({ analyzed: "1", username: handle, limit: "1" });
+        const res2 = await fetch(`/api/campaigns/${cid}/candidates?${q2.toString()}`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const d2 = await res2.json().catch(() => ({}));
+        if (!stillCurrent()) return;
+        if (!res2.ok || !d2.success) throw new Error(d2.error || "查询已分析列表失败");
+        const analyzedRow = (Array.isArray(d2.data) ? d2.data : []).find(
+          (row) => row?.id === handle
+        );
+        if (analyzedRow) {
+          const ir = analyzedRow?.matchAnalysis?.isRecommended;
+          const subtab =
+            ir === true || ((ir == null || ir === undefined) && analyzedRow?.shouldContact)
+              ? "recommended"
+              : "notRecommended";
+          executionLocateSubtabRef.current = { stage: "analyzed", subtab };
+          setActiveAnalyzedSubTab(subtab);
+          await loadAnalyzedUntilFound(handle, cid, controller.signal);
+          return;
+        }
+
+        // 执行表与已分析均无此红人
+        if (stillCurrent() && pendingFocusExecutionUsernameRef.current === handle) {
+          setExecutionLocateState({ status: "notFound", handle });
+          setHighlightExecutionUsername(null);
+          pendingFocusExecutionUsernameRef.current = null;
+        }
+      } catch (e) {
+        if (e?.name === "AbortError" || !stillCurrent()) return;
+        console.error("[HomePage] 定位执行红人失败:", e);
+        if (pendingFocusExecutionUsernameRef.current === handle) {
+          setExecutionLocateState({
+            status: "error",
+            handle,
+            message: e.message || "定位失败",
+          });
+          setHighlightExecutionUsername(null);
+          pendingFocusExecutionUsernameRef.current = null;
+        }
+      } finally {
+        if (executionLocateAbortRef.current === controller) {
+          executionLocateAbortRef.current = null;
+        }
+      }
+    },
+    [loadExecutionStageUntilFound, loadAnalyzedUntilFound]
+  );
+
+  const focusExecutionInfluencer = React.useCallback(
+    (username) => {
+      const handle = String(username || "")
+        .trim()
+        .replace(/^@/, "");
+      if (!handle) return;
+
+      setBinComputerView("overview");
+      setHighlightExecutionUsername(handle);
+      const cid = resolvedCampaignId;
+
+      // 快路径：已加载数据中直接命中
+      const cols = executionStatus?.columns || {};
+      let targetStage = null;
+      for (const key of EXECUTION_STAGE_COLUMN_KEYS) {
+        if ((cols[key] || []).some((row) => row?.id === handle)) {
+          targetStage = key === "pendingShippingAddress" ? "pendingSample" : key;
+          if (key === "pendingShippingAddress") {
+            executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "confirmInfo" };
+            setActivePendingSampleSubTab("confirmInfo");
+          } else if (key === "pendingSample") {
+            executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "ready" };
+            setActivePendingSampleSubTab("ready");
+          } else if (key === "pendingPrice") {
+            const row = (cols.pendingPrice || []).find((r) => r?.id === handle);
+            const subtab = row?.stage === "quote_rejected" ? "rejected" : "pending";
+            executionLocateSubtabRef.current = { stage: "pendingPrice", subtab };
+            setActivePendingPriceSubTab(subtab);
+          }
+          break;
+        }
+      }
+      if (!targetStage) {
+        const analyzedRow = analyzedCandidatesItems.find((row) => row?.id === handle);
+        if (analyzedRow) {
+          targetStage = "analyzed";
+          const ir = analyzedRow?.matchAnalysis?.isRecommended;
+          const subtab =
+            ir === true || ((ir == null || ir === undefined) && analyzedRow?.shouldContact)
+              ? "recommended"
+              : "notRecommended";
+          executionLocateSubtabRef.current = { stage: "analyzed", subtab };
+          setActiveAnalyzedSubTab(subtab);
+        }
+      }
+
+      pendingFocusExecutionUsernameRef.current = handle;
+      if (targetStage) {
+        setActiveExecutionStage(targetStage);
+      } else if (cid) {
+        void locateExecutionInfluencer(handle, cid);
+      } else {
+        pendingFocusExecutionUsernameRef.current = null;
+        setHighlightExecutionUsername(null);
+      }
+    },
+    [executionStatus, analyzedCandidatesItems, resolvedCampaignId, locateExecutionInfluencer]
+  );
 
   const searchPendingPriceInfluencer = React.useCallback(async () => {
     const query = pendingPriceSearchQuery.trim().replace(/^@/, "");
@@ -3083,35 +3359,85 @@ export default function HomePage() {
   }, [resolvedCampaignId, activeExecutionStage]);
 
   useEffect(() => {
-    const handle = pendingFocusExecutionUsernameRef.current;
-    if (!handle || binComputerView !== "overview") return undefined;
+    if (binComputerView !== "overview") return undefined;
 
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    let retryTimer = null;
+    let highlightTimer = null;
+    let attempts = 0;
+    let lastHandle = null;
+    const startedAt = Date.now();
+
+    const tryScroll = () => {
+      if (cancelled) return;
+      const handle = pendingFocusExecutionUsernameRef.current;
+      if (!handle) return; // 无待定位红人：停止重试
+      if (handle !== lastHandle) {
+        lastHandle = handle;
+        attempts = 0;
+      }
       const el = document.getElementById(`execution-row-${handle}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-      pendingFocusExecutionUsernameRef.current = null;
-    }, 120);
-    return () => window.clearTimeout(timer);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        pendingFocusExecutionUsernameRef.current = null;
+        setExecutionLocateState(null);
+        highlightTimer = window.setTimeout(() => setHighlightExecutionUsername(null), 2500);
+        return;
+      }
+      // 定位/翻页进行中不消耗重试次数；整体最多等待 30 秒
+      if (executionLocateAbortRef.current == null) {
+        attempts += 1;
+      }
+      if (attempts > 100 || Date.now() - startedAt > 30000) {
+        // 未能在时限内渲染：放弃并清除高亮
+        pendingFocusExecutionUsernameRef.current = null;
+        setHighlightExecutionUsername(null);
+        return;
+      }
+      retryTimer = window.setTimeout(tryScroll, 200);
+    };
+
+    retryTimer = window.setTimeout(tryScroll, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      if (highlightTimer) window.clearTimeout(highlightTimer);
+    };
   }, [
     activeExecutionStage,
     binComputerView,
     executionStatus,
+    analyzedCandidatesItems,
     highlightExecutionUsername,
   ]);
 
   useEffect(() => {
+    const locate = executionLocateSubtabRef.current;
     if (activeExecutionStage === "analyzed") {
-      setActiveAnalyzedSubTab("recommended");
+      if (locate?.stage === "analyzed") {
+        executionLocateSubtabRef.current = null;
+      } else {
+        setActiveAnalyzedSubTab("recommended");
+      }
     } else if (activeExecutionStage === "pendingPrice") {
-      setActivePendingPriceSubTab("pending");
+      if (locate?.stage === "pendingPrice") {
+        executionLocateSubtabRef.current = null;
+      } else {
+        setActivePendingPriceSubTab("pending");
+      }
     } else if (activeExecutionStage === "pendingSample") {
-      setActivePendingSampleSubTab("confirmInfo");
+      if (locate?.stage === "pendingSample") {
+        executionLocateSubtabRef.current = null;
+      } else {
+        setActivePendingSampleSubTab("confirmInfo");
+      }
     }
   }, [activeExecutionStage]);
 
   useEffect(() => {
     if (!resolvedCampaignId || !isExecutionPhaseGlobal) return;
     if (activeExecutionStage === "analyzed") return;
+    if (executionLocateStageRef.current === activeExecutionStage) return;
     const total = executionStatus?.totalByStage?.[activeExecutionStage] ?? 0;
     const loaded =
       activeExecutionStage === "pendingSample"
@@ -3198,6 +3524,7 @@ export default function HomePage() {
   useEffect(() => {
     const cid = resolvedCampaignId;
     if (!cid || activeExecutionStage !== "analyzed") return;
+    if (executionLocateStageRef.current === "analyzed") return;
     const cached = analyzedCacheRef.current.get(cid);
     if (!cached) return;
     setAnalyzedCandidatesItems(cached.items || []);
@@ -3245,6 +3572,7 @@ export default function HomePage() {
     const cid = resolvedCampaignId;
     if (!cid || !isExecutionPhaseGlobal || activeExecutionStage !== "analyzed") return;
     if (analyzedCandidatesReadyCampaignId === cid) return;
+    if (executionLocateStageRef.current === "analyzed") return;
 
     analyzedRequestRef.current?.abort();
     const controller = new AbortController();
@@ -3363,6 +3691,7 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
     if (activeExecutionStage !== "analyzed") return;
+    if (executionLocateStageRef.current === "analyzed") return;
     if (!analyzedCandidatesNextBeforeId) return;
     const root = executionProgressListRef.current;
     const target = analyzedInfiniteSentinelRef.current;
@@ -3389,6 +3718,7 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
     if (activeExecutionStage === "analyzed") return;
+    if (executionLocateStageRef.current === activeExecutionStage) return;
     if (!executionStatus?.campaignId) return;
     const loaded = executionStatus?.columns?.[activeExecutionStage]?.length || 0;
     const total = executionStatus?.totalByStage?.[activeExecutionStage] || 0;
@@ -5944,6 +6274,13 @@ export default function HomePage() {
       analyzedRequestRef.current?.abort();
       executionPagingInFlightRef.current = false;
       analyzedPagingInFlightRef.current = false;
+      executionLocateAbortRef.current?.abort();
+      executionLocateAbortRef.current = null;
+      executionLocateStageRef.current = null;
+      executionLocateSubtabRef.current = null;
+      pendingFocusExecutionUsernameRef.current = null;
+      setExecutionLocateState(null);
+      setHighlightExecutionUsername(null);
       resolvedCampaignIdRef.current = nextCampaignId;
       executionCampaignSessionRef.current = sessionId;
       setResolvedCampaignId(nextCampaignId);
@@ -8344,7 +8681,15 @@ export default function HomePage() {
                                     <button
                                       key={stage.key}
                                       type="button"
-                                      onClick={() => setActiveExecutionStage(stage.key)}
+                                      onClick={() => {
+                                        // 用户手动切 Tab 时取消自动定位
+                                        executionLocateAbortRef.current?.abort();
+                                        executionLocateAbortRef.current = null;
+                                        executionLocateStageRef.current = null;
+                                        executionLocateSubtabRef.current = null;
+                                        setExecutionLocateState(null);
+                                        setActiveExecutionStage(stage.key);
+                                      }}
                                       style={{
                                         padding: "4px 10px",
                                         borderRadius: 999,
@@ -8394,6 +8739,38 @@ export default function HomePage() {
                                   </button>
                                 ) : null}
                               </div>
+
+                              {executionLocateState ? (
+                                <div
+                                  style={{
+                                    flexShrink: 0,
+                                    fontSize: 12,
+                                    padding: "5px 10px",
+                                    borderRadius: 8,
+                                    marginBottom: 6,
+                                    backgroundColor:
+                                      executionLocateState.status === "locating" ||
+                                      executionLocateState.status === "loading"
+                                        ? "#EEF2FF"
+                                        : "#FEF3C7",
+                                    color:
+                                      executionLocateState.status === "locating" ||
+                                      executionLocateState.status === "loading"
+                                        ? "#3730A3"
+                                        : "#92400E",
+                                  }}
+                                >
+                                  {executionLocateState.status === "locating"
+                                    ? `正在定位红人 @${executionLocateState.handle}…`
+                                    : executionLocateState.status === "loading"
+                                    ? `正在加载列表定位红人 @${executionLocateState.handle}…`
+                                    : executionLocateState.status === "notFound"
+                                    ? `未在「执行进度 / 已分析」中找到红人 @${executionLocateState.handle}`
+                                    : executionLocateState.status === "tooDeep"
+                                    ? `红人 @${executionLocateState.handle} ${executionLocateState.message || "列表位置过深"}，自动定位未完成，请手动下滑加载后重试`
+                                    : `定位红人 @${executionLocateState.handle} 失败：${executionLocateState.message || "未知错误"}`}
+                                </div>
+                              ) : null}
 
                               {showExecutionSubTabs ? (
                                 <ExecutionProgressSubTabs

@@ -49,6 +49,7 @@ function decodeAnalyzedCursor(raw) {
  *
  * - limit：默认 30，最大 50
  * - beforeId：上一页最后一条的键集游标（base64url，含 analyzedAt + id）
+ * - username：精确匹配 tiktok_username（用于从特殊请求定位红人；大小写不敏感，自动去掉 @ 前缀）
  * - countOnly=1：仅返回全库统计（match_analysis IS NOT NULL 总数 + 推荐/不推荐人数，与列表分组规则一致）
  * - 首屏（无 beforeId）列表响应中带 totalMatchAnalysisCount、analyzedRecommendedDbCount、analyzedNotRecommendedDbCount
  */
@@ -68,6 +69,11 @@ export async function GET(req, { params }) {
       searchParams.get("analyzed") === "1" || searchParams.get("analyzed") === "true";
     const countOnly =
       searchParams.get("countOnly") === "1" || searchParams.get("countOnly") === "true";
+    const usernameRaw = searchParams.get("username");
+    const username =
+      typeof usernameRaw === "string" && usernameRaw.trim()
+        ? usernameRaw.trim().replace(/^@/, "").slice(0, 255)
+        : null;
 
     if (analyzedMode && countOnly) {
       const breakdown = await loadAnalyzedBreakdown(campaignId);
@@ -165,13 +171,14 @@ export async function GET(req, { params }) {
       FROM tiktok_campaign_influencer_candidates
       WHERE campaign_id = ?
         AND match_analysis IS NOT NULL
+        ${username ? "AND LOWER(tiktok_username) = LOWER(?)" : ""}
         ${cursor ? "AND (analyzed_at < ? OR (analyzed_at = ? AND id < ?))" : ""}
       ORDER BY analyzed_at DESC, id DESC
       LIMIT ${limit}
     `;
-    const sqlParams = cursor
-      ? [campaignId, cursor.analyzedAt, cursor.analyzedAt, cursor.id]
-      : [campaignId];
+    const sqlParams = [campaignId];
+    if (username) sqlParams.push(username);
+    if (cursor) sqlParams.push(cursor.analyzedAt, cursor.analyzedAt, cursor.id);
 
     let totalMatchAnalysisCount = null;
     let analyzedRecommendedDbCount = null;

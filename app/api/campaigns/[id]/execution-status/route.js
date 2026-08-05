@@ -22,6 +22,7 @@ export async function GET(req, { params }) {
       limit: searchParams.get("limit"),
       cursor: searchParams.get("cursor"),
       username: searchParams.get("username"),
+      usernameExact: searchParams.get("usernameExact"),
     });
 
     if (!data) {
