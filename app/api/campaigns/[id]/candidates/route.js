@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { queryTikTok } from "../../../../../lib/db/mysql-tiktok.js";
+import { loadAnalyzedBreakdown } from "../../../../../lib/db/execution-counts-cache.js";
 
 function parseJson(value) {
   if (value == null) return null;
@@ -12,35 +13,30 @@ function parseJson(value) {
   }
 }
 
-/**
- * 与前端 partitionAnalyzedCandidates 一致：推荐 = isRecommended 为 true，
- * 或 isRecommended 未置且 should_contact=1；其余为不推荐。
- */
-const SQL_ANALYZED_BREAKDOWN = `
-  SELECT
-    COUNT(*) AS total,
-    COALESCE(SUM(
-      CASE
-        WHEN JSON_VALUE(match_analysis, '$.isRecommended') = 'true' THEN 1
-        WHEN JSON_VALUE(match_analysis, '$.isRecommended') IS NULL AND COALESCE(should_contact, 0) = 1 THEN 1
-        ELSE 0
-      END
-    ), 0) AS recommended_cnt
-  FROM tiktok_campaign_influencer_candidates
-  WHERE campaign_id = ?
-    AND match_analysis IS NOT NULL
-`;
+/** 已分析列表键集游标：{ analyzedAt: ISO, id }，与 (campaign_id, analyzed_at DESC, id DESC) 索引匹配 */
+function encodeAnalyzedCursor(row) {
+  if (!row || row.id == null || row.analyzed_at == null) return null;
+  const analyzedAt =
+    row.analyzed_at instanceof Date
+      ? row.analyzed_at.toISOString()
+      : String(row.analyzed_at);
+  return Buffer.from(
+    JSON.stringify({ analyzedAt, id: Number(row.id) })
+  ).toString("base64url");
+}
 
-function parseAnalyzedBreakdownRow(row) {
-  if (!row) return null;
-  const total = Number(row.total ?? 0);
-  const recommended = Number(row.recommended_cnt ?? 0);
-  const notRecommended = Math.max(0, total - recommended);
-  return {
-    totalMatchAnalysisCount: total,
-    analyzedRecommendedDbCount: recommended,
-    analyzedNotRecommendedDbCount: notRecommended,
-  };
+function decodeAnalyzedCursor(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    const id = Number(parsed?.id);
+    const analyzedAt = parsed?.analyzedAt ? new Date(parsed.analyzedAt) : null;
+    if (!Number.isInteger(id) || id <= 0) return null;
+    if (!analyzedAt || Number.isNaN(analyzedAt.getTime())) return null;
+    return { id, analyzedAt };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -52,7 +48,7 @@ function parseAnalyzedBreakdownRow(row) {
  * 含 match_analysis、分页；与 candidate-analysis-feed 判定一致。
  *
  * - limit：默认 30，最大 50
- * - beforeId：上一页最后一条的 id，游标分页（与 candidate-analysis-feed 一致）
+ * - beforeId：上一页最后一条的键集游标（base64url，含 analyzedAt + id）
  * - countOnly=1：仅返回全库统计（match_analysis IS NOT NULL 总数 + 推荐/不推荐人数，与列表分组规则一致）
  * - 首屏（无 beforeId）列表响应中带 totalMatchAnalysisCount、analyzedRecommendedDbCount、analyzedNotRecommendedDbCount
  */
@@ -74,8 +70,7 @@ export async function GET(req, { params }) {
       searchParams.get("countOnly") === "1" || searchParams.get("countOnly") === "true";
 
     if (analyzedMode && countOnly) {
-      const countRows = await queryTikTok(SQL_ANALYZED_BREAKDOWN, [campaignId]);
-      const breakdown = parseAnalyzedBreakdownRow(countRows?.[0]);
+      const breakdown = await loadAnalyzedBreakdown(campaignId);
       if (!breakdown) {
         return NextResponse.json({
           success: true,
@@ -151,10 +146,7 @@ export async function GET(req, { params }) {
     const limitRaw = Number(searchParams.get("limit") || 30);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 30, 1), 50);
     const beforeIdRaw = searchParams.get("beforeId");
-    const beforeId =
-      beforeIdRaw != null && beforeIdRaw !== "" && Number.isFinite(Number(beforeIdRaw))
-        ? Number(beforeIdRaw)
-        : null;
+    const cursor = decodeAnalyzedCursor(beforeIdRaw);
 
     const sql = `
       SELECT
@@ -173,30 +165,29 @@ export async function GET(req, { params }) {
       FROM tiktok_campaign_influencer_candidates
       WHERE campaign_id = ?
         AND match_analysis IS NOT NULL
-        ${beforeId != null ? "AND id < ?" : ""}
-      ORDER BY COALESCE(analyzed_at, created_at) DESC, id DESC
+        ${cursor ? "AND (analyzed_at < ? OR (analyzed_at = ? AND id < ?))" : ""}
+      ORDER BY analyzed_at DESC, id DESC
       LIMIT ${limit}
     `;
-    const sqlParams = beforeId != null ? [campaignId, beforeId] : [campaignId];
+    const sqlParams = cursor
+      ? [campaignId, cursor.analyzedAt, cursor.analyzedAt, cursor.id]
+      : [campaignId];
 
     let totalMatchAnalysisCount = null;
     let analyzedRecommendedDbCount = null;
     let analyzedNotRecommendedDbCount = null;
     const countPromise =
-      beforeId == null ? queryTikTok(SQL_ANALYZED_BREAKDOWN, [campaignId]) : null;
+      cursor == null ? loadAnalyzedBreakdown(campaignId) : Promise.resolve(null);
 
-    const [countRows, rows] = await Promise.all([
+    const [breakdown, rows] = await Promise.all([
       countPromise ?? Promise.resolve(null),
       queryTikTok(sql, sqlParams),
     ]);
 
-    if (countRows?.[0]) {
-      const breakdown = parseAnalyzedBreakdownRow(countRows[0]);
-      if (breakdown) {
-        totalMatchAnalysisCount = breakdown.totalMatchAnalysisCount;
-        analyzedRecommendedDbCount = breakdown.analyzedRecommendedDbCount;
-        analyzedNotRecommendedDbCount = breakdown.analyzedNotRecommendedDbCount;
-      }
+    if (breakdown) {
+      totalMatchAnalysisCount = breakdown.totalMatchAnalysisCount;
+      analyzedRecommendedDbCount = breakdown.analyzedRecommendedDbCount;
+      analyzedNotRecommendedDbCount = breakdown.analyzedNotRecommendedDbCount;
     }
 
     const candidates = (rows || []).map((r) => {
@@ -230,7 +221,7 @@ export async function GET(req, { params }) {
     });
 
     const last = (rows || []).length > 0 ? rows[rows.length - 1] : null;
-    const nextBeforeId = last?.id != null ? String(last.id) : null;
+    const nextBeforeId = last ? encodeAnalyzedCursor(last) : null;
 
     const payload = {
       success: true,
