@@ -427,6 +427,16 @@ while (`$true) {
     }
     `$all = @()
   }
+  # 活性判定：进程存在但长时间（15 分钟）无任务活动，且该平台有积压任务 => 僵尸，重启
+  if (`$all.Count -gt 0) {
+    & `$node --experimental-default-type=module (Join-Path `$Root "scripts\crawler-activity-probe.mjs") worker `$identity.PublicIp 15 "$searchWorkerPlatforms" | Out-Null
+    if (`$LASTEXITCODE -eq 1) {
+      foreach (`$proc in `$all) {
+        try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+      }
+      `$all = @()
+    }
+  }
   if (`$all.Count -gt 1) {
     `$keep = `$all | Sort-Object CreationDate -Descending | Select-Object -First 1
     foreach (`$proc in `$all) {
@@ -465,6 +475,16 @@ while (`$true) {
       try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
     }
     `$p = @()
+  }
+  # 活性判定：进程存在但心跳超过 5 分钟未上报 => 心跳坏了，重启
+  if (`$p.Count -gt 0) {
+    & `$node --experimental-default-type=module (Join-Path `$Root "scripts\crawler-activity-probe.mjs") health `$identity.PublicIp 5 | Out-Null
+    if (`$LASTEXITCODE -eq 1) {
+      foreach (`$proc in `$p) {
+        try { Stop-Process -Id `$proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+      }
+      `$p = @()
+    }
   }
   if (-not `$p -or `$p.Count -eq 0) {
     Start-Process -FilePath `$node -ArgumentList "--experimental-default-type=module", "`$script" -WorkingDirectory `$Root -WindowStyle Hidden | Out-Null
