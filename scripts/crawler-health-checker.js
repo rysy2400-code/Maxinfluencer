@@ -69,23 +69,40 @@ function parseRemoteHealth(stdout) {
   }
 }
 
-async function logActionStart({ workerHost, workerIp, triggerReason, detail }) {
+async function logActionStart({ workerHost, workerIp, actionType = "redeploy_crawler", triggerReason, detail }) {
   const startedAt = new Date();
   const res = await queryTikTok(
     `
     INSERT INTO tiktok_crawler_repair_action_log (
       worker_host, worker_ip, action_type, trigger_reason, result, detail, started_at, operator
-    ) VALUES (?, ?, 'redeploy_crawler', ?, 'started', ?, ?, 'auto')
+    ) VALUES (?, ?, ?, ?, 'started', ?, ?, 'auto')
   `,
     [
       workerHost,
       workerIp || null,
+      actionType,
       triggerReason,
       detail ? String(detail).slice(0, 5000) : null,
       startedAt.toISOString().slice(0, 19).replace("T", " "),
     ]
   );
   return { id: res?.insertId || null, startedAt };
+}
+
+async function findRecentRepairAction({ workerHost, workerIp, actionType, cooldownMinutes }) {
+  const rows = await queryTikTok(
+    `
+    SELECT id
+    FROM tiktok_crawler_repair_action_log
+    WHERE action_type = ?
+      AND (worker_host = ? OR worker_ip = ?)
+      AND started_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+    ORDER BY id DESC
+    LIMIT 1
+  `,
+    [actionType, workerHost, workerIp, cooldownMinutes]
+  );
+  return rows?.[0]?.id || null;
 }
 
 async function logActionFinish({ id, ok, detail }) {
@@ -131,24 +148,30 @@ async function isWhitelisted(workerIp) {
   return wl.has(String(workerIp || "").trim());
 }
 
-/**
- * 远程 SSH 执行爬虫机上的 deploy-crawler.ps1。
- * `CRAWLER_SSH_TIMEOUT_MS`：单次 SSH 整体超时（含 git pull / npm ci），默认 10 分钟；过短会误杀仍在部署中的会话。
- */
-async function sshRedeploy({ workerIp }) {
+function encodePowerShellCommand(command) {
+  return Buffer.from(String(command || ""), "utf16le").toString("base64");
+}
+
+function resolveSshOptions() {
   const user = String(process.env.CRAWLER_SSH_USER || "Administrator").trim();
   const port = String(process.env.CRAWLER_SSH_PORT || "22").trim();
   const defaultKeyPath = os.platform() === "win32" ? "C:/ProgramData/ssh/maxin_crawler_key" : "";
   const keyPath = String(process.env.CRAWLER_SSH_KEY_PATH || defaultKeyPath).trim();
-  const timeoutMs = Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 600_000) || 600_000);
 
   if (!keyPath) {
     throw new Error("CRAWLER_SSH_KEY_PATH is required (set in .env.local or environment)");
   }
+  return {
+    user,
+    port,
+    keyPath,
+    nullHosts: os.platform() === "win32" ? "NUL" : "/dev/null",
+    timeoutMs: Math.max(30_000, Number(process.env.CRAWLER_SSH_TIMEOUT_MS || 600_000) || 600_000),
+  };
+}
 
-  const nullHosts = os.platform() === "win32" ? "NUL" : "/dev/null";
-
-  const remotePs = [
+function buildRedeployScript() {
+  return [
     "$ErrorActionPreference = 'Stop'",
     "& 'C:\\maxinfluencer\\deploy-crawler.ps1'",
     "Start-Sleep -Seconds 8",
@@ -161,7 +184,35 @@ async function sshRedeploy({ workerIp }) {
     "if ($health.worker_ok -and $health.cdp_9222_ok) { exit 0 }",
     "exit 2",
   ].join("; ");
+}
 
+function buildRestartCdpScript() {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$p = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -match 'chrome|msedge') -and $_.CommandLine -match '\\.chrome-cdp-9222' })",
+    "foreach ($x in $p) { try { Stop-Process -Id $x.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }",
+    "schtasks.exe /End /TN 'maxin-guard-chrome-9222' 2>$null | Out-Null",
+    "schtasks.exe /Run /TN 'maxin-guard-chrome-9222' | Out-Null",
+    "$deadline = (Get-Date).AddSeconds(75)",
+    "$ok = $false",
+    "do {",
+    "  Start-Sleep -Seconds 3",
+    "  try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 5; $ok = ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400 -and $r.Content -match 'webSocketDebuggerUrl') } catch {}",
+    "} while ((-not $ok) -and ((Get-Date) -lt $deadline))",
+    "$health = [PSCustomObject]@{ worker_ok = $true; cdp_9222_ok = [bool]$ok; cdp_9223_ok = $true }",
+    "Write-Output ('[maxin-health-json]' + ($health | ConvertTo-Json -Compress))",
+    "if ($ok) { exit 0 }",
+    "exit 2",
+  ].join("; ");
+}
+
+/**
+ * 远程 SSH 执行爬虫机上的 PowerShell（-EncodedCommand 避免 cmd.exe 拆分分号）。
+ * `CRAWLER_SSH_TIMEOUT_MS`：单次 SSH 整体超时，默认 10 分钟。
+ */
+async function sshExecRemote({ workerIp, remotePs }) {
+  const { user, port, keyPath, nullHosts, timeoutMs } = resolveSshOptions();
+  const encodedPs = encodePowerShellCommand(remotePs);
   const sshArgs = [
     "ssh.exe",
     "-i",
@@ -189,8 +240,8 @@ async function sshRedeploy({ workerIp }) {
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
-    "-Command",
-    remotePs,
+    "-EncodedCommand",
+    encodedPs,
   ];
 
   const escaped = sshArgs.map((x) => {
@@ -211,6 +262,20 @@ async function sshRedeploy({ workerIp }) {
     stderr,
     remoteHealth: parseRemoteHealth(stdout),
   };
+}
+
+/**
+ * 远程执行 deploy-crawler.ps1 整机重部署。
+ */
+function sshRedeploy({ workerIp }) {
+  return sshExecRemote({ workerIp, remotePs: buildRedeployScript() });
+}
+
+/**
+ * 远程重启 9222 Chrome（杀进程 + 拉起 guard 任务 + 等待恢复），比整机重部署轻量。
+ */
+function sshRestartCdp({ workerIp }) {
+  return sshExecRemote({ workerIp, remotePs: buildRestartCdpScript() });
 }
 
 /**
@@ -352,17 +417,36 @@ async function main() {
     if (triggers.length === 0) continue;
 
     const triggerReason = triggers.map((t) => `${t.code}:${t.reason}`).join(" | ");
+    // 规则 B（CDP fail streak）用轻量 restart_cdp，其余才走整机 redeploy。
+    const useRestartCdp = triggers.some((t) => t.code === "B");
+    const actionType = useRestartCdp ? "restart_cdp" : "redeploy_crawler";
+    const cooldownMinutes = useRestartCdp ? 10 : 30;
+    const recentActionId = await findRecentRepairAction({
+      workerHost,
+      workerIp,
+      actionType,
+      cooldownMinutes,
+    });
+    if (recentActionId) {
+      console.log(
+        `[crawler-health-checker] skip ${actionType} for ${workerIp} (recent action ${recentActionId}, cooldown ${cooldownMinutes}m)`
+      );
+      continue;
+    }
     const started = await logActionStart({
       workerHost,
       workerIp,
+      actionType,
       triggerReason,
-      detail: `auto_redeploy at ${nowIso()}`,
+      detail: `auto_${actionType} at ${nowIso()}`,
     });
 
     let ok = false;
     let detail = "";
     try {
-      const out = await sshRedeploy({ workerIp });
+      const out = useRestartCdp
+        ? await sshRestartCdp({ workerIp })
+        : await sshRedeploy({ workerIp });
       detail = `stdout:\n${out.stdout || ""}\n\nstderr:\n${out.stderr || ""}`;
       if (out.remoteHealth) {
         ok = Boolean(out.remoteHealth.worker_ok && out.remoteHealth.cdp_9222_ok);
@@ -376,7 +460,7 @@ async function main() {
       }
     } catch (e) {
       ok = false;
-      detail = `redeploy_error: ${formatExecError(e)}`;
+      detail = `${actionType}_error: ${formatExecError(e)}`;
     }
 
     await logActionFinish({ id: started.id, ok, detail });

@@ -40,6 +40,8 @@ const statements = [
     INDEX idx_recipient_received (recipient_email, received_at),
     INDEX idx_status_received (attribution_status, received_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `ALTER TABLE email_outreach_delivery_fact
+     MODIFY COLUMN sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 ];
 
 for (const statement of statements) await queryTikTok(statement);

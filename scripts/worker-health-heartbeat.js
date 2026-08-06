@@ -78,6 +78,126 @@ async function probeCdpRpc(url, timeoutMs = 4000) {
   }
 }
 
+function resolveTikTokEndpointHealthUrls() {
+  const raw = String(process.env.TT_LITE_ENRICH_CDP_ENDPOINTS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const fallback = [
+    process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223",
+    process.env.TT_LITE_ENRICH_CDP,
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const endpoints = raw.length ? raw : fallback;
+  return [...new Set(endpoints)].map((endpoint) => endpoint.replace(/\/+$/, ""));
+}
+
+async function evaluateCdpPage(wsUrl, expression, timeoutMs = 5000) {
+  if (typeof WebSocket !== "function" || !wsUrl) return null;
+  return await new Promise((resolve) => {
+    let settled = false;
+    let rpcTimer = null;
+    const ws = new WebSocket(wsUrl);
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      if (rpcTimer) clearTimeout(rpcTimer);
+      try { ws.close(); } catch {}
+      resolve(value);
+    };
+    rpcTimer = setTimeout(() => done(null), timeoutMs);
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ id: 1, method: "Runtime.enable" }));
+      ws.send(JSON.stringify({
+        id: 2,
+        method: "Runtime.evaluate",
+        params: { expression, awaitPromise: true, returnByValue: true },
+      }));
+    });
+    ws.addEventListener("message", (event) => {
+      try {
+        const message = JSON.parse(String(event.data || ""));
+        if (message?.id === 2) {
+          if (message.exceptionDetails) done(null);
+          else done(message.result?.result?.value ?? null);
+        }
+      } catch {
+        done(null);
+      }
+    });
+    ws.addEventListener("error", () => done(null));
+    ws.addEventListener("close", () => done(null));
+  });
+}
+
+async function probeTikTokEndpoint(endpoint, timeoutMs = 5000) {
+  const base = String(endpoint || "").replace(/\/+$/, "");
+  const startedAt = Date.now();
+  const out = {
+    endpoint: base,
+    ok: false,
+    httpOk: false,
+    pageOk: false,
+    tiktokPageOk: false,
+    pageUrl: null,
+    targetId: null,
+    publicIp: null,
+    checkedAt: new Date().toISOString(),
+    latencyMs: null,
+    error: null,
+  };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/json/list`, { signal: ctrl.signal });
+    out.httpOk = res.ok;
+    if (!res.ok) throw new Error(`cdp_list_${res.status}`);
+    const targets = await res.json();
+    const pages = Array.isArray(targets) ? targets.filter((t) => t.type === "page") : [];
+    const target =
+      pages.find((t) => String(t.url || "").includes("tiktok.com") && !String(t.url || "").includes("/api/")) ||
+      pages[0];
+    if (!target?.webSocketDebuggerUrl) throw new Error("no_page_target");
+    out.targetId = target.id || null;
+    out.pageUrl = target.url || null;
+    const href = await evaluateCdpPage(
+      target.webSocketDebuggerUrl,
+      "location.href",
+      timeoutMs
+    );
+    const resolvedUrl = typeof href === "string" && href.length > 0 ? href : out.pageUrl;
+    out.pageUrl = resolvedUrl || out.pageUrl;
+    out.pageOk = typeof out.pageUrl === "string" && out.pageUrl.length > 0;
+    out.tiktokPageOk = String(out.pageUrl || "").includes("tiktok.com");
+    const ip = await evaluateCdpPage(
+      target.webSocketDebuggerUrl,
+      `(async()=>{try{const r=await fetch("${String(process.env.TT_LITE_ENDPOINT_IP_CHECK_URL || "https://api.ipify.org?format=json")}");const j=await r.json();return j.ip||j.query||null}catch(e){return null}})()`,
+      timeoutMs
+    );
+    out.publicIp = typeof ip === "string" ? ip : null;
+    out.ok = out.httpOk && out.pageOk && out.tiktokPageOk;
+  } catch (e) {
+    out.error = e?.message || String(e);
+  } finally {
+    clearTimeout(timer);
+    out.latencyMs = Date.now() - startedAt;
+  }
+  return out;
+}
+
+async function probeTikTokEndpointHealth() {
+  const platforms = String(process.env.SEARCH_WORKER_PLATFORMS || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (!platforms.includes("tiktok")) return [];
+
+  const endpoints = resolveTikTokEndpointHealthUrls();
+  if (!endpoints.length) return [];
+  return Promise.all(endpoints.map((endpoint) => probeTikTokEndpoint(endpoint)));
+}
+
 async function probeWorkerLoop() {
   if (process.platform !== "win32") return null;
   try {
@@ -115,7 +235,7 @@ function currentReleaseSha() {
 async function loadRuntimeIdentity(workerIp, machineKey) {
   try {
     const machines = await queryTikTok(
-      `SELECT id FROM tiktok_crawler_machine
+      `SELECT id, machine_key, public_ip FROM tiktok_crawler_machine
        WHERE enabled=1 AND (machine_key=? OR (?='' AND public_ip=?))
        ORDER BY (machine_key=?) DESC LIMIT 1`,
       [machineKey, machineKey, workerIp, machineKey]
@@ -127,13 +247,27 @@ async function loadRuntimeIdentity(workerIp, machineKey) {
     );
     return {
       machineId: machines?.[0]?.id == null ? null : Number(machines[0].id),
+      machineKey: machines?.[0]?.machine_key || machineKey || null,
+      registryIp: machines?.[0]?.public_ip || workerIp || null,
       lastClaimAt: taskRows?.[0]?.last_claim_at || null,
       lastProgressAt: taskRows?.[0]?.last_progress_at || null,
     };
   } catch (error) {
     if (error?.code !== "ER_NO_SUCH_TABLE") throw error;
-    return { machineId: null, lastClaimAt: null, lastProgressAt: null };
+    return { machineId: null, machineKey: machineKey || null, registryIp: workerIp || null, lastClaimAt: null, lastProgressAt: null };
   }
+}
+
+function healthConflictTarget({ machineId, workerIp }) {
+  if (machineId != null) return { where: "machine_id = ?", value: machineId };
+  return { where: "worker_ip = ?", value: workerIp };
+}
+
+function formatDateOrNull(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
 async function upsertHealth({
@@ -151,7 +285,65 @@ async function upsertHealth({
   lastClaimAt,
   lastProgressAt,
   lastError,
+  tiktokEndpointHealth,
 }) {
+  const target = healthConflictTarget({ machineId, workerIp });
+  const existingRows = await queryTikTok(
+    `SELECT id FROM tiktok_crawler_worker_health WHERE ${target.where} LIMIT 1`,
+    [target.value]
+  );
+  if (existingRows?.[0]) {
+    await queryTikTok(
+    `
+    UPDATE tiktok_crawler_worker_health
+    SET worker_host = ?,
+      machine_id = ?,
+      worker_ip = ?,
+      worker_id = ?,
+      reported_platforms = ?,
+      reported_release_sha = ?,
+      worker_alive = ?,
+      worker_loop_ok = ?,
+      cdp_9222_ok = ?,
+      cdp_9222_rpc_ok = ?,
+      cdp_9223_ok = ?,
+      tiktok_endpoint_health = ?,
+      cdp_9222_fail_streak =
+        IF(COALESCE(?, ?)=1, 0, LEAST(cdp_9222_fail_streak + 1, 100000)),
+      cdp_9223_fail_streak =
+        IF(?=1, 0, LEAST(cdp_9223_fail_streak + 1, 100000)),
+      last_seen_at = NOW(),
+      last_claim_at = ?,
+      last_progress_at = ?,
+      last_error = ?,
+      updated_at = NOW()
+    WHERE ${target.where}
+  `,
+    [
+      workerHost,
+      machineId,
+      workerIp,
+      workerId,
+      reportedPlatforms || null,
+      reportedReleaseSha || null,
+      alive ? 1 : 0,
+      workerLoopOk == null ? null : workerLoopOk ? 1 : 0,
+      ok9222 ? 1 : 0,
+      rpc9222 == null ? null : rpc9222 ? 1 : 0,
+      ok9223 ? 1 : 0,
+      tiktokEndpointHealth ? JSON.stringify(tiktokEndpointHealth) : null,
+      rpc9222 == null ? null : rpc9222 ? 1 : 0,
+      ok9222 ? 1 : 0,
+      ok9223 ? 1 : 0,
+      formatDateOrNull(lastClaimAt),
+      formatDateOrNull(lastProgressAt),
+      lastError || null,
+      target.value,
+    ]
+  );
+    return;
+  }
+
   await queryTikTok(
     `
     INSERT INTO tiktok_crawler_worker_health (
@@ -166,33 +358,14 @@ async function upsertHealth({
       cdp_9222_ok,
       cdp_9222_rpc_ok,
       cdp_9223_ok,
+      tiktok_endpoint_health,
       cdp_9222_fail_streak,
       cdp_9223_fail_streak,
       last_seen_at,
       last_claim_at,
       last_progress_at,
       last_error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      machine_id = VALUES(machine_id),
-      worker_ip = VALUES(worker_ip),
-      worker_id = VALUES(worker_id),
-      reported_platforms = VALUES(reported_platforms),
-      reported_release_sha = VALUES(reported_release_sha),
-      worker_alive = VALUES(worker_alive),
-      worker_loop_ok = VALUES(worker_loop_ok),
-      cdp_9222_ok = VALUES(cdp_9222_ok),
-      cdp_9222_rpc_ok = VALUES(cdp_9222_rpc_ok),
-      cdp_9223_ok = VALUES(cdp_9223_ok),
-      cdp_9222_fail_streak =
-        IF(COALESCE(VALUES(cdp_9222_rpc_ok), VALUES(cdp_9222_ok))=1, 0, LEAST(cdp_9222_fail_streak + 1, 100000)),
-      cdp_9223_fail_streak =
-        IF(VALUES(cdp_9223_ok)=1, 0, LEAST(cdp_9223_fail_streak + 1, 100000)),
-      last_seen_at = NOW(),
-      last_claim_at = VALUES(last_claim_at),
-      last_progress_at = VALUES(last_progress_at),
-      last_error = VALUES(last_error),
-      updated_at = NOW()
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)
   `,
     [
       workerHost,
@@ -206,10 +379,11 @@ async function upsertHealth({
       ok9222 ? 1 : 0,
       rpc9222 == null ? null : rpc9222 ? 1 : 0,
       ok9223 ? 1 : 0,
+      tiktokEndpointHealth ? JSON.stringify(tiktokEndpointHealth) : null,
       (rpc9222 ?? ok9222) ? 0 : 1,
       ok9223 ? 0 : 1,
-      lastClaimAt,
-      lastProgressAt,
+      formatDateOrNull(lastClaimAt),
+      formatDateOrNull(lastProgressAt),
       lastError || null,
     ]
   );
@@ -244,11 +418,17 @@ async function main() {
     let lastError = null;
     const ok9222 = await probe(url9222);
     const rpc9222 = ok9222 ? await probeCdpRpc(url9222) : false;
+    const tiktokEndpointHealth = await probeTikTokEndpointHealth();
     const workerLoopOk = await probeWorkerLoop();
     const runtime = await loadRuntimeIdentity(workerIp, machineKey);
-    const ok9223 = true;
+    const ok9223 =
+      tiktokEndpointHealth.length > 0
+        ? tiktokEndpointHealth.some((item) => item.ok)
+        : true;
     if (!ok9222 || rpc9222 === false || workerLoopOk === false) {
       lastError = `health_failed(http9222=${ok9222 ? "ok" : "bad"},rpc9222=${rpc9222 ? "ok" : "bad"},worker=${workerLoopOk === false ? "bad" : "ok"})`;
+    } else if (tiktokEndpointHealth.length && !ok9223) {
+      lastError = "tiktok_enrich_endpoints_unavailable";
     }
 
     try {
@@ -267,6 +447,7 @@ async function main() {
         lastClaimAt: runtime.lastClaimAt,
         lastProgressAt: runtime.lastProgressAt,
         lastError,
+        tiktokEndpointHealth,
       });
     } catch (e) {
       // DB temporarily unavailable: don't crash the worker

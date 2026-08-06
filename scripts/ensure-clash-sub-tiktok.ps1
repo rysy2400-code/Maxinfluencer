@@ -2,9 +2,10 @@
 param(
   [string]$ProjectRoot = "C:\maxinfluencer",
   [string]$SubUrl = $env:CLASH_SUB_URL,
-  [string]$PreferredNodePattern = $(if ($env:CLASH_TT_NODE_PATTERN) { $env:CLASH_TT_NODE_PATTERN } else { "8041|8031|8021|美国|日本|新加坡|us01|jp01|sg01" }),
+  [string]$PreferredNodePattern = $(if ($env:CLASH_TT_NODE_PATTERN) { $env:CLASH_TT_NODE_PATTERN } else { "" }),
   [int]$MixedPort = $(if ($env:CLASH_MIXED_PORT) { [int]$env:CLASH_MIXED_PORT } else { 7897 }),
-  [switch]$SkipTikTokProbe
+  [switch]$SkipTikTokProbe,
+  [switch]$SkipTikTokContentProbe
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,15 +113,17 @@ function Test-IsMetadataNode {
   param($Node)
   $name = "$($Node.name)"
   if ($name -match '剩余流量|距离下次|套餐到期|重置剩余|traffic|expire|reset') { return $true }
+  if ($Node.server -eq 'xsus.xs-us.net' -and $Node.port -eq 8001) { return $true }
   return $false
 }
 
 function Test-IsBlockedRegionNode {
   param($Node)
   $blob = "$($Node.name)|$($Node.server)|$($Node.sni)|$($Node.port)"
-  if ($blob -match '香港|台湾|hong\s*kong|taiwan|\bhk\d|🇭🇰|🇹🇼') { return $true }
-  if ($Node.server -match '^hk\d' -or $Node.sni -match '^hk\d') { return $true }
-  # xsus 订阅：8001=香港 8011=台湾（metadata 行也走同一端口，必须整端口排除）
+  if ($blob -match '香港|台湾|中国|大陆|内地|china|mainland|hong\s*kong|taiwan|\bhk\d|\bcn\d|🇭🇰|🇹🇼|🇨🇳') { return $true }
+  if ($Node.server -match '^(hk|cn)\d' -or $Node.sni -match '^(hk|cn)\d') { return $true }
+  # xsus 订阅：8001=香港 8011=台湾；如果后续出现 80x 中国大陆端口，也可通过名称/域名前缀排除。
+  if ($Node.port -eq 8001 -or $Node.port -eq 8011) { return $true }
   if ($Node.server -eq 'xsus.xs-us.net' -and ($Node.port -eq 8001 -or $Node.port -eq 8011)) { return $true }
   return $false
 }
@@ -208,14 +211,16 @@ $usable = @(
 $usable = @(Merge-NodesByEndpoint -NodeList $usable)
 if ($usable.Count -eq 0) { throw "subscription has no usable non-HK/TW nodes" }
 
-$preferred = @(
-  $usable |
-    Where-Object { "$($_.name)|$($_.server)|$($_.port)" -match $PreferredNodePattern }
-)
-if ($preferred.Count -eq 0) {
-  throw "no preferred TikTok nodes matched pattern: $PreferredNodePattern (usable=$($usable.Count))"
+$selected = $usable
+if ($PreferredNodePattern) {
+  $selected = @(
+    $usable |
+      Where-Object { "$($_.name)|$($_.server)|$($_.port)" -match $PreferredNodePattern }
+  )
+  if ($selected.Count -eq 0) {
+    throw "no preferred TikTok nodes matched pattern: $PreferredNodePattern (usable=$($usable.Count))"
+  }
 }
-$selected = $preferred
 Write-Host "[clash-sub] nodes total=$($nodes.Count) usable=$($usable.Count) selected=$($selected.Count)"
 foreach ($n in $selected) {
   Write-Host "[clash-sub]   pick $($n.name) -> $($n.server):$($n.port)"
@@ -347,4 +352,30 @@ if (-not $tt.ok) {
 }
 
 Write-Host "[clash-sub] TIKTOK_SEARCH_OK reason=$($tt.reason)"
+
+if ($SkipTikTokContentProbe) {
+  Write-Host "[clash-sub] SKIP_TIKTOK_CONTENT_PROBE"
+  exit 0
+}
+
+$nodeExe = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+if (-not $nodeExe) {
+  $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+}
+if (-not $nodeExe) {
+  throw "node executable not found; cannot run content-level TikTok proxy probe"
+}
+$probeScript = Join-Path $ProjectRoot "scripts\probe-tiktok-proxy-content-health.mjs"
+if (-not (Test-Path -LiteralPath $probeScript)) {
+  throw "content-level TikTok probe script not found: $probeScript"
+}
+Write-Host "[clash-sub] running content-level TikTok video HTML probe for all generated nodes..."
+& $nodeExe $probeScript
+if ($LASTEXITCODE -eq 2) {
+  Write-Error "[clash-sub] no content-healthy TikTok proxy node; production TikTok consumption must stop"
+  exit 2
+}
+if ($LASTEXITCODE -ne 0) {
+  throw "content-level TikTok proxy probe failed with exit code $LASTEXITCODE"
+}
 exit 0

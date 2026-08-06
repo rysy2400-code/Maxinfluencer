@@ -6,6 +6,7 @@ import {
   enrichCampaignInfoCountryFields,
   isRecognizedCountryRegion,
   formatCountryForDisplay,
+  isUnknownCountryValue,
 } from "../lib/influencer/campaign-country-codes.js";
 
 const cases = [
@@ -70,6 +71,14 @@ if (formatCountryForDisplay("德国") !== "德国") {
 }
 if (formatCountryForDisplay(null) !== null || formatCountryForDisplay("") !== null) {
   console.error("FAIL formatCountryForDisplay empty");
+  failed += 1;
+}
+if (formatCountryForDisplay("country_unknown") !== null) {
+  console.error("FAIL formatCountryForDisplay country_unknown");
+  failed += 1;
+}
+if (!isUnknownCountryValue("country_unknown") || !isUnknownCountryValue(null)) {
+  console.error("FAIL isUnknownCountryValue sentinel");
   failed += 1;
 }
 

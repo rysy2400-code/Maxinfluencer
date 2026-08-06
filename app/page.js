@@ -763,21 +763,6 @@ const EMPTY_WORK_LIVE_THINKING = Object.freeze({
   workNotes: [],
 });
 
-/** 工作实况 SSE 写入目标：最后一条 assistant（与展示一致） */
-function findWorkLiveAssistantIndex(messages) {
-  if (!Array.isArray(messages)) return -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") return i;
-  }
-  return -1;
-}
-
-function getWorkLiveThinking(messages) {
-  const idx = findWorkLiveAssistantIndex(messages);
-  if (idx < 0) return null;
-  return messages[idx]?.thinking ?? null;
-}
-
 function workLiveHasRenderableContent(thinking) {
   if (!thinking || typeof thinking !== "object") return false;
   return (
@@ -2430,10 +2415,6 @@ export default function HomePage() {
   const isResizingRef = useRef(false); // 是否正在左右调整大小
   const resizeStartXRef = useRef(0); // 开始调整时的鼠标X坐标
   const resizeStartWidthRef = useRef(50); // 开始调整时的中间面板宽度
-  const [rightPanelSplit, setRightPanelSplit] = useState(50); // 右侧面板上下区域划分百分比
-  const isVerticalResizingRef = useRef(false); // 是否正在上下拖拽
-  const verticalResizeStartYRef = useRef(0); // 上下拖拽开始的 Y 坐标
-  const verticalResizeStartSplitRef = useRef(50); // 上下拖拽开始时的百分比
   /** 由 currentSessionId 从 DB 解析的 campaignId（权威来源，避免 context.campaignId 脏数据） */
   const [resolvedCampaignId, setResolvedCampaignId] = useState(null);
   const [resolvedCampaignStatus, setResolvedCampaignStatus] = useState(null);
@@ -2494,11 +2475,11 @@ export default function HomePage() {
   const executionProgressListRef = useRef(null);
   const executionInfiniteSentinelRef = useRef(null);
   const analyzedInfiniteSentinelRef = useRef(null);
-  const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作实况
+  const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作笔记 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
   const workLiveAutoSwitchedRef = useRef(false); // 本轮是否已自动切到工作实况
-  const workLiveUserPinnedOverviewRef = useRef(false); // 本轮用户是否手动切回执行总览
+  const workLiveUserPinnedNonLiveRef = useRef(false); // 本轮用户是否手动切到非工作实况页签（执行总览/工作笔记）
   const workLiveEventSourceRef = useRef(null); // 执行阶段工作实况 SSE（对齐 /api/chat 事件）
   const [workLiveThinking, setWorkLiveThinking] = useState(EMPTY_WORK_LIVE_THINKING);
   const sessionPersistSnapshotRef = useRef({ sessionId: null, fingerprint: "" });
@@ -2652,29 +2633,13 @@ export default function HomePage() {
   const inputTextAreaRefMain = useAutoResizeTextArea(input, 220);
   const inputTextAreaRefFooter = useAutoResizeTextArea(input, 220);
 
-  /** 侧栏已发布列表中的当前会话元数据（切换时用于乐观展示 Bin 工作区） */
-  const currentPublishedSessionMeta = useMemo(() => {
-    if (!currentSessionId) return null;
-    return publishedSessions.find((s) => s.id === currentSessionId) ?? null;
-  }, [currentSessionId, publishedSessions]);
-
   /** 是否进入执行 UI：以 tiktok_campaign.status 为准（running / paused / completed） */
   const isExecutionPhaseGlobal = shouldShowBinComputerPanel({
     campaignId: resolvedCampaignId,
     campaignStatus: resolvedCampaignStatus,
   });
 
-  /** 已发布会话、列表显示可执行，但 campaign 接口尚未返回（避免闪上一份执行数据） */
-  const isResolvingCampaign =
-    !!currentSessionId &&
-    !isExecutionPhaseGlobal &&
-    !!currentPublishedSessionMeta?.campaignId &&
-    isExecutionUiCampaignStatus(
-      currentPublishedSessionMeta.campaignStatus || "running"
-    );
-
-  const showBinComputerPanelEffective =
-    isExecutionPhaseGlobal || isResolvingCampaign;
+  const showBinComputerPanelEffective = isExecutionPhaseGlobal;
 
   const refreshSessionCampaignFromDb = useCallback(async (sessionId) => {
     if (!sessionId) {
@@ -2799,7 +2764,7 @@ export default function HomePage() {
       setWorkLiveUnreadCount(0);
       setKeywordWorkNotes([]);
       workLiveAutoSwitchedRef.current = false;
-      workLiveUserPinnedOverviewRef.current = false;
+      workLiveUserPinnedNonLiveRef.current = false;
       setAnalyzedCandidatesItems([]);
       setAnalyzedCandidatesNextBeforeId(null);
       setAnalyzedCandidatesError(null);
@@ -3799,7 +3764,7 @@ export default function HomePage() {
       }
       if (
         !workLiveAutoSwitchedRef.current &&
-        !workLiveUserPinnedOverviewRef.current
+        !workLiveUserPinnedNonLiveRef.current
       ) {
         setBinComputerView("live");
         setWorkLiveUnreadCount(0);
@@ -4008,12 +3973,11 @@ export default function HomePage() {
       setWorkLiveUnreadCount(0);
       // 用户主动打开工作实况后，允许后续新一轮继续自动切换
       if (manual) {
-        workLiveUserPinnedOverviewRef.current = false;
+        workLiveUserPinnedNonLiveRef.current = false;
       }
-    }
-    if (manual && nextView === "overview") {
-      // 用户本轮明确想看执行总览，不再强制自动切换
-      workLiveUserPinnedOverviewRef.current = true;
+    } else if (manual) {
+      // 用户手动切到执行总览/工作笔记：本轮不再强制自动切换到工作实况
+      workLiveUserPinnedNonLiveRef.current = true;
     }
   };
 
@@ -5029,7 +4993,7 @@ export default function HomePage() {
     setLoading(true);
     // 新一轮请求开始：允许本轮自动切一次「工作实况」
     workLiveAutoSwitchedRef.current = false;
-    workLiveUserPinnedOverviewRef.current = false;
+    workLiveUserPinnedNonLiveRef.current = false;
 
     // 创建助手消息占位符，用于实时更新
     const assistantMessageIndex = nextMessages.length;
@@ -5274,7 +5238,7 @@ export default function HomePage() {
                     }
                     if (
                       !workLiveAutoSwitchedRef.current &&
-                      !workLiveUserPinnedOverviewRef.current
+                      !workLiveUserPinnedNonLiveRef.current
                     ) {
                       setBinComputerView("live");
                       setWorkLiveUnreadCount(0);
@@ -6176,7 +6140,7 @@ export default function HomePage() {
     messages[0].role === "assistant" &&
     messages[0].name === "Bin";
 
-  // 仅已发布 campaign 展示「Bin的电脑」；草稿/发布对话阶段中间栏占满
+  // 仅执行阶段展示「Bin的电脑」；发布/对话阶段中间栏占满（对话框居中）
   const showBinComputerPanel = !isEmptyState && showBinComputerPanelEffective;
 
   // 新建一条服务端草稿并进入对话区（不再进入无会话的欢迎顶栏页）
@@ -6737,44 +6701,11 @@ export default function HomePage() {
     document.removeEventListener('mouseup', handleMouseUp);
   };
 
-  // 右侧面板：处理上下拖拽分割
-  const handleVerticalMouseDown = (e) => {
-    isVerticalResizingRef.current = true;
-    verticalResizeStartYRef.current = e.clientY;
-    verticalResizeStartSplitRef.current = rightPanelSplit;
-    document.addEventListener('mousemove', handleVerticalMouseMove);
-    document.addEventListener('mouseup', handleVerticalMouseUp);
-    e.preventDefault();
-  };
-
-  const handleVerticalMouseMove = (e) => {
-    if (!isVerticalResizingRef.current) return;
-    const deltaY = e.clientY - verticalResizeStartYRef.current;
-    const container = document.getElementById('right-panel-split-container');
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const containerHeight = rect.height || 1;
-    const deltaPercent = (deltaY / containerHeight) * 100;
-    const newSplit = Math.max(20, Math.min(80, verticalResizeStartSplitRef.current + deltaPercent));
-    setRightPanelSplit(newSplit);
-  };
-
-  const handleVerticalMouseUp = () => {
-    isVerticalResizingRef.current = false;
-    document.removeEventListener('mousemove', handleVerticalMouseMove);
-    document.removeEventListener('mouseup', handleVerticalMouseUp);
-    document.querySelectorAll(".vertical-panel-splitter").forEach((el) => {
-      el.style.backgroundColor = "#E5E7EB";
-    });
-  };
-
   // 清理事件监听器
   useEffect(() => {
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
-      document.removeEventListener('mousemove', handleVerticalMouseMove);
-      document.removeEventListener('mouseup', handleVerticalMouseUp);
     };
   }, []);
 
@@ -8161,6 +8092,7 @@ export default function HomePage() {
                 >
                   {[
                     { key: "overview", label: "执行总览" },
+                    { key: "notes", label: "工作笔记" },
                     { key: "live", label: "工作实况" },
                   ].map((tab) => {
                     const active = binComputerView === tab.key;
@@ -8346,282 +8278,29 @@ export default function HomePage() {
                     currentStage.key === "pendingPrice" ||
                     currentStage.key === "pendingSample";
 
-                  // 工作笔记：来自执行节奏 + 汇报配置
-                  const config = executionConfig;
-                  const influencersPerDay =
-                    config?.influencersPerDay ?? executionStatus?.influencersPerDay ?? null;
-                  const report = config?.reportConfig || null;
-                  const keywordStrategy = config?.keywordStrategy || null;
-                  const campaignSummary = config?.campaignSummary || null;
-                  const influencerProfile = config?.influencerProfile || null;
-                  const profileFollower =
-                    campaignSummary?.followerRange ?? influencerProfile?.followerRange ?? null;
-                  const profileView =
-                    campaignSummary?.viewRange ?? influencerProfile?.viewRange ?? null;
-                  const profileAccountType =
-                    campaignSummary?.accountType ?? influencerProfile?.accountType ?? null;
-                  const intervalHours = report?.intervalHours ?? null;
-                  const reportTime = report?.reportTime || null;
-                  const contentPreference = report?.contentPreference || null;
-                  const includeMetrics = report?.includeMetrics || [];
-                  const workNoteItems = Array.isArray(keywordWorkNotes)
-                    ? keywordWorkNotes
-                    : [];
-
                   return (
-                    <div
-                      id="right-panel-split-container"
-                      style={{
-                        flex: 1,
-                        minHeight: 0,
-                        display: "flex",
-                        flexDirection: "column"
-                      }}
-                    >
-                      {/* 上：工作笔记（可上下拖拽调整高度） */}
-                      <div style={{
-                        flex: rightPanelSplit,
-                        minHeight: 0,
-                        border: "1px solid #E5E7EB",
-                        borderRadius: 12,
-                        overflow: "hidden",
-                        backgroundColor: "#FFFFFF",
-                        display: "flex",
-                        flexDirection: "column"
-                      }}>
-                        <div style={{
-                          padding: "10px 12px",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: "#6B7280",
-                          backgroundColor: "#F9FAFB",
-                          borderBottom: "1px solid #E5E7EB"
-                        }}>
-                          工作笔记
-                        </div>
-                        <div style={{
+                    <div style={{
+                      flex: 1,
+                      minHeight: 0,
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      backgroundColor: "#FFFFFF",
+                      display: "flex",
+                      flexDirection: "column"
+                    }}>
+                      <div
+                        style={{
                           flex: 1,
                           minHeight: 0,
-                          overflowY: "auto",
-                          padding: "12px"
-                        }}>
-                          {executionConfigError ? (
-                            <div style={{ fontSize: 12, color: "#EF4444" }}>
-                              {executionConfigError}
-                            </div>
-                          ) : (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                              <div style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
-                                <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
-                                  1、Campaign信息
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>品牌：</span>
-                                  {campaignSummary?.brand ?? "未知"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>产品：</span>
-                                  {campaignSummary?.product ?? "未知"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>投放平台：</span>
-                                  {campaignSummary?.platform ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>投放地区：</span>
-                                  {campaignSummary?.region ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>发布时间段：</span>
-                                  {campaignSummary?.publishTimeRange ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>总预算：</span>
-                                  {campaignSummary?.totalBudget ?? campaignSummary?.budget ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>佣金：</span>
-                                  {campaignSummary?.commission ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>单位红人报价策略：</span>
-                                  {campaignSummary?.pricingStrategy ?? "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>交付结果：</span>
-                                  <span
-                                    style={{
-                                      whiteSpace: campaignSummary?.deliverables
-                                        ? "pre-wrap"
-                                        : undefined,
-                                    }}
-                                  >
-                                    {campaignSummary?.deliverables ?? "未设置"}
-                                  </span>
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
-                                  {profileFollower || "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>红人播放量要求：</span>
-                                  {profileView || "未设置"}
-                                </div>
-                                <div style={{ marginBottom: 12 }}>
-                                  <span style={{ fontWeight: 600 }}>红人帐号类型要求：</span>
-                                  {profileAccountType || "未设置"}
-                                </div>
-
-                                <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
-                                  2、Campaign执行要求
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>执行节奏：</span>
-                                  {influencersPerDay
-                                    ? `每天联系 ${influencersPerDay} 位红人`
-                                    : "尚未设置每天联系的红人数量"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>Campaign 状态：</span>
-                                  {config?.statusLabel ||
-                                    (config?.status === "paused"
-                                      ? "已暂停"
-                                      : config?.status === "completed"
-                                        ? "已完成"
-                                        : config?.status === "running_passive"
-                                          ? "只按名单分析联系红人"
-                                          : config?.status === "running"
-                                            ? "自主分析联系红人"
-                                            : "尚未获取")}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>汇报频率：</span>
-                                  {intervalHours
-                                    ? `每 ${intervalHours} 小时汇报一次`
-                                    : "尚未设置汇报频率"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>汇报时间：</span>
-                                  {reportTime ? `每日 ${reportTime}` : "尚未设置具体汇报时间"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>汇报形式：</span>
-                                  {contentPreference === "brief"
-                                    ? "简要汇总"
-                                    : contentPreference === "detailed"
-                                    ? "详细报告"
-                                    : contentPreference === "summary_only"
-                                    ? "仅汇总数字"
-                                    : "尚未设置汇报形式"}
-                                </div>
-                                <div style={{ marginBottom: 4 }}>
-                                  <span style={{ fontWeight: 600 }}>重点指标：</span>
-                                  {(() => {
-                                    const metricLabelMap = {
-                                      pending_price_count: "待审核价格数量",
-                                      pending_sample_count: "待寄样品数量",
-                                      pending_draft_count: "待审核草稿数量",
-                                      published_count: "已发布视频数量",
-                                    };
-                                    return Array.isArray(includeMetrics) && includeMetrics.length > 0
-                                      ? includeMetrics.map((k) => metricLabelMap[k] ?? k).join("，")
-                                      : "当前日报中未配置额外指标";
-                                  })()}
-                                </div>
-                                <div style={{ marginBottom: 8 }}>
-                                  <span style={{ fontWeight: 600 }}>红人搜索关键词策略：</span>
-                                  {keywordStrategy || "暂无"}
-                                </div>
-                              </div>
-                              {workNoteItems.length > 0 && (
-                                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
-                                  {workNoteItems
-                                    .slice()
-                                    .sort(
-                                      (a, b) =>
-                                        new Date(b?.time || 0).getTime() -
-                                        new Date(a?.time || 0).getTime()
-                                    )
-                                    .map((item, idx) => {
-                                      const timeLabel = formatWorkNoteDateTime(item?.time);
-                                      const keyword = item?.keyword || "（未命名关键词）";
-                                      const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
-                                      const resultText = formatKeywordWorkNoteResult(item);
-                                      const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
-                                      const libraryLabel =
-                                        item?.libraryLabel ||
-                                        workNoteInfluencerLibraryLabel(item?.platform);
-                                      return (
-                                        <div key={`work-note-${item?.taskId || idx}`} style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
-                                          {`${timeLabel}，在${libraryLabel}开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
-                                          {failedText ? ` ${failedText}` : ""}
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 上下拖拽分隔条（与聊天区/Bin 电脑间左右分割条同色：悬停与拖拽时 #0F172A） */}
-                      <div
-                        className="vertical-panel-splitter"
-                        onMouseDown={handleVerticalMouseDown}
-                        style={{
-                          height: "4px",
-                          cursor: "row-resize",
-                          margin: "4px 0",
-                          flexShrink: 0,
-                          backgroundColor: "#E5E7EB",
-                          transition: "background-color 0.2s",
-                          zIndex: 10
+                          overflow: "hidden",
+                          padding: "12px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8
                         }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = "#0F172A";
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!isVerticalResizingRef.current) {
-                            e.currentTarget.style.backgroundColor = "#E5E7EB";
-                          }
-                        }}
-                      />
-
-                      {/* 下：执行进度（单阶段 Tab + 红人卡片） */}
-                      <div style={{
-                        flex: 100 - rightPanelSplit,
-                        minHeight: 0,
-                        border: "1px solid #E5E7EB",
-                        borderRadius: 12,
-                        overflow: "hidden",
-                        backgroundColor: "#FFFFFF",
-                        display: "flex",
-                        flexDirection: "column"
-                      }}>
-                        <div style={{
-                        padding: "10px 12px",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#6B7280",
-                        backgroundColor: "#F9FAFB",
-                        borderBottom: "1px solid #E5E7EB",
-                        flexShrink: 0
-                      }}>
-                          执行进度
-                        </div>
-                        <div
-                          style={{
-                            flex: 1,
-                            minHeight: 0,
-                            overflow: "hidden",
-                            padding: "12px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8
-                          }}
-                        >
-                          {executionLoading || isResolvingCampaign ? (
+                      >
+                          {executionLoading ? (
                             <div
                               style={{
                                 fontSize: 12,
@@ -9149,18 +8828,214 @@ export default function HomePage() {
                           )}
                         </div>
                       </div>
+                  );
+                }
+
+                // 工作笔记（执行阶段独立页签）：来自执行节奏 + 汇报配置
+                if (isExecutionPhase && binComputerView === "notes") {
+                  const config = executionConfig;
+                  const influencersPerDay =
+                    config?.influencersPerDay ?? executionStatus?.influencersPerDay ?? null;
+                  const report = config?.reportConfig || null;
+                  const keywordStrategy = config?.keywordStrategy || null;
+                  const campaignSummary = config?.campaignSummary || null;
+                  const influencerProfile = config?.influencerProfile || null;
+                  const profileFollower =
+                    campaignSummary?.followerRange ?? influencerProfile?.followerRange ?? null;
+                  const profileView =
+                    campaignSummary?.viewRange ?? influencerProfile?.viewRange ?? null;
+                  const profileAccountType =
+                    campaignSummary?.accountType ?? influencerProfile?.accountType ?? null;
+                  const intervalHours = report?.intervalHours ?? null;
+                  const reportTime = report?.reportTime || null;
+                  const contentPreference = report?.contentPreference || null;
+                  const includeMetrics = report?.includeMetrics || [];
+                  const workNoteItems = Array.isArray(keywordWorkNotes)
+                    ? keywordWorkNotes
+                    : [];
+
+                  return (
+                    <div style={{
+                      flex: 1,
+                      minHeight: 0,
+                      border: "1px solid #E5E7EB",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      backgroundColor: "#FFFFFF",
+                      display: "flex",
+                      flexDirection: "column"
+                    }}>
+                      <div style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflowY: "auto",
+                        padding: "12px"
+                      }}>
+                        {executionConfigError ? (
+                          <div style={{ fontSize: 12, color: "#EF4444" }}>
+                            {executionConfigError}
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <div style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
+                              <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
+                                1、Campaign信息
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>品牌：</span>
+                                {campaignSummary?.brand ?? "未知"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>产品：</span>
+                                {campaignSummary?.product ?? "未知"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>投放平台：</span>
+                                {campaignSummary?.platform ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>投放地区：</span>
+                                {campaignSummary?.region ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>发布时间段：</span>
+                                {campaignSummary?.publishTimeRange ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>总预算：</span>
+                                {campaignSummary?.totalBudget ?? campaignSummary?.budget ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>佣金：</span>
+                                {campaignSummary?.commission ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>单位红人报价策略：</span>
+                                {campaignSummary?.pricingStrategy ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>交付结果：</span>
+                                <span
+                                  style={{
+                                    whiteSpace: campaignSummary?.deliverables
+                                      ? "pre-wrap"
+                                      : undefined,
+                                  }}
+                                >
+                                  {campaignSummary?.deliverables ?? "未设置"}
+                                </span>
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>红人粉丝量要求：</span>
+                                {profileFollower || "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>红人播放量要求：</span>
+                                {profileView || "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 12 }}>
+                                <span style={{ fontWeight: 600 }}>红人帐号类型要求：</span>
+                                {profileAccountType || "未设置"}
+                              </div>
+
+                              <div style={{ fontWeight: 600, marginBottom: 6, color: "#374151" }}>
+                                2、Campaign执行要求
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>执行节奏：</span>
+                                {influencersPerDay
+                                  ? `每天联系 ${influencersPerDay} 位红人`
+                                  : "尚未设置每天联系的红人数量"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>Campaign 状态：</span>
+                                {config?.statusLabel ||
+                                  (config?.status === "paused"
+                                    ? "已暂停"
+                                    : config?.status === "completed"
+                                      ? "已完成"
+                                      : config?.status === "running_passive"
+                                        ? "只按名单分析联系红人"
+                                        : config?.status === "running"
+                                          ? "自主分析联系红人"
+                                          : "尚未获取")}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>汇报频率：</span>
+                                {intervalHours
+                                  ? `每 ${intervalHours} 小时汇报一次`
+                                  : "尚未设置汇报频率"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>汇报时间：</span>
+                                {reportTime ? `每日 ${reportTime}` : "尚未设置具体汇报时间"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>汇报形式：</span>
+                                {contentPreference === "brief"
+                                  ? "简要汇总"
+                                  : contentPreference === "detailed"
+                                  ? "详细报告"
+                                  : contentPreference === "summary_only"
+                                  ? "仅汇总数字"
+                                  : "尚未设置汇报形式"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>重点指标：</span>
+                                {(() => {
+                                  const metricLabelMap = {
+                                    pending_price_count: "待审核价格数量",
+                                    pending_sample_count: "待寄样品数量",
+                                    pending_draft_count: "待审核草稿数量",
+                                    published_count: "已发布视频数量",
+                                  };
+                                  return Array.isArray(includeMetrics) && includeMetrics.length > 0
+                                    ? includeMetrics.map((k) => metricLabelMap[k] ?? k).join("，")
+                                    : "当前日报中未配置额外指标";
+                                })()}
+                              </div>
+                              <div style={{ marginBottom: 8 }}>
+                                <span style={{ fontWeight: 600 }}>红人搜索关键词策略：</span>
+                                {keywordStrategy || "暂无"}
+                              </div>
+                            </div>
+                            {workNoteItems.length > 0 && (
+                              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
+                                {workNoteItems
+                                  .slice()
+                                  .sort(
+                                    (a, b) =>
+                                      new Date(b?.time || 0).getTime() -
+                                      new Date(a?.time || 0).getTime()
+                                  )
+                                  .map((item, idx) => {
+                                    const timeLabel = formatWorkNoteDateTime(item?.time);
+                                    const keyword = item?.keyword || "（未命名关键词）";
+                                    const reason = item?.reasonText || "基于当前 campaign 的执行目标选择该关键词。";
+                                    const resultText = formatKeywordWorkNoteResult(item);
+                                    const failedText = item?.status === "failed" ? "本轮未成功完成，系统将继续优化后续搜索。" : "";
+                                    const libraryLabel =
+                                      item?.libraryLabel ||
+                                      workNoteInfluencerLibraryLabel(item?.platform);
+                                    return (
+                                      <div key={`work-note-${item?.taskId || idx}`} style={{ fontSize: 12, color: "#4B5563", lineHeight: 1.7 }}>
+                                        {`${timeLabel}，在${libraryLabel}开始搜索“${keyword}”。选择原因：${reason}${resultText ? `。${resultText}` : "。"}`}
+                                        {failedText ? ` ${failedText}` : ""}
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 }
 
-                const panelWorkLiveThinking = isExecutionPhase
-                  ? workLiveThinking
-                  : getWorkLiveThinking(messages);
+                const panelWorkLiveThinking = workLiveThinking;
                 if (!workLiveHasRenderableContent(panelWorkLiveThinking)) {
-                  const waitLabel =
-                    isExecutionPhase && binComputerView === "live"
-                      ? "暂无工作实况（等待 Agent 开始浏览与分析）…"
-                      : "等待 Agent 开始工作...";
+                  const waitLabel = "暂无工作实况（等待 Agent 开始浏览与分析）…";
                   return (
                     <div style={{
                       padding: "40px 20px",
@@ -9173,11 +9048,11 @@ export default function HomePage() {
                   );
                 }
 
-                const { browserSteps, screenshots, influencerAnalyses } =
+                const { browserSteps, influencerAnalyses } =
                   panelWorkLiveThinking || {};
                 const lastMessage = messages[messages.length - 1];
 
-                // ---------- 工作实况（执行阶段）或默认发布阶段：红人画像 + 浏览器 ----------
+                // ---------- 工作实况（执行阶段）：红人画像分析实时回传 ----------
                 
                 // 红人匹配分析数据：优先使用 SSE 实时累积的 influencerAnalyses，否则从消息内容解析
                 let influencerMatches = [];
@@ -9227,26 +9102,16 @@ export default function HomePage() {
                 // 只显示分析红人匹配度步骤（流式展示）
                 const analyzeMatchSteps = browserSteps?.filter(step => step.id === 'analyze_match') || [];
 
-                const currentStep = browserSteps?.find(s => s.status === 'running' && s.id === 'analyze_match') 
-                  || browserSteps?.find(s => s.id === 'analyze_match');
-                const currentScreenshot = (screenshots && screenshots.length > 0)
-                  ? screenshots.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]
-                  : null;
-
-                const liveTopTitle = isExecutionPhase ? "红人画像分析" : "红人画像确认";
                 return (
-                  <div
-                    id="right-panel-split-container"
-                    style={{
-                      flex: 1,
-                      minHeight: 0,
-                      display: "flex",
-                      flexDirection: "column"
-                    }}
-                  >
-                    {/* 上：LLM 红人分析文档（默认 1:1，可上下拖拽调整高度） */}
+                  <div style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column"
+                  }}>
+                    {/* 工作实况：LLM 红人画像分析实时回传（占满整栏） */}
                     <div style={{
-                      flex: rightPanelSplit,
+                      flex: 1,
                       minHeight: 0,
                       border: "1px solid #E5E7EB",
                       borderRadius: 12,
@@ -9255,16 +9120,6 @@ export default function HomePage() {
                       display: "flex",
                       flexDirection: "column"
                     }}>
-                      <div style={{
-                        padding: "10px 12px",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#6B7280",
-                        backgroundColor: "#F9FAFB",
-                        borderBottom: "1px solid #E5E7EB"
-                      }}>
-                        {liveTopTitle}
-                      </div>
                       <div style={{
                         flex: 1,
                         minHeight: 0,
@@ -9389,85 +9244,6 @@ export default function HomePage() {
                             </div>
                           );
                         })()}
-                      </div>
-                    </div>
-
-                    {/* 上下拖拽分隔条（与左右分割条一致） */}
-                    <div
-                      className="vertical-panel-splitter"
-                      onMouseDown={handleVerticalMouseDown}
-                      style={{
-                        height: "4px",
-                        cursor: "row-resize",
-                        margin: "4px 0",
-                        flexShrink: 0,
-                        backgroundColor: "#E5E7EB",
-                        transition: "background-color 0.2s",
-                        zIndex: 10
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = "#0F172A";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isVerticalResizingRef.current) {
-                          e.currentTarget.style.backgroundColor = "#E5E7EB";
-                        }
-                      }}
-                    />
-
-                    {/* 下：浏览器（默认 1:1，可上下拖拽调整高度） */}
-                    <div style={{
-                      flex: 100 - rightPanelSplit,
-                      minHeight: 0,
-                      border: "1px solid #E5E7EB",
-                      borderRadius: 12,
-                      overflow: "hidden",
-                      backgroundColor: "#FFFFFF",
-                      display: "flex",
-                      flexDirection: "column"
-                    }}>
-                      <div style={{
-                      padding: "10px 12px",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: "#6B7280",
-                      backgroundColor: "#F9FAFB",
-                      borderBottom: "1px solid #E5E7EB"
-                    }}>
-                        <span className={currentScreenshot ? "browser-status-blink" : undefined}>
-                          浏览器
-                        </span>
-                      </div>
-                      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-                        {currentScreenshot ? (
-                          <>
-                            <img
-                              src={currentScreenshot.image}
-                              alt={currentScreenshot.label}
-                              style={{ width: "100%", height: "auto", display: "block" }}
-                            />
-                            {currentScreenshot?.truncated && (
-                              <div style={{
-                                padding: "8px 12px",
-                                fontSize: 11,
-                                color: "#F59E0B",
-                                backgroundColor: "#FEF3C7",
-                                borderTop: "1px solid #FCD34D"
-                              }}>
-                                ⚠️ 提示：截图数据较大，已压缩保存
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div style={{
-                            padding: "24px 12px",
-                            textAlign: "center",
-                            color: "#9CA3AF",
-                            fontSize: 13
-                          }}>
-                            暂无截图（Agent 开始浏览后会自动显示）
-                          </div>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -9775,17 +9551,6 @@ export default function HomePage() {
         }
         .thinking-step-running {
           animation: pulse 2s ease-in-out infinite;
-        }
-        @keyframes browserBlink {
-          0% {
-            opacity: 0.6;
-          }
-          100% {
-            opacity: 1;
-          }
-        }
-        .browser-status-blink {
-          animation: browserBlink 1.2s ease-in-out infinite alternate;
         }
       `}</style>
     </div>

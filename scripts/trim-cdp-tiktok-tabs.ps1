@@ -5,7 +5,7 @@ param(
 
 $endpoint = "http://127.0.0.1:$Port"
 try {
-  $tabs = @(Invoke-RestMethod "$endpoint/json/list" -TimeoutSec 8)
+  $tabs = (Invoke-WebRequest -UseBasicParsing "$endpoint/json/list" -TimeoutSec 8).Content | ConvertFrom-Json
 } catch {
   Write-Host "[trim-cdp] port=$Port unavailable: $($_.Exception.Message)"
   exit 1
@@ -24,7 +24,7 @@ foreach ($p in @($pages)) {
 
 Start-Sleep -Milliseconds 300
 try {
-  $tabs = @(Invoke-RestMethod "$endpoint/json/list" -TimeoutSec 8)
+  $tabs = (Invoke-WebRequest -UseBasicParsing "$endpoint/json/list" -TimeoutSec 8).Content | ConvertFrom-Json
   $pages = @($tabs | Where-Object { $_.type -eq "page" })
 } catch {
   Write-Host "[trim-cdp] port=$Port unavailable after purge: $($_.Exception.Message)"

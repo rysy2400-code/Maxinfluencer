@@ -16,10 +16,10 @@ process.env.TT_LITE_MAX_VIDEOS = process.env.TT_LITE_MAX_VIDEOS || "50";
 process.env.TT_LITE_ALLOW_NAV = "0";
 
 const keyword = process.argv[2] || "AI design tool demo";
-const maxCount = Math.min(Math.max(Number(process.argv[3] || 10), 1), 20);
+const maxCount = Math.min(Math.max(Number(process.argv[3] || 10), 1), 300);
 const concurrency = Math.max(
   1,
-  Math.min(Number(process.env.LITE_TT_ENRICH_CONCURRENCY || 10), 10)
+  Math.min(Number(process.env.LITE_TT_ENRICH_CONCURRENCY || 10), 150)
 );
 const searchEndpoint =
   process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";

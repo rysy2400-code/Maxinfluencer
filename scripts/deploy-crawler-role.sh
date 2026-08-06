@@ -19,7 +19,29 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 KEY="${CRAWLER_SSH_KEY_PATH:-$HOME/.ssh/maxin_web_vm}"
 USER="${CRAWLER_SSH_USER:-administrator}"
 PORT="${CRAWLER_SSH_PORT:-22}"
-TARGET_SHA="${TARGET_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
+
+REGISTRY_OUTPUT="$(node "$SCRIPT_DIR/list-crawler-deploy-targets.mjs" "$ROLE")"
+REGISTRY_RELEASE="$(printf '%s\n' "$REGISTRY_OUTPUT" | sed -n 's/^CRAWLER_RELEASE=//p' | head -1)"
+if [[ ! "$REGISTRY_RELEASE" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "No active production release returned for $ROLE" >&2
+  exit 1
+fi
+
+if [[ -n "${TARGET_SHA:-}" ]]; then
+  if [[ ! "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Invalid TARGET_SHA: $TARGET_SHA" >&2
+    exit 2
+  fi
+  target_sha_lc="$(printf '%s' "$TARGET_SHA" | tr '[:upper:]' '[:lower:]')"
+  registry_release_lc="$(printf '%s' "$REGISTRY_RELEASE" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$target_sha_lc" != "$registry_release_lc" && "${ALLOW_NON_REGISTRY_TARGET_SHA:-}" != "1" ]]; then
+    echo "Refusing to deploy non-active $ROLE release: TARGET_SHA=$TARGET_SHA active=$REGISTRY_RELEASE" >&2
+    echo "Set ALLOW_NON_REGISTRY_TARGET_SHA=1 only for an explicit emergency rollback/test." >&2
+    exit 1
+  fi
+else
+  TARGET_SHA="$REGISTRY_RELEASE"
+fi
 
 if [[ ! -f "$KEY" ]]; then
   echo "SSH key not found: $KEY" >&2
@@ -101,10 +123,14 @@ if (\$role -eq "youtube") {
     '\$env:YT_LITE_TAB_POOL_SIZE = "3"',
     '\$env:LITE_YT_ENRICH_CONCURRENCY = "150"',
     '\$env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"',
-    '\$env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"'
+    '\$env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"',
+    '\$env:YT_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"'
   )) {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing YouTube guard env: \$needle" }
   }
+  \$gateModule = ([System.Uri](Join-Path \$root "lib\\tools\\influencer-functions\\youtube\\extract-youtube-channel-lite.js")).AbsoluteUri
+  & node --experimental-default-type=module -e "import(process.argv[1]).then(m=>{if(!m.isYoutubeLiteEmailGateEnabled(undefined)||m.isYoutubeLiteEmailGateEnabled('0'))process.exit(1)})" \$gateModule
+  if (\$LASTEXITCODE -ne 0) { throw "YouTube email gate fail-closed self-check failed" }
   \$pages = Get-CdpPages 9222
   \$ytTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "youtube\\.com" }).Count
   \$wrongTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "(instagram|tiktok)\\.com" }).Count
@@ -117,15 +143,19 @@ if (\$role -eq "youtube") {
   Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount platforms=tiktok"
 } elseif (\$role -eq "instagram") {
   if (-not \$ok9222) { throw "Instagram role requires CDP 9222" }
-  if (\$ok9223) { throw "Instagram role must not expose CDP 9223" }
+  if (-not \$ok9223) { throw "Instagram role requires CDP 9223 for lite enrich canary" }
   \$pages = Get-CdpPages 9222
+  \$pages9223 = Get-CdpPages 9223
   \$igTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "instagram\\.com" }).Count
+  \$igTabs9223 = @(\$pages9223 | Where-Object { \$_.type -eq "page" -and \$_.url -match "instagram\\.com" }).Count
   foreach (\$needle in @(
     '\$env:SEARCH_WORKER_SLOTS = "1"',
-    '\$env:IG_LITE_TAB_POOL_SIZE = "1"',
-    '\$env:LITE_IG_ENRICH_CONCURRENCY = "1"',
-    '\$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "1"',
-    '\$env:LITE_IG_ENRICH_HARD_MAX = "1"',
+    '\$env:IG_LITE_ENRICH_CDP_ENDPOINTS = "http://127.0.0.1:9222,http://127.0.0.1:9223"',
+    '\$env:IG_LITE_TAB_POOL_SIZE = "2"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY = "2"',
+    '\$env:LITE_IG_ENRICH_CONCURRENCY_MAX = "2"',
+    '\$env:LITE_IG_ENRICH_HARD_MAX = "2"',
+    '\$env:IG_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"',
     '\$env:CDP_RPC_TIMEOUTS_BEFORE_RESTART = "3"',
     '\$env:IG_LITE_EVALUATE_CONCURRENCY = "1"',
     '\$env:IG_REQUEST_DELAY_MIN_MS = "1000"',
@@ -138,7 +168,8 @@ if (\$role -eq "youtube") {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing Instagram guard env: \$needle" }
   }
   if (\$igTabs -ne 1) { throw "Instagram role expected exactly 1 Instagram tab, got \$igTabs" }
-  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs=\$igTabs platforms=instagram taskSlots=1 enrich=1 evaluate=1 about=1 requestDelay=1000-3000ms"
+  if (\$igTabs9223 -lt 1) { throw "Instagram role expected at least 1 Instagram tab on 9223, got \$igTabs9223" }
+  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs9222=\$igTabs igTabs9223=\$igTabs9223 platforms=instagram taskSlots=1 enrich=2 endpoints=9222,9223 emailGate=1 evaluate=1 about=1 requestDelay=1000-3000ms"
 }
 PS
 }
@@ -159,7 +190,7 @@ deploy_one() {
   fi
   local log="/tmp/deploy-${ROLE}-crawler-${host}.log"
   local tmp_script
-  tmp_script="$(mktemp "/tmp/deploy-${ROLE}-${host}.XXXXXX.ps1")"
+  tmp_script="$(mktemp "/tmp/deploy-${ROLE}-${host}.XXXXXX")"
   build_remote_ps "$ROLE" "$TARGET_SHA" "$host" "$machine_key" >"$tmp_script"
   echo "[deploy-$ROLE] starting $host sha=$TARGET_SHA"
   if ssh -i "$KEY" -p "$PORT" \

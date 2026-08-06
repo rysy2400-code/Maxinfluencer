@@ -194,28 +194,19 @@ async function sendOrDraftAgentEmail({
     return { drafted: true, fromEmail, result: null, sendErr: null };
   }
 
-  const delivery = await sendOrDraftAgentEmail({
-    influencerId: platformInfluencerId,
-    campaignId,
-    fromAccount,
-    toEmail,
-    subject,
-    bodyText,
-    headers,
-    sourceType: "ask_influencer_special_request",
-    sourceEventId: eventRow.id,
-    triggerType: "ask_influencer_special_request",
-    traceId,
-    emailPayload: { inReplyTo: payload.inReplyTo || null },
-    payload: {
-      specialRequest: {
-        specialRequestId,
-        specialRequestStatus,
-      },
-    },
-  });
-  if (delivery.drafted) return;
-  const { result, sendErr, fromEmail } = delivery;
+  let result = null;
+  let sendErr = null;
+  try {
+    result = await sendMail({
+      fromAccount,
+      to: toEmail,
+      subject,
+      text: bodyText,
+      headers,
+    });
+  } catch (err) {
+    sendErr = err;
+  }
   return { drafted: false, fromEmail, result, sendErr };
 }
 
