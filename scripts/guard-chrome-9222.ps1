@@ -6,6 +6,18 @@ if (-not $chrome) {
   $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 }
 
+$nodeExe = if (Test-Path "C:\Program Files\nodejs\node.exe") {
+  "C:\Program Files\nodejs\node.exe"
+} elseif (Test-Path "C:\Program Files (x86)\nodejs\node.exe") {
+  "C:\Program Files (x86)\nodejs\node.exe"
+} else {
+  "node"
+}
+$cdpRpcProbeScript = Join-Path $PSScriptRoot "probe-cdp-rpc.mjs"
+$rpcFailStreak = 0
+$lastRpcProbeAt = $null
+$rpcProbeIntervalSec = 30
+
 $chromeDir = if ($env:CHROME_9222_USER_DATA_DIR) { $env:CHROME_9222_USER_DATA_DIR } else { "C:\maxinfluencer\.chrome-cdp-9222" }
 $signalFile = if ($env:CDP_RESTART_SIGNAL_FILE) { $env:CDP_RESTART_SIGNAL_FILE } else { "C:\maxinfluencer\signals\restart-chrome-9222.flag" }
 $signalDir = Split-Path $signalFile -Parent
@@ -26,6 +38,8 @@ if ($launchUrls.Count -eq 0) { $launchUrls = @("about:blank") }
 $proxyServer = if ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
 $chromeArgList = @(
   "--disable-quic",
+  "--disable-extensions",
+  "--disable-component-extensions-with-background-pages",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9222",
   "--user-data-dir=$chromeDir",
@@ -169,6 +183,27 @@ while ($true) {
 
   if (Test-Cdp9222Healthy) {
     $unhealthySince = $null
+    # 活性判定：HTTP /json/version 可用并不能证明 browser WebSocket 可用，
+    # 周期性做一次真实 RPC 探测，连续失败 3 次则重启 Chrome。
+    if (-not $lastRpcProbeAt -or (((Get-Date) - $lastRpcProbeAt).TotalSeconds -ge $rpcProbeIntervalSec)) {
+      $lastRpcProbeAt = Get-Date
+      & $nodeExe --experimental-default-type=module $cdpRpcProbeScript "http://127.0.0.1:9222" 5000 | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+        $rpcFailStreak = 0
+      } else {
+        $rpcFailStreak += 1
+        if ($rpcFailStreak -ge 3) {
+          Write-Host "[guard-chrome-9222] CDP RPC failed x$rpcFailStreak; restarting Chrome"
+          $rpcFailStreak = 0
+          $unhealthySince = $null
+          Stop-Chrome9222
+          Start-Sleep -Seconds 2
+          Start-Chrome9222
+          Start-Sleep -Seconds 10
+          continue
+        }
+      }
+    }
     if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
       if ($launchUrls.Count -eq 1) {
         Ensure-SingleLaunchUrlTab
