@@ -29,10 +29,14 @@ await queryTikTok(
      outreach_message_id = VALUES(outreach_message_id),
      sender_email = VALUES(sender_email), sender_domain = VALUES(sender_domain),
      recipient_email = COALESCE(VALUES(recipient_email), email_outreach_delivery_fact.recipient_email),
-     sent_at = LEAST(email_outreach_delivery_fact.sent_at, VALUES(sent_at))`
+     sent_at = VALUES(sent_at)`
 );
 
 console.log("[email-ops] 批量建立入站审计（历史数据量较大）");
+await queryTikTok(
+  `UPDATE email_inbound_attribution_audit
+   SET attribution_status = 'unattributed', outreach_fact_id = NULL, match_method = NULL`
+);
 await queryTikTok(
   `INSERT INTO email_inbound_attribution_audit (
      inbound_message_id, recipient_email, sender_email, received_at,
@@ -54,7 +58,8 @@ await queryTikTok(
      AND TRIM(m.message_id) <> ''
    ON DUPLICATE KEY UPDATE
      recipient_email = VALUES(recipient_email), sender_email = VALUES(sender_email),
-     received_at = VALUES(received_at), inbound_type = VALUES(inbound_type)`
+     received_at = VALUES(received_at), inbound_type = VALUES(inbound_type),
+     attribution_status = 'unattributed', outreach_fact_id = NULL, match_method = NULL`
 );
 
 console.log("[email-ops] 按 In-Reply-To 精确归因");
@@ -67,10 +72,17 @@ await queryTikTok(
      ON f.outreach_message_id = LOWER(REPLACE(REPLACE(TRIM(e.in_reply_to), '<', ''), '>', ''))
    SET a.attribution_status = 'matched', a.outreach_fact_id = f.id,
        a.match_method = 'in_reply_to'
-   WHERE e.in_reply_to IS NOT NULL AND TRIM(e.in_reply_to) <> ''`
+   WHERE e.in_reply_to IS NOT NULL AND TRIM(e.in_reply_to) <> ''
+     AND f.sent_at <= a.received_at`
 );
 
 console.log("[email-ops] 回填每封首邀的首次回复与退信");
+await queryTikTok(
+  `UPDATE email_outreach_delivery_fact
+   SET first_reply_message_id = NULL, first_reply_at = NULL,
+       bounce_message_id = NULL, bounce_at = NULL,
+       match_method = NULL, match_confidence = NULL`
+);
 await queryTikTok(
   `UPDATE email_outreach_delivery_fact f
    INNER JOIN (

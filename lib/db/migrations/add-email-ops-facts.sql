@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS email_outreach_delivery_fact (
   sender_email VARCHAR(255) NOT NULL,
   sender_domain VARCHAR(255) NOT NULL,
   recipient_email VARCHAR(255) NULL,
-  sent_at TIMESTAMP NOT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   first_reply_message_id VARCHAR(255) NULL,
   first_reply_at TIMESTAMP NULL,
   bounce_message_id VARCHAR(255) NULL,
@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS email_outreach_delivery_fact (
   INDEX idx_bounce_at (bounce_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='首邀投递与首次回复事实表';
+
+-- Prevent reply/bounce updates from changing the original outreach time.
+ALTER TABLE email_outreach_delivery_fact
+  MODIFY COLUMN sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS email_inbound_attribution_audit (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,

@@ -10,16 +10,20 @@ ENRICH_BATCH="${3:-10}"
 
 export SCRAPER_MODE=lite
 export TT_LITE_ALLOW_NAV=0
+export TT_LITE_SEARCH_ALLOW_NAV=0
+export TT_LITE_ENRICH_ALLOW_NAV=0
+export TT_LITE_STRICT_API_ONLY_NO_GOTO=1
 export TT_LITE_COUNTRY_DISABLE_NAV=1
 export TT_LITE_COUNTRY_VIDEO_INFO=0
 export TT_LITE_COUNTRY_HTML_FIRST=1
 export TT_LITE_COUNTRY_CONCURRENCY=10
 export TT_LITE_COUNTRY_API_ONLY=1
 export TT_LITE_COUNTRY_PROBE_DELAY_MS=800
-export TT_LITE_COUNTRY_VIDEO_INFO_CHAIN=1
+export TT_LITE_COUNTRY_VIDEO_INFO_CHAIN=0
 export TT_LITE_UNIVERSAL_MAX_WAIT_MS=18000
 export TT_LITE_MAX_VIDEOS=50
 export LITE_TT_ENRICH_CONCURRENCY=10
+export TT_LITE_TAB_POOL_SIZE=1
 export CDP_ENDPOINT="${CDP_ENDPOINT:-http://127.0.0.1:9222}"
 export CDP_ENDPOINT_ENRICH="${CDP_ENDPOINT_ENRICH:-http://127.0.0.1:9223}"
 
@@ -49,8 +53,8 @@ echo "[fullchain] keyword=\"${KEYWORD}\" country=${COUNTRY_BATCH}@c10 enrich=${E
 echo "  9222=${CDP_ENDPOINT} 9223=${CDP_ENDPOINT_ENRICH}"
 echo "================================================================"
 
-trim_port 9222 2
-trim_port 9223 3
+trim_port 9222 1
+trim_port 9223 1
 
 T0=$(date +%s)
 
@@ -63,8 +67,8 @@ COUNTRY_EXIT=$?
 T2=$(date +%s)
 echo "[fullchain] phase1 exit=${COUNTRY_EXIT} elapsed=$((T2-T1))s"
 
-trim_port 9222 3
-trim_port 9223 3
+trim_port 9222 1
+trim_port 9223 1
 
 echo ""
 echo "=== Phase 2: enrich + LLM (batch=${ENRICH_BATCH}, c=10) ==="

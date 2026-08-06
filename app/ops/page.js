@@ -78,6 +78,26 @@ function StatusBadge({ level }) {
   );
 }
 
+function EndpointHealthList({ endpoints = [] }) {
+  const items = Array.isArray(endpoints) ? endpoints : [];
+  if (!items.length) return null;
+  return (
+    <div style={{ marginTop: 5, display: "grid", gap: 3, minWidth: 150 }}>
+      {items.slice(0, 5).map((item) => {
+        const label = String(item.endpoint || "").replace(/^https?:\/\/127\.0\.0\.1:/, "");
+        const ok = !!item.ok;
+        return (
+          <div key={item.endpoint || label} style={{ fontSize: 11, lineHeight: 1.35, color: ok ? COLORS.normal : COLORS.fault }}>
+            <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{label || "-"}</span>
+            <span> {ok ? "可用" : "异常"}</span>
+            {item.publicIp ? <span style={{ color: COLORS.muted }}> · {item.publicIp}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MetricWindow({ value }) {
   const metric = value || {};
   return (
@@ -205,6 +225,7 @@ function ActionDialog({ target, onClose, onDone }) {
   const [error, setError] = useState("");
   if (!target) return null;
   const actionLabel = ACTIONS.find((item) => item.key === target.action)?.label || target.action;
+  const reasonInputId = "crawler-action-reason";
 
   async function submit() {
     setSubmitting(true);
@@ -234,8 +255,8 @@ function ActionDialog({ target, onClose, onDone }) {
           {target.machine.displayName || target.machine.ip} · {PLATFORM_LABELS[target.machine.platform]}
           {target.action === "redeploy" ? ` · ${shortSha(target.machine.activeRelease?.sha)}` : ""}
         </div>
-        <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 5 }}>操作原因</label>
-        <textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={4} style={{ ...inputStyle, width: "100%", resize: "vertical" }} autoFocus />
+        <label htmlFor={reasonInputId} style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 5 }}>操作原因</label>
+        <textarea id={reasonInputId} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={4} style={{ ...inputStyle, width: "100%", resize: "vertical" }} autoFocus />
         {error ? <div style={{ color: COLORS.fault, fontSize: 12, marginTop: 8 }}>{error}</div> : null}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
           <button type="button" disabled={submitting} onClick={onClose} style={secondaryButtonStyle}>取消</button>
@@ -448,6 +469,7 @@ export default function CrawlerOpsPage() {
                   <td style={tdStyle}>
                     <div style={{ color: health.workerAlive ? COLORS.normal : COLORS.fault }}>Worker {health.workerAlive ? "在线" : "异常"}</div>
                     <div style={{ color: health.cdpRpcOk ? COLORS.normal : health.cdpRpcOk === false ? COLORS.fault : COLORS.muted }}>CDP RPC {health.cdpRpcOk ? "正常" : health.cdpRpcOk === false ? "异常" : "未知"}</div>
+                    {machine.platform === "tiktok" ? <EndpointHealthList endpoints={health.tiktokEndpointHealth} /> : null}
                     <div style={{ color: COLORS.muted }}>心跳 {formatTime(health.lastSeenAt)}</div>
                   </td>
                   <td style={tdStyle}><MetricWindow value={operational.tenMinutes} /></td>
@@ -493,6 +515,7 @@ export default function CrawlerOpsPage() {
                 </div>
                 <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${COLORS.border}`, color: COLORS.secondary, lineHeight: 1.55 }}>
                   CDP RPC {machine.health?.cdpRpcOk ? "正常" : machine.health?.cdpRpcOk === false ? "异常" : "未知"} · pending {machine.queue?.pending || 0}<br />
+                  {machine.platform === "tiktok" ? <EndpointHealthList endpoints={machine.health?.tiktokEndpointHealth} /> : null}
                   最后成功 {formatTime(operational.lastSuccessAt)} · release {shortSha(machine.activeRelease?.sha)}
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
