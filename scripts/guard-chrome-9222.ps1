@@ -1,4 +1,4 @@
-# Guard Chrome 9222 CDP：进程守护 + 响应 worker 重启信号
+# Guard Chrome 9222 CDP: process watchdog + responds to worker restart signal
 $ErrorActionPreference = "SilentlyContinue"
 
 $chrome = $env:CHROME_EXE
@@ -118,8 +118,8 @@ while ($true) {
       continue
     }
     try { Remove-Item $signalFile -Force -ErrorAction SilentlyContinue } catch {}
-    # 该信号只会在真实 CDP WebSocket/RPC 连续连接失败后产生。
-    # /json/version 可用不能证明 browser WebSocket 可用，因此必须重启。
+    # Signal is only produced after real CDP WebSocket/RPC consecutive failures.
+     # /json/version being up does not prove the browser WebSocket works; restart is required.
     $unhealthySince = $null
     Stop-Chrome9222
     Start-Sleep -Seconds 2
@@ -130,8 +130,8 @@ while ($true) {
 
   if (Test-Cdp9222Healthy) {
     $unhealthySince = $null
-    # 活性判定：HTTP /json/version 可用并不能证明 browser WebSocket 可用，
-    # 周期性做一次真实 RPC 探测，连续失败 3 次则重启 Chrome。
+    # Aliveness: HTTP /json/version being up does not prove the browser WebSocket works, so
+     # probe the real RPC periodically and restart Chrome after 3 consecutive failures.
     if (-not $lastRpcProbeAt -or (((Get-Date) - $lastRpcProbeAt).TotalSeconds -ge $rpcProbeIntervalSec)) {
       $lastRpcProbeAt = Get-Date
       & $nodeExe --experimental-default-type=module $cdpRpcProbeScript "http://127.0.0.1:9222" 5000 | Out-Null
@@ -172,7 +172,7 @@ while ($true) {
       Start-Chrome9222
       Start-Sleep -Seconds 10
     } elseif ($lastStartAt -and (((Get-Date) - $lastStartAt).TotalSeconds -lt $startGraceSec)) {
-      # 启动宽限期内不因 CDP 未就绪而强杀
+      # within start grace period, do not force-kill because CDP is not ready
     } elseif (-not $unhealthySince) {
       $unhealthySince = Get-Date
     } elseif (((Get-Date) - $unhealthySince).TotalSeconds -ge 120) {
