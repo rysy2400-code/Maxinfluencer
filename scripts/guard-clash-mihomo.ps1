@@ -52,7 +52,7 @@ function Stop-VergeGui {
 
 function Stop-WrongMihomo {
   Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch [regex]::Escape($CrawlerConfig)
+    $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch [regex]::Escape($CrawlerConfig) -and $_.CommandLine -notmatch "crawler-clash-enrich-"
   } | ForEach-Object {
     try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
   }

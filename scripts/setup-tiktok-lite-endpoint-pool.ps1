@@ -1,6 +1,6 @@
 param(
   [string]$ProjectRoot = $(if ($env:MAXINFLUENCER_ROOT) { $env:MAXINFLUENCER_ROOT } else { "C:\maxinfluencer" }),
-  [string]$EndpointMap = $(if ($env:TT_LITE_ENDPOINT_POOL_MAP) { $env:TT_LITE_ENDPOINT_POOL_MAP } else { "9223:7898:9108:f533f9b2-c69a-4dd0-bc63-f2ab94dd-15005,9224:7899:9109:f533f9b2-c69a-4dd0-bc63-f2ab94dd-15003,9225:7900:9110:f533f9b2-c69a-4dd0-bc63-f2ab94dd-15002" }),
+  [string]$EndpointMap = $(if ($env:TT_LITE_ENDPOINT_POOL_MAP) { $env:TT_LITE_ENDPOINT_POOL_MAP } else { "" }),
   [string]$ChromeVisible = $(if ($env:CHROME_VISIBLE) { $env:CHROME_VISIBLE } else { "1" }),
   [switch]$SkipProbe
 )
@@ -54,6 +54,20 @@ function Set-EnvLine([string]$Path, [string]$Key, [string]$Value) {
   }
   if (-not $found) { $out.Add("$Key=$Value") }
   Set-Content -LiteralPath $Path -Value $out -Encoding UTF8
+}
+
+function Resolve-DefaultEndpointMap {
+  # 订阅节点名会随供应商轮换变化；默认不再写死，而是从当前 base 配置的 proxies 段取前 3 个节点。
+  $content = Get-Content -Raw -LiteralPath $BaseConfig
+  $proxiesSection = [regex]::Match($content, "(?ms)^proxies:\s*(.*?)^proxy-groups:").Groups[1].Value
+  $names = @(
+    [regex]::Matches($proxiesSection, '(?m)^\s*-\s*name:\s*"([^"]+)"') |
+      ForEach-Object { $_.Groups[1].Value }
+  )
+  if ($names.Count -lt 3) {
+    throw "base config $BaseConfig has fewer than 3 proxies (got $($names.Count)); cannot build endpoint pool"
+  }
+  return "9223:7898:9108:$($names[0]),9224:7899:9109:$($names[1]),9225:7900:9110:$($names[2])"
 }
 
 function Resolve-Mappings {
@@ -223,6 +237,12 @@ Ensure-Dir $SignalsDir
 if (-not (Test-Path -LiteralPath $BaseConfig)) { throw "missing base config $BaseConfig" }
 if (-not (Test-Path -LiteralPath $MihomoExe)) { throw "missing mihomo $MihomoExe" }
 if (-not (Test-Path -LiteralPath $ChromeExe)) { throw "missing chrome $ChromeExe" }
+
+if ([string]::IsNullOrWhiteSpace($EndpointMap)) {
+  $EndpointMap = Resolve-DefaultEndpointMap
+  Write-Host "[tt-lite-pool] derived EndpointMap from base config: $EndpointMap"
+  Set-EnvLine (Join-Path $Root ".env.local") "TT_LITE_ENDPOINT_POOL_MAP" $EndpointMap
+}
 
 $Mappings = @(Resolve-Mappings)
 Patch-MainClashGuard

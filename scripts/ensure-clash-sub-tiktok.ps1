@@ -305,13 +305,17 @@ Get-CimInstance Win32_Process | Where-Object {
 }
 
 Get-CimInstance Win32_Process | Where-Object {
-  $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch [regex]::Escape($configPath)
+  $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch [regex]::Escape($configPath) -and $_.CommandLine -notmatch "crawler-clash-enrich-"
 } | ForEach-Object {
   try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
 }
 Start-Sleep -Seconds 1
 
-Get-Process verge-mihomo -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -eq "verge-mihomo.exe" -and $_.CommandLine -and $_.CommandLine -notmatch "crawler-clash-enrich-"
+} | ForEach-Object {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
 Start-Sleep -Seconds 2
 
 Start-Process -FilePath $MihomoExe -ArgumentList @("-f", $configPath, "-d", $mihomoDataDir) -WindowStyle Hidden
