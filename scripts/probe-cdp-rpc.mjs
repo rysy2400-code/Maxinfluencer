@@ -4,7 +4,17 @@ const endpoint = String(process.argv[2] || "http://127.0.0.1:9222").replace(/\/$
 const timeoutMs = Math.max(1000, Number(process.argv[3] || 8000));
 
 async function probe() {
-  if (typeof WebSocket !== "function") throw new Error("WebSocket API unavailable");
+  if (typeof WebSocket !== "function") {
+    // Node <22 无全局 WebSocket：退化为 HTTP /json/version 健康检查，避免 guard 误判 RPC 故障而循环重启 Chrome。
+    console.log("[cdp-rpc-probe] skip: WebSocket API unavailable (Node <22), using HTTP health check only");
+    const response = await fetch(`${endpoint}/json/version`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`CDP HTTP ${response.status}`);
+    const version = await response.json();
+    if (!version?.webSocketDebuggerUrl) throw new Error("CDP websocket URL missing");
+    return;
+  }
   const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`CDP HTTP ${response.status}`);
   const version = await response.json();
