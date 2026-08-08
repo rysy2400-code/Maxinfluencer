@@ -75,8 +75,8 @@ const hbSrc = fs.readFileSync(
   "utf8"
 );
 assert(
-  hbSrc.includes("pending/processing") && hbSrc.includes("跳过本轮关键词规划"),
-  "heartbeat 队列守卫 A 缺失"
+  hbSrc.includes("pending/processing") && hbSrc.includes("跳过该平台关键词规划"),
+  "heartbeat 队列守卫 A 缺失（应存在平台级 pending/processing 守卫）"
 );
 assert(
   !hbSrc.includes("plans.slice(0, 1)") || hbSrc.includes("for (const plan of plans)"),
