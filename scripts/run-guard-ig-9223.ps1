@@ -4,6 +4,11 @@ $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 $profile = "C:\maxinfluencer\.chrome-cdp-9223"
 $port = 9223
 $launchUrl = "https://www.instagram.com/"
+$proxyServer = "direct://"
+if (Test-Path "C:\maxinfluencer\.env.local") {
+  $proxyLine = Get-Content "C:\maxinfluencer\.env.local" | Where-Object { $_ -match "^IG_CHROME_PROXY_SERVER=" } | Select-Object -First 1
+  if ($proxyLine) { $proxyServer = ($proxyLine -split "=", 2)[1].Trim() }
+}
 
 function Test-Cdp {
   try {
@@ -22,7 +27,7 @@ function Start-IgChrome {
     "--user-data-dir=$profile",
     "--no-first-run",
     "--no-default-browser-check",
-    "--proxy-server=direct://",
+    "--proxy-server=$proxyServer",
     $launchUrl
   )
   Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
