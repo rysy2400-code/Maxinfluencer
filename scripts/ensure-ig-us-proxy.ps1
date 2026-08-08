@@ -174,7 +174,7 @@ foreach ($n in $us) {
     servername: "$($n.sni)"
     client-fingerprint: $($n.fp)
     flow: $($n.flow)
-    $tlsLine
+$tlsLine
 $reality
 "@)
   } else {
