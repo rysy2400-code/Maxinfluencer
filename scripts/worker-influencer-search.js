@@ -966,6 +966,36 @@ async function reclaimStuckProcessingTasks() {
   return Number(rows?.affectedRows || 0);
 }
 
+/**
+ * 清理 IG 端口上残留的 about:blank 标签（任务标签页以 about:blank 创建，
+ * 任务异常中止时会遗留；任务开始前清理最安全，不影响正在使用的常驻页）。
+ * @param {string} endpoint
+ */
+async function cleanupIgBlankTabs(endpoint) {
+  try {
+    const base = String(endpoint || "").replace(/\/+$/, "");
+    const res = await fetch(`${base}/json/list`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return;
+    const tabs = await res.json();
+    for (const t of tabs || []) {
+      if (t.type === "page" && String(t.url || "") === "about:blank") {
+        await fetch(`${base}/json/close/${encodeURIComponent(t.id)}`, {
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {});
+        console.log(
+          `[worker-influencer-search][instagram] 已清理多余 about:blank 标签 ${t.id}（${base}）`
+        );
+      }
+    }
+  } catch (e) {
+    console.warn(
+      `[worker-influencer-search][instagram] 清理 blank 标签失败: ${e?.message || e}`
+    );
+  }
+}
+
 async function platformLoop(platformSlug) {
   const platformWorkerId = workerIdForPlatform(platformSlug);
   const idleSleepMs = Math.max(
@@ -1018,6 +1048,8 @@ async function platformLoop(platformSlug) {
           process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
           process.env.CDP_ENDPOINT = igAccountEndpoint;
           process.env.IG_LITE_TAB_POOL_SIZE = "1";
+          // 任务开始前清理该账户端口上遗留的 about:blank 标签
+          await cleanupIgBlankTabs(igAccountEndpoint);
         } catch (err) {
           console.warn(
             "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
