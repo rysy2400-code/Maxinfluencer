@@ -1045,11 +1045,6 @@ async function platformLoop(platformSlug) {
             await sleep(getIgAccountCooldownPollMs());
             continue;
           }
-          process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
-          process.env.CDP_ENDPOINT = igAccountEndpoint;
-          process.env.IG_LITE_TAB_POOL_SIZE = "1";
-          // 任务开始前清理该账户端口上遗留的 about:blank 标签
-          await cleanupIgBlankTabs(igAccountEndpoint);
         } catch (err) {
           console.warn(
             "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
@@ -1069,13 +1064,20 @@ async function platformLoop(platformSlug) {
 
       if (platformSlug === "instagram" && igAccountEndpoint) {
         try {
-          const { resetIgAccountThrottleFlag } = await import(
-            "../lib/ig-account-rotation.js"
-          );
+          const {
+            resetIgAccountThrottleFlag,
+          } = await import("../lib/ig-account-rotation.js");
+          // 只在成功认领任务后推进轮换指针（设置环境变量），
+          // 避免空队列时 idle 轮次导致账户连用/漂移。
+          process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
+          process.env.CDP_ENDPOINT = igAccountEndpoint;
+          process.env.IG_LITE_TAB_POOL_SIZE = "1";
+          // 任务开始前清理该账户端口上遗留的 about:blank 标签
+          await cleanupIgBlankTabs(igAccountEndpoint);
           resetIgAccountThrottleFlag();
-            console.log(
-              `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
-            );
+          console.log(
+            `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
+          );
         } catch (err) {
           console.warn(
             "[worker-influencer-search][instagram] 重置限流标记失败:",
