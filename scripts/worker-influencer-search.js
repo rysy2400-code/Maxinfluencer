@@ -659,6 +659,24 @@ async function processTask(task, platformSlug) {
       } catch {
         /* ignore */
       }
+      // 任务前端点预检：探测 9222 base + 9223/9224/9225 enrich 代理，
+      // 发现死节点自动触发重建（重建逻辑带冷却），然后继续执行任务。
+      if (String(process.env.TT_ENDPOINT_PREFLIGHT ?? "1").trim() !== "0") {
+        try {
+          const { preflightTikTokEndpoints } = await import(
+            "../lib/ops/tiktok-endpoint-pool.js"
+          );
+          const pf = await preflightTikTokEndpoints({ timeoutMs: 25000 });
+          console.log(
+            `[worker-influencer-search] tiktok endpoint preflight ok=${pf.ok} ` +
+              JSON.stringify(pf.results)
+          );
+        } catch (e) {
+          console.warn(
+            `[worker-influencer-search] tiktok endpoint preflight error: ${e.message}`
+          );
+        }
+      }
     }
     const primaryKeyword =
       taskKeyword ||
