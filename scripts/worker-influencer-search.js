@@ -999,6 +999,34 @@ async function platformLoop(platformSlug) {
         continue;
       }
 
+      // IG 多账户轮换：每任务选一个非冷却账户（遇限流已标记冷却的账户会被跳过）
+      let igAccountEndpoint = null;
+      if (platformSlug === "instagram") {
+        try {
+          const { pickNextIgAccount } = await import(
+            "../lib/ig-account-rotation.js"
+          );
+          igAccountEndpoint = pickNextIgAccount(
+            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
+              process.env.CDP_ENDPOINT ||
+              null
+          );
+          if (igAccountEndpoint) {
+            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
+            process.env.CDP_ENDPOINT = igAccountEndpoint;
+            process.env.IG_LITE_TAB_POOL_SIZE = "1";
+            console.log(
+              `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
+            err?.message || err
+          );
+        }
+      }
+
       await runInCdpLoop(
         { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
         () => processTask(task, platformSlug)
