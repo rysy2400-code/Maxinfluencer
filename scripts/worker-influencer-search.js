@@ -990,6 +990,42 @@ async function platformLoop(platformSlug) {
         }
       }
 
+      // IG 多账户轮换：每任务选一个非冷却账户（遇限流已标记冷却的账户会被跳过）
+      let igAccountEndpoint = null;
+      if (platformSlug === "instagram") {
+        try {
+          const {
+            pickNextIgAccount,
+            getIgAccountCooldownPollMs,
+          } = await import(
+            "../lib/ig-account-rotation.js"
+          );
+          igAccountEndpoint = pickNextIgAccount(
+            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
+              process.env.CDP_ENDPOINT ||
+              null
+          );
+          if (!igAccountEndpoint) {
+            // 全部 IG 账户都在限流冷却：休息轮询，不认领任务
+            console.warn(
+              `[worker-influencer-search][instagram] 全部 IG 账户限流冷却中，休息 ${Math.round(
+                getIgAccountCooldownPollMs() / 1000
+              )}s 后重试`
+            );
+            await sleep(getIgAccountCooldownPollMs());
+            continue;
+          }
+          process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
+          process.env.CDP_ENDPOINT = igAccountEndpoint;
+          process.env.IG_LITE_TAB_POOL_SIZE = "1";
+        } catch (err) {
+          console.warn(
+            "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
+            err?.message || err
+          );
+        }
+      }
+
       const task = await claimOnePendingTaskForPlatform(
         platformSlug,
         platformWorkerId
@@ -999,29 +1035,18 @@ async function platformLoop(platformSlug) {
         continue;
       }
 
-      // IG 多账户轮换：每任务选一个非冷却账户（遇限流已标记冷却的账户会被跳过）
-      let igAccountEndpoint = null;
-      if (platformSlug === "instagram") {
+      if (platformSlug === "instagram" && igAccountEndpoint) {
         try {
-          const { pickNextIgAccount } = await import(
+          const { resetIgAccountThrottleFlag } = await import(
             "../lib/ig-account-rotation.js"
           );
-          igAccountEndpoint = pickNextIgAccount(
-            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
-              process.env.CDP_ENDPOINT ||
-              null
-          );
-          if (igAccountEndpoint) {
-            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
-            process.env.CDP_ENDPOINT = igAccountEndpoint;
-            process.env.IG_LITE_TAB_POOL_SIZE = "1";
+          resetIgAccountThrottleFlag();
             console.log(
               `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
             );
-          }
         } catch (err) {
           console.warn(
-            "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
+            "[worker-influencer-search][instagram] 重置限流标记失败:",
             err?.message || err
           );
         }
