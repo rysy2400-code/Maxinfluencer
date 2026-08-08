@@ -7,7 +7,10 @@ $port = 9222
 $launchUrl = "https://www.instagram.com/"
 $proxyServer = "direct://"
 if (Test-Path "C:\maxinfluencer\.env.local") {
-  $proxyLine = Get-Content "C:\maxinfluencer\.env.local" | Where-Object { $_ -match "^IG_CHROME_PROXY_SERVER=" } | Select-Object -First 1
+  $proxyLine = Get-Content "C:\maxinfluencer\.env.local" | Where-Object { $_ -match "^IG_CHROME_PROXY_SERVER_$port=" } | Select-Object -First 1
+  if (-not $proxyLine) {
+    $proxyLine = Get-Content "C:\maxinfluencer\.env.local" | Where-Object { $_ -match "^IG_CHROME_PROXY_SERVER=" } | Select-Object -First 1
+  }
   if ($proxyLine) { $proxyServer = ($proxyLine -split "=", 2)[1].Trim() }
 }
 
