@@ -5,6 +5,7 @@ $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 $profile = "C:\maxinfluencer\.chrome-cdp-9222"
 $port = 9222
 $launchUrl = "https://www.instagram.com/"
+$signalFile = "C:\maxinfluencer\signals\restart-chrome-$port.flag"
 $proxyServer = "direct://"
 if (Test-Path "C:\maxinfluencer\.env.local") {
   $proxyLine = Get-Content "C:\maxinfluencer\.env.local" | Where-Object { $_ -match "^IG_CHROME_PROXY_SERVER_$port=" } | Select-Object -First 1
@@ -54,6 +55,14 @@ Log "started chrome, takeover done"
 
 while ($true) {
   try {
+    if (Test-Path $signalFile) {
+      Log "restart signal received, restarting chrome"
+      Kill-ProfileChrome
+      Remove-Item $signalFile -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+      Start-IgChrome
+      Start-Sleep -Seconds 10
+    }
     if (-not (Test-Cdp)) {
       Log "CDP down, restarting chrome"
       Kill-ProfileChrome
