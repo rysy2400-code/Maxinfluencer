@@ -1,3 +1,13 @@
+{
+	# 直接访问 https://IP 时浏览器不发送 SNI，这里指定默认 SNI 为 IP，
+	# 使无 SNI 的 TLS 连接也能匹配到 IP 的内置证书并完成跳转
+	default_sni 152.32.185.48
+	log {
+		output file C:\caddy\caddy.log
+		level INFO
+	}
+}
+
 # maxinai.xyz 反向代理配置（Caddy 自动申请/续期 HTTPS 证书）
 #
 # 前置条件：
