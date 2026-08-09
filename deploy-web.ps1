@@ -117,13 +117,13 @@ function Invoke-GitPullMain {
     return
   }
   Write-Host "[deploy-web] Fetch + pull main..."
-  # 2>&1 | Out-Null：避免 PowerShell EAP=Stop 把 git 的 stderr（如 "Already on 'main'"）
-  # 当成终止错误；实际成败以退出码为准
-  & $GitExe -C $Root fetch origin 2>&1 | Out-Null
+  # 2>$null：丢弃 git 的 stderr（如 "Already on 'main'"），避免 PowerShell EAP=Stop
+  # 在 PS 5.1 下把原生 stderr 当成终止错误；实际成败以退出码为准。
+  & $GitExe -C $Root fetch origin 2>$null
   if ($LASTEXITCODE -ne 0) { throw "git fetch failed (exit $LASTEXITCODE)" }
-  & $GitExe -C $Root checkout main 2>&1 | Out-Null
+  & $GitExe -C $Root checkout main 2>$null
   if ($LASTEXITCODE -ne 0) { throw "git checkout main failed (exit $LASTEXITCODE)" }
-  & $GitExe -C $Root pull origin main 2>&1 | Out-Null
+  & $GitExe -C $Root pull origin main 2>$null
   if ($LASTEXITCODE -ne 0) { throw "git pull failed (exit $LASTEXITCODE)" }
 }
 
