@@ -1,5 +1,5 @@
 /**
- * 检查 9222 Chrome 上 TikTok / Instagram / YouTube / Affiliate 登录态
+ * 检查 9222 Chrome 上 TikTok / Instagram / YouTube / X / Affiliate 登录态
  * 用法: node scripts/check-platform-login-state.mjs
  */
 import dotenv from "dotenv";
@@ -50,7 +50,7 @@ async function probePage(context, url, loginPatterns, loggedInPatterns = []) {
 const browser = await chromium.connectOverCDP(endpoint, { timeout: 20000 });
 const context = browser.contexts()[0] || (await browser.newContext());
 
-const [tiktok, instagram, youtube, partner] = await Promise.all([
+const [tiktok, instagram, youtube, x, partner] = await Promise.all([
   probePage(
     context,
     "https://www.tiktok.com/",
@@ -71,6 +71,12 @@ const [tiktok, instagram, youtube, partner] = await Promise.all([
   ),
   probePage(
     context,
+    "https://x.com/home",
+    [/i\/flow\/login|account\/access/i],
+    [/x\.com\/(home|explore)/i]
+  ),
+  probePage(
+    context,
     "https://partner.us.tiktokshop.com/affiliate-cmp/creator?market=100",
     [/login|passport|account\/login/i],
     [/affiliate-cmp\/creator/i]
@@ -85,6 +91,7 @@ const report = {
     tiktok: tiktok,
     instagram: instagram,
     youtube: youtube,
+    x: x,
     affiliatePartner: partner,
   },
   affiliateGmvProbe: {
@@ -98,6 +105,7 @@ const report = {
     tiktok.loggedIn &&
     instagram.loggedIn &&
     youtube.loggedIn &&
+    x.loggedIn &&
     partner.loggedIn &&
     affiliate.ok,
 };

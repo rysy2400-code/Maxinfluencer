@@ -34,14 +34,22 @@ $launchUrls = @(
     Where-Object { $_ }
 )
 if ($launchUrls.Count -eq 0) { $launchUrls = @("about:blank") }
-$proxyServer = if ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
+$proxyMode = if ($env:CHROME_9222_PROXY_MODE) { "$($env:CHROME_9222_PROXY_MODE)".ToLowerInvariant() } else { "" }
+$proxyDirect = ($proxyMode -eq "direct" -or $proxyMode -eq "none" -or $proxyMode -eq "off")
+$proxyServer = if ($proxyDirect) { "" } elseif ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
 $chromeArgList = @(
   "--disable-quic",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9222",
   "--user-data-dir=$chromeDir",
-  "--profile-directory=Default",
-  "--proxy-server=$proxyServer",
+  "--profile-directory=Default"
+)
+if ($proxyDirect) {
+  $chromeArgList += "--no-proxy-server"
+} else {
+  $chromeArgList += "--proxy-server=$proxyServer"
+}
+$chromeArgList += @(
   "--no-first-run",
   "--no-default-browser-check"
 )

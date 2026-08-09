@@ -2,11 +2,11 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <youtube|tiktok|instagram>" >&2
+  echo "Usage: $0 <youtube|tiktok|instagram|x>" >&2
   exit 2
 fi
 ROLE="$1"
-case "$ROLE" in youtube|tiktok|instagram) ;; *) echo "Invalid role: $ROLE" >&2; exit 2 ;; esac
+case "$ROLE" in youtube|tiktok|instagram|x) ;; *) echo "Invalid role: $ROLE" >&2; exit 2 ;; esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REGISTRY_OUTPUT="$(node "$SCRIPT_DIR/list-crawler-deploy-targets.mjs" "$ROLE")"

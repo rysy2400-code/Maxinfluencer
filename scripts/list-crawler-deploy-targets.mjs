@@ -9,8 +9,8 @@ dotenv.config({ path: path.join(root, ".env.local"), quiet: true });
 const { queryTikTok, tiktokPool } = await import("../lib/db/mysql-tiktok.js");
 
 const platform = String(process.argv[2] || "").trim().toLowerCase();
-if (!["youtube", "tiktok", "instagram"].includes(platform)) {
-  console.error("usage: node scripts/list-crawler-deploy-targets.mjs <youtube|tiktok|instagram>");
+if (!["youtube", "tiktok", "instagram", "x"].includes(platform)) {
+  console.error("usage: node scripts/list-crawler-deploy-targets.mjs <youtube|tiktok|instagram|x>");
   process.exit(2);
 }
 

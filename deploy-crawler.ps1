@@ -201,7 +201,7 @@ if ($env:CRAWLER_SKIP_CLASH_PROBE) {
   $skipClashProbe = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes")
 }
 $crawlerPlatformRoleForProbe = if ($env:CRAWLER_PLATFORM_ROLE) { "$($env:CRAWLER_PLATFORM_ROLE)".Trim().ToLowerInvariant() } else { "" }
-if ((-not $env:CRAWLER_SKIP_CLASH_PROBE) -and ($crawlerPlatformRoleForProbe -eq "youtube" -or $crawlerPlatformRoleForProbe -eq "instagram")) {
+if ((-not $env:CRAWLER_SKIP_CLASH_PROBE) -and ($crawlerPlatformRoleForProbe -eq "youtube" -or $crawlerPlatformRoleForProbe -eq "instagram" -or $crawlerPlatformRoleForProbe -eq "x")) {
   $skipClashProbe = $true
   Write-Host "[deploy-crawler] role=${crawlerPlatformRoleForProbe}: skip TikTok clash probe."
 }
@@ -261,14 +261,15 @@ if ([string]::IsNullOrWhiteSpace($crawlerPlatformRole) -and $workerIp -eq "152.3
   # Backward compatibility for the first YouTube-only canary.
   $crawlerPlatformRole = "youtube"
 }
-$validCrawlerPlatformRoles = @("", "youtube", "tiktok", "instagram")
+$validCrawlerPlatformRoles = @("", "youtube", "tiktok", "instagram", "x")
 if ($validCrawlerPlatformRoles -notcontains $crawlerPlatformRole) {
-  throw "Invalid CRAWLER_PLATFORM_ROLE=$crawlerPlatformRole (expected youtube|tiktok|instagram)"
+  throw "Invalid CRAWLER_PLATFORM_ROLE=$crawlerPlatformRole (expected youtube|tiktok|instagram|x)"
 }
 $isYoutubeDedicatedWorker = ($crawlerPlatformRole -eq "youtube")
 $isTiktokDedicatedWorker = ($crawlerPlatformRole -eq "tiktok")
 $isInstagramDedicatedWorker = ($crawlerPlatformRole -eq "instagram")
-$useCdp9223 = -not ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker)
+$isXDedicatedWorker = ($crawlerPlatformRole -eq "x")
+$useCdp9223 = -not ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker -or $isXDedicatedWorker)
 
 if ($isYoutubeDedicatedWorker) {
   $searchCdpEndpoint = "http://127.0.0.1:9222"
@@ -278,6 +279,10 @@ if ($isYoutubeDedicatedWorker) {
   $searchCdpEndpoint = "http://127.0.0.1:9222"
   $enrichCdpEndpoint = "http://127.0.0.1:9222"
   Write-Host "[deploy-crawler] role=instagram: Instagram-only worker, 9222-only CDP."
+} elseif ($isXDedicatedWorker) {
+  $searchCdpEndpoint = "http://127.0.0.1:9222"
+  $enrichCdpEndpoint = "http://127.0.0.1:9222"
+  Write-Host "[deploy-crawler] role=x: X-only worker, 9222-only CDP, 香港 IP 直连（不走代理）."
 } elseif ($isTiktokDedicatedWorker) {
   Write-Host "[deploy-crawler] role=tiktok: TikTok-only worker, 9222 search + 9223 enrich CDP."
 } else {
@@ -313,6 +318,8 @@ $searchWorkerPlatforms = if ($isYoutubeDedicatedWorker) {
   "tiktok"
 } elseif ($isInstagramDedicatedWorker) {
   "instagram"
+} elseif ($isXDedicatedWorker) {
+  "x"
 } elseif ($env:SEARCH_WORKER_PLATFORMS) {
   "$($env:SEARCH_WORKER_PLATFORMS)".Trim()
 } else {
@@ -339,6 +346,8 @@ $launchUrl9222 = if ($isYoutubeDedicatedWorker) {
   "https://www.tiktok.com"
 } elseif ($isInstagramDedicatedWorker) {
   "https://www.instagram.com/"
+} elseif ($isXDedicatedWorker) {
+  "https://x.com/home,https://x.com/explore"
 } elseif ($env:CHROME_9222_URL) {
   "$($env:CHROME_9222_URL)"
 } else {
@@ -359,8 +368,10 @@ $guard9222Content = @"
 `$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
 `$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
-`$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"
-$(if ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
+$(if ($isXDedicatedWorker) {
+'$env:CHROME_9222_PROXY_MODE = "direct"'
+} else { '$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"' })
+$(if ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker -or $isXDedicatedWorker) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
 . "$($guard9222Source.Replace("\", "\\"))"
 "@
 
@@ -410,6 +421,22 @@ $env:LITE_YT_ENRICH_CONCURRENCY = "150"
 $env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
 $env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"
 $env:YT_ALLOW_ABOUT_FALLBACK = "0"
+$env:LITE_ENRICH_SCREENSHOTS = "false"
+$env:ENRICH_BATCH_POLICY = "false"'
+} elseif ($isXDedicatedWorker) {
+'$env:SEARCH_WORKER_LOOP = "true"
+$env:SEARCH_IMPORT_TASK_LOOP = "false"
+$env:X_LITE_TAB_POOL_SIZE = "1"
+$env:LITE_X_ENRICH_CONCURRENCY = "1"
+$env:LITE_X_ENRICH_CONCURRENCY_MAX = "1"
+$env:X_LITE_EVALUATE_CONCURRENCY = "1"
+$env:X_LITE_REQUEST_DELAY_MIN_MS = "2000"
+$env:X_LITE_REQUEST_DELAY_MAX_MS = "5000"
+$env:X_LITE_SEARCH_MAX_PAGES = "8"
+$env:X_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"
+$env:X_LITE_FETCH_TWEETS = "1"
+$env:X_LITE_EMAIL_FETCH_WEBSITE = "1"
+$env:X_LITE_DISABLE_EVALUATE_LOCK = "0"
 $env:LITE_ENRICH_SCREENSHOTS = "false"
 $env:ENRICH_BATCH_POLICY = "false"'
 } else { '' })

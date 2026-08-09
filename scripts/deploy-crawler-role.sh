@@ -3,14 +3,14 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <youtube|tiktok|instagram> <host> [host...]" >&2
+  echo "Usage: $0 <youtube|tiktok|instagram|x> <host> [host...]" >&2
   exit 2
 fi
 
 ROLE="$1"
 shift
 case "$ROLE" in
-  youtube|tiktok|instagram) ;;
+  youtube|tiktok|instagram|x) ;;
   *) echo "Invalid role: $ROLE" >&2; exit 2 ;;
 esac
 
@@ -170,6 +170,32 @@ if (\$role -eq "youtube") {
   if (\$igTabs -ne 1) { throw "Instagram role expected exactly 1 Instagram tab, got \$igTabs" }
   if (\$igTabs9223 -lt 1) { throw "Instagram role expected at least 1 Instagram tab on 9223, got \$igTabs9223" }
   Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount igTabs9222=\$igTabs igTabs9223=\$igTabs9223 platforms=instagram taskSlots=1 enrich=2 endpoints=9222,9223 emailGate=1 evaluate=1 about=1 requestDelay=1000-3000ms"
+} elseif (\$role -eq "x") {
+  if (-not \$ok9222) { throw "X role requires CDP 9222" }
+  if (\$ok9223) { throw "X role must not expose CDP 9223" }
+  \$guard9222Path = Join-Path \$root "scripts\\run-guard-chrome-9222.ps1"
+  if (-not (Test-Path \$guard9222Path)) { throw "run-guard-chrome-9222.ps1 missing" }
+  \$guard9222Content = Get-Content -LiteralPath \$guard9222Path -Raw
+  foreach (\$needle in @(
+    '\$env:SEARCH_WORKER_PLATFORMS = "x"',
+    '\$env:X_LITE_TAB_POOL_SIZE = "1"',
+    '\$env:LITE_X_ENRICH_CONCURRENCY = "1"',
+    '\$env:LITE_X_ENRICH_CONCURRENCY_MAX = "1"',
+    '\$env:X_LITE_EVALUATE_CONCURRENCY = "1"',
+    '\$env:X_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"',
+    '\$env:X_LITE_DISABLE_EVALUATE_LOCK = "0"'
+  )) {
+    if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing X guard env: \$needle" }
+  }
+  if (-not \$guard9222Content.Contains('\$env:CHROME_9222_PROXY_MODE = "direct"')) {
+    throw "X role 9222 guard must run in direct mode (no proxy)"
+  }
+  \$pages = Get-CdpPages 9222
+  \$xTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "x\\.com|twitter\\.com" }).Count
+  \$wrongTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "(instagram|tiktok|youtube)\\.com" }).Count
+  if (\$xTabs -lt 1) { throw "X role expected at least 1 x.com tab, got \$xTabs" }
+  if (\$wrongTabs -gt 0) { throw "X role has Instagram/TikTok/YouTube tabs on 9222" }
+  Write-Host "health role=\$role sha=\$shaShort cdp9222=\$ok9222 cdp9223=\$ok9223 worker=\$workerCount xTabs=\$xTabs wrongTabs=\$wrongTabs platforms=x concurrency=1x1 direct=hk-ip emailGate=1"
 }
 PS
 }

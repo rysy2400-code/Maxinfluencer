@@ -25,7 +25,7 @@ const COLORS = {
   info: "#1D4ED8",
 };
 
-const PLATFORM_LABELS = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram" };
+const PLATFORM_LABELS = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", x: "X (Twitter)" };
 const LEVEL_LABELS = { normal: "正常", degraded: "降级", fault: "故障", idle: "空闲", unknown: "未知" };
 const REASON_LABELS = {
   HEALTH_MISSING: "健康数据缺失",
