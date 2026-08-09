@@ -927,15 +927,25 @@ function buildYoutubeProfileUrl(handle) {
   return `https://www.youtube.com/@${encodeURIComponent(u)}`;
 }
 
-/** @returns {'Instagram'|'YouTube'|'TikTok'} */
+function buildXProfileUrl(handle) {
+  const u = String(handle || "")
+    .trim()
+    .replace(/^@/, "");
+  if (!u) return "#";
+  return `https://x.com/${encodeURIComponent(u)}`;
+}
+
+/** @returns {'Instagram'|'YouTube'|'TikTok'|'X'} */
 function resolveInfluencerPlatform(item) {
   const raw = item?.platform ?? item?.Platform ?? "";
   const s = String(raw).trim().toLowerCase();
   if (s.includes("instagram") || s === "ig" || s === "ins") return "Instagram";
   if (s.includes("youtube") || s === "yt" || s === "ytb") return "YouTube";
+  if (s === "x" || s.includes("twitter")) return "X";
   const url = String(item?.profileUrl || item?.profile_url || "").toLowerCase();
   if (url.includes("instagram.com")) return "Instagram";
   if (url.includes("youtube.com") || url.includes("youtu.be")) return "YouTube";
+  if (url.includes("x.com") || url.includes("twitter.com")) return "X";
   return "TikTok";
 }
 
@@ -948,12 +958,14 @@ function buildInfluencerProfileUrl(item) {
   const platform = resolveInfluencerPlatform(item);
   if (platform === "Instagram") return buildInstagramProfileUrl(handle);
   if (platform === "YouTube") return buildYoutubeProfileUrl(handle);
+  if (platform === "X") return buildXProfileUrl(handle);
   return buildTikTokProfileUrl(handle);
 }
 
 function ExecutionProgressPlatformBadge({ platform }) {
   const isIg = platform === "Instagram";
   const isYt = platform === "YouTube";
+  const isX = platform === "X";
   return (
     <span
       style={{
@@ -961,14 +973,14 @@ function ExecutionProgressPlatformBadge({ platform }) {
         fontWeight: 600,
         padding: "2px 7px",
         borderRadius: 999,
-        backgroundColor: isIg ? "#FDF2F8" : isYt ? "#FEF2F2" : "#F3F4F6",
-        color: isIg ? "#BE185D" : isYt ? "#B91C1C" : "#374151",
-        border: `1px solid ${isIg ? "#F9A8D4" : isYt ? "#FECACA" : "#D1D5DB"}`,
+        backgroundColor: isIg ? "#FDF2F8" : isYt ? "#FEF2F2" : isX ? "#EFF6FF" : "#F3F4F6",
+        color: isIg ? "#BE185D" : isYt ? "#B91C1C" : isX ? "#1D4ED8" : "#374151",
+        border: `1px solid ${isIg ? "#F9A8D4" : isYt ? "#FECACA" : isX ? "#93C5FD" : "#D1D5DB"}`,
         whiteSpace: "nowrap",
         flexShrink: 0,
       }}
     >
-      {isIg ? "Instagram" : isYt ? "YouTube" : "TikTok"}
+      {isIg ? "Instagram" : isYt ? "YouTube" : isX ? "X" : "TikTok"}
     </span>
   );
 }
@@ -1584,7 +1596,9 @@ function ExecutionProgressRow({
         ? "3px solid #E1306C"
         : platform === "YouTube"
           ? "3px solid #FF0000"
-          : "3px solid #111827",
+          : platform === "X"
+            ? "3px solid #1D9BF0"
+            : "3px solid #111827",
     boxShadow: isHighlighted ? "0 0 0 3px rgba(79, 70, 229, 0.2)" : "none",
     fontSize: 12,
     color: "#374151",
@@ -5878,6 +5892,12 @@ export default function HomePage() {
           <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8zM9.6 15.6V8.4L15.8 12l-6.2 3.6z"/>
         </svg>
       );
+
+      const XIcon = () => (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}>
+          <path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/>
+        </svg>
+      );
       
       // 渲染表格容器
       parts.push(
@@ -5980,11 +6000,11 @@ export default function HomePage() {
                 {/* 用户名（可点击，带平台图标） */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                   <div style={{ 
-                    color: platform === 'TikTok' ? 'rgba(255,0,80,0.9)' : platform === 'YouTube' ? 'rgba(255,0,0,0.9)' : 'rgba(225,48,108,0.9)',
+                    color: platform === 'X' ? 'rgba(29,155,240,0.9)' : platform === 'TikTok' ? 'rgba(255,0,80,0.9)' : platform === 'YouTube' ? 'rgba(255,0,0,0.9)' : 'rgba(225,48,108,0.9)',
                     display: "flex",
                     alignItems: "center"
                   }}>
-                    {platform === 'TikTok' ? <TikTokIcon /> : platform === 'YouTube' ? <YouTubeIcon /> : <InstagramIcon />}
+                    {platform === 'X' ? <XIcon /> : platform === 'TikTok' ? <TikTokIcon /> : platform === 'YouTube' ? <YouTubeIcon /> : <InstagramIcon />}
                   </div>
                   <a
                     href={match.profileUrl}
