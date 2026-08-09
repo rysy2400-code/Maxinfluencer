@@ -59,6 +59,15 @@ Log "chrome guards created"
 schtasks /Create /TN ig-guard-watchdog /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\guard-ig-watchdog.ps1" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
 Log "watchdog created"
 
+# mihomo 保活：开机自启 + 每10分钟守护（与现有3台 ig-proxy-guard 对齐）
+schtasks /Create /TN ig-proxy-start /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\ensure-ig-us-proxy.ps1" /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
+schtasks /Create /TN ig-proxy-guard /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\ensure-ig-us-proxy.ps1" /SC MINUTE /MO 10 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
+Log "mihomo autostart + guard tasks created"
+
+# 清理初始化残留任务（不删 insdeploy7 自身，避免中断运行中的部署）
+schtasks /Delete /TN bootstrap7 /F 2>&1 | Out-Null
+Log "bootstrap/insdeploy tasks cleaned"
+
 & wmic computersystem where "name='%computername%'" set AutomaticManagedPagefile=False 2>&1 | Out-Null
 $pf = Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue
 if (-not $pf) { & wmic pagefileset create name="C:\pagefile.sys" 2>&1 | Out-Null }
