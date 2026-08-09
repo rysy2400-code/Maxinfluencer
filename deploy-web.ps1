@@ -6,6 +6,10 @@ if (-not (Test-Path $Root)) {
 }
 Set-Location $Root
 
+# Web 监听端口：默认 80（与现状一致）；配域名 HTTPS 反代时设为 3000，如
+#   $env:WEB_PORT = "3000"; .\deploy-web.ps1
+$WebPort = if ($env:WEB_PORT -match '^\d{1,5}$') { [int]$env:WEB_PORT } else { 80 }
+
 $nodeDir = "C:\Program Files\nodejs"
 if (Test-Path $nodeDir) {
   $env:Path = "$nodeDir;$env:Path"
@@ -22,19 +26,21 @@ function Invoke-Npm {
   }
 }
 
-function Test-Port80Listening {
-  return [bool](netstat -ano | Select-String "0\.0\.0\.0:80\s+0\.0\.0\.0:0\s+LISTENING")
+function Test-PortListening {
+  param([Parameter(Mandatory = $true)][int]$Port)
+  return [bool](netstat -ano | Select-String "0\.0\.0\.0:$Port\s+0\.0\.0\.0:0\s+LISTENING")
 }
 
-function Stop-OrphanNextOnPort80 {
-  Write-Host "[deploy-web] Stopping orphan next processes listening on port 80..."
+function Stop-OrphanNextOnPort {
+  param([Parameter(Mandatory = $true)][int]$Port)
+  Write-Host "[deploy-web] Stopping orphan next processes listening on port $Port..."
   try {
-    $lines = netstat -ano | Select-String "0\.0\.0\.0:80\s+0\.0\.0\.0:0\s+LISTENING"
+    $lines = netstat -ano | Select-String "0\.0\.0\.0:$Port\s+0\.0\.0\.0:0\s+LISTENING"
     foreach ($line in $lines) {
       $procId = ($line.ToString().Trim() -split '\s+')[-1]
       if ($procId -notmatch '^\d+$') { continue }
       $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
-      if ($proc -and $proc.CommandLine -match 'next" start -p 80') {
+      if ($proc -and $proc.CommandLine -match ('next" start -p ' + $Port)) {
         Stop-Process -Id ([int]$procId) -Force -ErrorAction SilentlyContinue
       }
     }
@@ -51,7 +57,7 @@ function Stop-MaxinWebForDeploy {
   try {
     pm2 delete maxin-web 2>$null | Out-Null
   } catch {}
-  Stop-OrphanNextOnPort80
+  Stop-OrphanNextOnPort -Port $WebPort
   Start-Sleep -Seconds 4
 }
 
@@ -145,7 +151,7 @@ module.exports = {
     cwd: "C:\\maxinfluencer",
     script: ".\\node_modules\\next\\dist\\bin\\next",
     interpreter: "node",
-    args: "start -p 80",
+    args: "start -p $WebPort",
     env: {
       NODE_ENV: "production"
     }
@@ -192,7 +198,7 @@ try {
 }
 
 Write-Host "[deploy-web] starting maxin-web (force pm2 restart after build)..."
-Stop-OrphanNextOnPort80
+Stop-OrphanNextOnPort -Port $WebPort
 try {
   pm2 delete maxin-web 2>$null | Out-Null
 } catch {}
@@ -204,8 +210,8 @@ if ($LASTEXITCODE -ne 0) {
 pm2 save --force 2>$null | Out-Null
 
 Start-Sleep -Seconds 3
-if (-not (Test-Port80Listening)) {
-  throw "port 80 is not listening after ensure-maxin-web. Check logs\ensure-maxin-web.log"
+if (-not (Test-PortListening -Port $WebPort)) {
+  throw "port $WebPort is not listening after ensure-maxin-web. Check logs\ensure-maxin-web.log"
 }
 
-Write-Host "[deploy-web] maxin-web online on port 80."
+Write-Host "[deploy-web] maxin-web online on port $WebPort."

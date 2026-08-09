@@ -1,0 +1,13 @@
+# maxinai.xyz 反向代理配置（Caddy 自动申请/续期 HTTPS 证书）
+#
+# 前置条件：
+#   1. DNS 已添加 A 记录：@ 和 www 都指向 152.32.185.48
+#   2. Next.js 已改到 3000 端口运行（部署时设置 WEB_PORT=3000 后跑 deploy-web.ps1）
+#   3. Windows 防火墙已放行 80 / 443 入站
+#
+# 启动：caddy start（或注册为 Windows 服务 caddy run）
+
+maxinai.xyz, www.maxinai.xyz {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000
+}
