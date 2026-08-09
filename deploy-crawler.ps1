@@ -361,6 +361,19 @@ $guard9223Source = Join-Path $scriptsDir "guard-chrome-9223.ps1"
 $guardCrawler = Join-Path $scriptsDir "guard-crawler-search.ps1"
 $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
+# X 专属机 9222 代理：优先 .env.local 的 CHROME_9222_PROXY_SERVER（美国节点配置）；
+# 未配置则香港 IP 直连（对齐 x role 默认）。
+$guard9222ProxyEnv = if ($isXDedicatedWorker) {
+  if ($env:CHROME_9222_PROXY_SERVER) {
+    $escapedProxy = "$($env:CHROME_9222_PROXY_SERVER)".Replace('"', '""')
+    "`$env:CHROME_9222_PROXY_SERVER = `"$escapedProxy`""
+  } else {
+    '`$env:CHROME_9222_PROXY_MODE = "direct"'
+  }
+} else {
+  '`$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"'
+}
+
 $guard9222Content = @"
 `$ErrorActionPreference = "SilentlyContinue"
 `$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
@@ -368,9 +381,7 @@ $guard9222Content = @"
 `$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
 `$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
-$(if ($isXDedicatedWorker) {
-'$env:CHROME_9222_PROXY_MODE = "direct"'
-} else { '$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"' })
+$guard9222ProxyEnv
 $(if ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker -or $isXDedicatedWorker) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
 . "$($guard9222Source.Replace("\", "\\"))"
 "@

@@ -3,6 +3,7 @@ $ErrorActionPreference = "SilentlyContinue"
 $Root = if ($env:MAXINFLUENCER_ROOT) { $env:MAXINFLUENCER_ROOT } else { "C:\maxinfluencer" }
 $SubEnsureScript = Join-Path $Root "scripts\ensure-clash-sub-tiktok.ps1"
 $QgEnsureScript = Join-Path $Root "scripts\ensure-clash-qg-tiktok.ps1"
+$XEnsureScript = Join-Path $Root "scripts\ensure-x-us-proxy.ps1"
 $CrawlerConfig = Join-Path $Root "config\crawler-clash.yaml"
 $MixedPort = if ($env:CLASH_MIXED_PORT) { [int]$env:CLASH_MIXED_PORT } else { 7897 }
 $ProbeEvery = if ($env:CLASH_GUARD_TT_PROBE_EVERY) { [int]$env:CLASH_GUARD_TT_PROBE_EVERY } else { 12 }
@@ -33,7 +34,9 @@ function Import-DotEnv {
 
 Import-DotEnv -ProjectRoot $Root
 
-if ($env:CLASH_SUB_URL -and (Test-Path $SubEnsureScript)) {
+if ($env:CRAWLER_PLATFORM_ROLE -eq "x" -and (Test-Path $XEnsureScript)) {
+  $EnsureScript = $XEnsureScript
+} elseif ($env:CLASH_SUB_URL -and (Test-Path $SubEnsureScript)) {
   $EnsureScript = $SubEnsureScript
 } else {
   $EnsureScript = $QgEnsureScript

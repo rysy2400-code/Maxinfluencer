@@ -187,8 +187,10 @@ if (\$role -eq "youtube") {
   )) {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing X guard env: \$needle" }
   }
-  if (-not \$guard9222Content.Contains('\$env:CHROME_9222_PROXY_MODE = "direct"')) {
-    throw "X role 9222 guard must run in direct mode (no proxy)"
+  \$proxyDirectOk = \$guard9222Content.Contains('\$env:CHROME_9222_PROXY_MODE = "direct"')
+  \$proxyServerOk = \$guard9222Content -match '\$env:CHROME_9222_PROXY_SERVER = "http://127\.0\.0\.1:7897"'
+  if (-not (\$proxyDirectOk -or \$proxyServerOk)) {
+    throw "X role 9222 guard proxy/direct env missing (expected direct or 127.0.0.1:7897)"
   }
   \$pages = Get-CdpPages 9222
   \$xTabs = @(\$pages | Where-Object { \$_.type -eq "page" -and \$_.url -match "x\\.com|twitter\\.com" }).Count
