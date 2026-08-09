@@ -168,4 +168,31 @@ function makeCampaign(id = "CAMP-TEST") {
   ok("空平台列表短路", "返回 0/0");
 }
 
+// ---------------------------------------------------------------------------
+// 5) 不设上限：maxParallel 为 null 时所有平台立即全部并发
+// ---------------------------------------------------------------------------
+{
+  let active = 0;
+  let maxActive = 0;
+  const result = await dispatchPlatformKeywordTasks({
+    campaign: makeCampaign("CAMP-NOLIMIT"),
+    runId: "CAMP-NOLIMIT-20260809",
+    needed: 1,
+    existingKeywords: new Set(),
+    planTargets: ["tiktok", "instagram", "youtube", "x"],
+    maxParallel: null,
+    planPlatform: async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await sleep(20);
+      active -= 1;
+      return [{ keyword: "k", keywordType: "new", reasonText: "" }];
+    },
+    enqueue: async () => {},
+  });
+  assert.equal(maxActive, 4, "不设上限时 4 个平台应全部并发");
+  assert.equal(result.enqueued, 4);
+  ok("不设上限", "maxParallel=null 时 4 平台全部同时生成");
+}
+
 console.log("\n✅ execution-heartbeat 并行派单单元测试全部通过");
