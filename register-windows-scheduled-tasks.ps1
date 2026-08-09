@@ -24,7 +24,10 @@ function Register-MaxinNodeRepeatMinutes {
   param(
     [string]$Name,
     [string]$ScriptRelative,
-    [int]$Minutes
+    [int]$Minutes,
+    # 各任务启动相位错开，避免同一秒并发拉起多个 node.exe 时偶发
+    # ERROR_USER_MAPPED_FILE (0x800710E0) 启动失败并卡死任务实例。
+    [int]$OffsetSeconds = 0
   )
   $taskName = "Maxinfluencer-$Name"
   # Windows（Node 20+）：含 import 的 .js 在未声明 type:module 时会被当 CJS。
@@ -32,7 +35,7 @@ function Register-MaxinNodeRepeatMinutes {
   # （动态 import 的 node-import.mjs 仍会把子 .js 当 CJS，故不用 loader。）
   $arg = "--experimental-default-type=module $ScriptRelative"
   $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $arg -WorkingDirectory $Root
-  $start = (Get-Date).AddMinutes(1)
+  $start = (Get-Date).AddMinutes(1).AddSeconds($OffsetSeconds)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
@@ -41,11 +44,11 @@ function Register-MaxinNodeRepeatMinutes {
 
 Write-Host "[register-tasks] Root=$Root Node=$nodeExe"
 
-Register-MaxinNodeRepeatMinutes -Name "PollInfluencerReplies" -ScriptRelative "scripts\poll-influencer-replies.js" -Minutes 1
-Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerEmailEvents" -ScriptRelative "scripts\process-influencer-email-events.js" -Minutes 1
-Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEvents" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1
-Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1
-Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 1
-Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10
+Register-MaxinNodeRepeatMinutes -Name "PollInfluencerReplies" -ScriptRelative "scripts\poll-influencer-replies.js" -Minutes 1 -OffsetSeconds 5
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerEmailEvents" -ScriptRelative "scripts\process-influencer-email-events.js" -Minutes 1 -OffsetSeconds 15
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEvents" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 25
+Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1 -OffsetSeconds 35
+Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 1 -OffsetSeconds 45
+Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10 -OffsetSeconds 55
 
 Write-Host "[register-tasks] Done (6 tasks)."
