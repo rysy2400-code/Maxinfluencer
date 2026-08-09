@@ -124,6 +124,7 @@ rules:
   - DOMAIN-SUFFIX,twimg.com,$ProxyName
   - DOMAIN-SUFFIX,abs.twimg.com,$ProxyName
   - DOMAIN-KEYWORD,x.com,$ProxyName
+  - DOMAIN-SUFFIX,ipify.org,$ProxyName
   - MATCH,DIRECT
 "@
 
