@@ -1,7 +1,7 @@
-# IG Chrome 端口看门狗（SYSTEM，建议每 5 分钟执行一次）
-# 若 9222/9223 CDP 掉线且对应 guard 进程不存在：
-#   - 有交互登录会话 -> /Run 交互 guard（窗口可见）
-#   - 无交互登录会话 -> SYSTEM 方式拉起 Chrome（会话 0，不可见但 worker 可用）
+# IG Chrome port watchdog (SYSTEM, every 5 minutes)
+# If a CDP port is down and its guard process is gone:
+#   - interactive session exists -> /Run the interactive guard (visible window)
+#   - no interactive session -> start Chrome as SYSTEM (session 0, headless but usable)
 $ErrorActionPreference = "SilentlyContinue"
 $logDir = "C:\maxinfluencer\logs"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
@@ -64,7 +64,7 @@ function Get-GuardProcessCount {
 foreach ($port in @(9222, 9223)) {
   if (Test-CdpPort -Port $port) { continue }
   if ((Get-GuardProcessCount -Port $port) -gt 0) {
-    # guard 进程还在，Chrome 由 guard 自己重启
+    # guard process still alive, Chrome will be restarted by the guard itself
     Log ("port=" + $port + " CDP down but guard alive, skip")
     continue
   }

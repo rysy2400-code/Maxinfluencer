@@ -1,4 +1,4 @@
-# IG 账户 2 守护：Chrome 9223（.chrome-cdp-9223，直连，instagram.com），进程看门狗。
+# IG account 2 guard: Chrome 9223 (.chrome-cdp-9223, instagram.com) watchdog.
 $ErrorActionPreference = "SilentlyContinue"
 $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 $profile = "C:\maxinfluencer\.chrome-cdp-9223"
@@ -46,7 +46,8 @@ function Start-IgChrome {
   Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
 }
 
-# 启动时接管：杀掉同 profile 的所有实例（含 SYSTEM 会话 0），保证本 guard 的 Chrome 在交互会话可见
+# Take over on start: kill all instances of this profile (incl. SYSTEM session 0)
+# so this guard's Chrome is visible in the interactive session.
 Kill-ProfileChrome
 Start-Sleep -Seconds 2
 Start-IgChrome

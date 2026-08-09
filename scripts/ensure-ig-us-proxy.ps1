@@ -1,5 +1,6 @@
-# IG 专属机：拉取 Clash 订阅，选美国节点，配置 mihomo（Instagram 域名走美国节点，其余直连）。
-# 依赖：.env.local 里 IG_SUB_URL（订阅地址），可选 IG_PROXY_MIXED_PORT（默认 7897）。
+# IG-only machine: fetch Clash subscription, pick US nodes, run mihomo
+# (Instagram domains go through the US node; everything else goes direct).
+# Requires IG_SUB_URL in .env.local; optional IG_PROXY_MIXED_PORT (default 7897).
 param(
   [string]$ProjectRoot = "C:\maxinfluencer",
   [string]$SubUrl = $env:IG_SUB_URL,
@@ -100,7 +101,8 @@ function Parse-NodeUri {
 function Test-IsUsNode {
   param($Node)
   $blob = "$($Node.name)|$($Node.server)|$($Node.sni)"
-  # 使用 \uXXXX 转义（美=\u7f8e 国=\u56fd），避免 PS5.1 按 ANSI 代码页读取无 BOM UTF-8 脚本导致中文字面量乱码
+  # Use \uXXXX escapes (mei=\u7f8e guo=\u56fd) so the pattern survives PS5.1
+  # reading a no-BOM UTF-8 script as the system ANSI codepage.
   if ($blob -match '\u7f8e\u56fd|usa|united\s*states|us\d|^us[.-]') { return $true }
   if ($Node.server -match '^(us|usa)\d') { return $true }
   return $false
@@ -115,7 +117,7 @@ function Get-UniqueName {
   return $c
 }
 
-# ---- mihomo 二进制 ----
+# ---- mihomo binary ----
 if (-not (Test-Path $MihomoExe) -and -not $SkipDownload) {
   Write-Host "[ig-proxy] downloading mihomo..."
   $zip = Join-Path $env:TEMP "mihomo-ig.zip"
@@ -132,7 +134,7 @@ if (-not (Test-Path $MihomoExe) -and -not $SkipDownload) {
 }
 if (-not (Test-Path $MihomoExe)) { throw "mihomo binary missing: $MihomoExe" }
 
-# ---- 拉订阅、解析、选美国节点 ----
+# ---- fetch subscription, parse, pick US nodes ----
 Write-Host "[ig-proxy] fetching subscription..."
 $subBody = (& curl.exe -sL --max-time 60 $SubUrl 2>&1 | Out-String).Trim()
 if (-not $subBody) { throw "empty subscription response" }

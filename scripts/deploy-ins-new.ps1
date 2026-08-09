@@ -1,5 +1,5 @@
-# 新 INS Windows 专属机部署：npm ci + env + Chrome + mihomo 美国节点代理 +
-# start-worker + ig-worker(禁用) + 9222/9223 交互 guard + 看门狗 + pagefile + 重启
+# New INS Windows machine bootstrap: npm ci + env + Chrome + mihomo US proxy +
+# start-worker + ig-worker(disabled) + 9222/9223 interactive guards + watchdog + pagefile + reboot
 param(
   [string]$EnvB64 = "",
   [string]$EnvLocalB64 = ""
@@ -59,12 +59,12 @@ Log "chrome guards created"
 schtasks /Create /TN ig-guard-watchdog /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\guard-ig-watchdog.ps1" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
 Log "watchdog created"
 
-# mihomo 保活：开机自启 + 每10分钟守护（与现有3台 ig-proxy-guard 对齐）
+# mihomo keep-alive: autostart at boot + 10-minute guard (mirrors ig-proxy-guard on the existing 3 machines)
 schtasks /Create /TN ig-proxy-start /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\ensure-ig-us-proxy.ps1" /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
 schtasks /Create /TN ig-proxy-guard /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\maxinfluencer\scripts\ensure-ig-us-proxy.ps1" /SC MINUTE /MO 10 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
 Log "mihomo autostart + guard tasks created"
 
-# 清理初始化残留任务（不删 insdeploy7 自身，避免中断运行中的部署）
+# Clean up leftover bootstrap task (never delete insdeploy7 itself mid-run)
 schtasks /Delete /TN bootstrap7 /F 2>&1 | Out-Null
 Log "bootstrap/insdeploy tasks cleaned"
 

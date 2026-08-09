@@ -1,5 +1,5 @@
-# IG 账户 1 守护：Chrome 9222（.chrome-cdp-9222，直连，instagram.com），进程看门狗。
-# 配合计划任务（交互式 ONLOGON）在 RDP 登录会话中运行，保证登录窗口可见。
+# IG account 1 guard: Chrome 9222 (.chrome-cdp-9222, instagram.com) watchdog.
+# Runs under an interactive ONLOGON scheduled task so the login window is visible.
 $ErrorActionPreference = "SilentlyContinue"
 $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 $profile = "C:\maxinfluencer\.chrome-cdp-9222"
@@ -47,7 +47,8 @@ function Start-IgChrome {
   Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
 }
 
-# 启动时接管：杀掉同 profile 的所有实例（含 SYSTEM 会话 0），保证本 guard 的 Chrome 在交互会话可见
+# Take over on start: kill all instances of this profile (incl. SYSTEM session 0)
+# so this guard's Chrome is visible in the interactive session.
 Kill-ProfileChrome
 Start-Sleep -Seconds 2
 Start-IgChrome
