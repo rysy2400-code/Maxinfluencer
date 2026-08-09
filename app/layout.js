@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Maxinfluencer Agent",
+  title: "Maxin AI",
   description: "Chat with Bin, your influencer marketing sales lead."
 };
 
@@ -21,5 +21,4 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
-
 
