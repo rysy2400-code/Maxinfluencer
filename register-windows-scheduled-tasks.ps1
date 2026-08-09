@@ -33,8 +33,12 @@ function Register-MaxinNodeRepeatMinutes {
   # Windows（Node 20+）：含 import 的 .js 在未声明 type:module 时会被当 CJS。
   # 本仓库 worker 机已验证可用：node --experimental-default-type=module <script.js>
   # （动态 import 的 node-import.mjs 仍会把子 .js 当 CJS，故不用 loader。）
-  $arg = "--experimental-default-type=module $ScriptRelative"
-  $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $arg -WorkingDirectory $Root
+  #
+  # 用 cmd.exe 包装 node：直接以 node.exe 为任务动作在部分 Windows 机器上会偶发
+  # ERROR_USER_MAPPED_FILE (0x800710E0) 启动失败并卡死任务实例（实测 0x800710E0）；
+  # cmd 包装后任务可稳定启动，且 cmd /c 会透传 node 的退出码。
+  $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module ' + $ScriptRelative + '"'
+  $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $Root
   $start = (Get-Date).AddMinutes(1).AddSeconds($OffsetSeconds)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
