@@ -80,6 +80,9 @@ function Stop-WrongMihomo {
   } | ForEach-Object {
     try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
   }
+  # ensure 是「应用配置」入口：无论新旧进程全部重启，确保新规则生效。
+  # （守护循环 guard-clash-mihomo.ps1 保持过滤式，不误杀健康实例。）
+  Get-Process verge-mihomo -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 if (-not (Test-Path $MihomoExe)) {
