@@ -2,6 +2,8 @@
 # 优先模式：Clash 订阅（INS 机 ensure-ig-us-proxy.ps1 同款）——.env/.env.local 里 X_SUB_URL
 #           指向订阅地址，自动解析节点、挑选美国节点、生成 config\crawler-clash.yaml。
 # 兜底模式：QG 全球 HTTP 隧道（overseas-us，出口美国）——依赖 QG_AUTH_KEY、QG_AUTH_PWD。
+# 说明：9222 浏览器整机走美国节点（MATCH -> XProxy），避免查 IP 站点/注册验证码等第三方域名
+#       混到香港 IP（X 注册风控对 IP 一致性敏感）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-x-us-proxy.ps1
 param(
   [string]$ProjectRoot = "C:\maxinfluencer",
@@ -247,7 +249,7 @@ rules:
   - DOMAIN-SUFFIX,abs.twimg.com,XProxy
   - DOMAIN-KEYWORD,x.com,XProxy
   - DOMAIN-SUFFIX,ipify.org,XProxy
-  - MATCH,DIRECT
+  - MATCH,XProxy
 "@
   Set-Content -Path $configPath -Value $yaml -Encoding UTF8
   Write-Host "[x-proxy] wrote $configPath"
@@ -324,7 +326,7 @@ rules:
   - DOMAIN-SUFFIX,abs.twimg.com,$ProxyName
   - DOMAIN-KEYWORD,x.com,$ProxyName
   - DOMAIN-SUFFIX,ipify.org,$ProxyName
-  - MATCH,DIRECT
+  - MATCH,$ProxyName
 "@
 
   Set-Content -Path $configPath -Value $yaml -Encoding UTF8
