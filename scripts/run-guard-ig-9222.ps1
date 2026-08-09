@@ -13,6 +13,15 @@ if (Test-Path "C:\maxinfluencer\.env.local") {
   }
   if ($proxyLine) { $proxyServer = ($proxyLine -split "=", 2)[1].Trim() }
 }
+$logFile = "C:\maxinfluencer\logs\ig-guard-9222.log"
+function Log($m) {
+  try { Add-Content -Path $logFile -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $m) } catch {}
+}
+function Kill-ProfileChrome {
+  Get-CimInstance Win32_Process |
+    Where-Object { $_.Name -eq "chrome.exe" -and $_.CommandLine -match "chrome-cdp-$port" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 function Test-Cdp {
   try {
@@ -37,14 +46,24 @@ function Start-IgChrome {
   Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
 }
 
+# 启动时接管：杀掉同 profile 的所有实例（含 SYSTEM 会话 0），保证本 guard 的 Chrome 在交互会话可见
+Kill-ProfileChrome
+Start-Sleep -Seconds 2
+Start-IgChrome
+Log "started chrome, takeover done"
+
 while ($true) {
-  if (-not (Test-Cdp)) {
-    Get-CimInstance Win32_Process |
-      Where-Object { $_.Name -eq "chrome.exe" -and $_.CommandLine -match "chrome-cdp-$port" } |
-      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Seconds 2
-    Start-IgChrome
+  try {
+    if (-not (Test-Cdp)) {
+      Log "CDP down, restarting chrome"
+      Kill-ProfileChrome
+      Start-Sleep -Seconds 2
+      Start-IgChrome
+      Start-Sleep -Seconds 10
+    }
     Start-Sleep -Seconds 10
+  } catch {
+    Log ("guard loop error: " + $_.Exception.Message)
+    Start-Sleep -Seconds 5
   }
-  Start-Sleep -Seconds 10
 }
