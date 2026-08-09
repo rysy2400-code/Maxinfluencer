@@ -100,7 +100,8 @@ function Parse-NodeUri {
 function Test-IsUsNode {
   param($Node)
   $blob = "$($Node.name)|$($Node.server)|$($Node.sni)"
-  if ($blob -match '美国|usa|united\s*states|us\d|^us[.-]') { return $true }
+  # 使用 \uXXXX 转义（美=\u7f8e 国=\u56fd），避免 PS5.1 按 ANSI 代码页读取无 BOM UTF-8 脚本导致中文字面量乱码
+  if ($blob -match '\u7f8e\u56fd|usa|united\s*states|us\d|^us[.-]') { return $true }
   if ($Node.server -match '^(us|usa)\d') { return $true }
   return $false
 }
