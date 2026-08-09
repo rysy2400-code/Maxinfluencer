@@ -5,6 +5,17 @@ param(
   [string]$EnvLocalB64 = ""
 )
 
+# Self-reload guard: this script is loaded from disk by the runner BEFORE
+# git checkout. Re-invoke ourselves from the freshly checked-out file so the
+# latest script body (mihomo tasks etc.) actually executes.
+if ($env:INSDEPLOY_SELF -ne "1") {
+  & "C:\Program Files\Git\cmd\git.exe" -C C:\maxinfluencer fetch origin --prune 2>&1 | Out-Null
+  & "C:\Program Files\Git\cmd\git.exe" -C C:\maxinfluencer checkout --detach --force origin/main 2>&1 | Out-Null
+  $env:INSDEPLOY_SELF = "1"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @PSBoundParameters
+  exit $LASTEXITCODE
+}
+
 $ErrorActionPreference = "Continue"
 $log = "C:\Windows\Temp\insdeploy7.log"
 function Log($m) {
@@ -13,8 +24,6 @@ function Log($m) {
 
 Log "=== start ==="
 Set-Location C:\maxinfluencer
-& "C:\Program Files\Git\cmd\git.exe" fetch origin --prune 2>&1 | Out-Null
-& "C:\Program Files\Git\cmd\git.exe" checkout --detach --force origin/main 2>&1 | Out-Null
 Log ("HEAD=" + (& "C:\Program Files\Git\cmd\git.exe" rev-parse --short HEAD))
 
 & "C:\Program Files\nodejs\npm.cmd" ci --no-audit --no-fund 2>&1 | Out-Null
