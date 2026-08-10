@@ -216,6 +216,14 @@ if ($preferred.Count -eq 0) {
   throw "no preferred TikTok nodes matched pattern: $PreferredNodePattern (usable=$($usable.Count))"
 }
 $selected = $preferred
+# 按 TT_LITE_PROXY_NODE_PRIORITY 排序，让首选节点排最前（组默认选择/切换优先）
+$priorityRaw = $env:TT_LITE_PROXY_NODE_PRIORITY
+if ($priorityRaw) {
+  $prio = @($priorityRaw -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $prioIndex = @{}
+  for ($i = 0; $i -lt $prio.Count; $i++) { $prioIndex[$prio[$i]] = $i }
+  $selected = @($selected | Sort-Object -Property @{ Expression = { if ($prioIndex.ContainsKey($_.name)) { $prioIndex[$_.name] } else { 1000 } } })
+}
 Write-Host "[clash-sub] nodes total=$($nodes.Count) usable=$($usable.Count) selected=$($selected.Count)"
 foreach ($n in $selected) {
   Write-Host "[clash-sub]   pick $($n.name) -> $($n.server):$($n.port)"
