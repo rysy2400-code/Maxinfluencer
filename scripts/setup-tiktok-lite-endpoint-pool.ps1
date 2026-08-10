@@ -90,7 +90,7 @@ function Write-FixedMihomoConfig($Mapping) {
   $content = Get-Content -Raw -LiteralPath $BaseConfig
   $content = [regex]::Replace($content, "(?m)^mixed-port:\s*\d+", "mixed-port: $($Mapping.ProxyPort)")
   $content = [regex]::Replace($content, "(?m)^external-controller:\s*.+$", "external-controller: 127.0.0.1:$($Mapping.ControllerPort)")
-  $content = [regex]::Replace($content, "(?ms)^rules:\s*.*$", "rules:`r`n  - MATCH,$($Mapping.Node)")
+  $content = [regex]::Replace($content, "(?ms)^rules:\s*.*$", "rules:`r`n  - MATCH,TikTokProxy")
   $path = Join-Path $ConfigDir "crawler-clash-enrich-$($Mapping.CdpPort).yaml"
   Set-Content -LiteralPath $path -Value $content -Encoding UTF8
   return $path
