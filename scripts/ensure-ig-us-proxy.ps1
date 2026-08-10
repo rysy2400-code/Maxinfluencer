@@ -136,7 +136,9 @@ if (-not (Test-Path $MihomoExe)) { throw "mihomo binary missing: $MihomoExe" }
 
 # ---- fetch subscription, parse, pick US nodes ----
 Write-Host "[ig-proxy] fetching subscription..."
-$subBody = (& curl.exe -sL --max-time 60 $SubUrl 2>&1 | Out-String).Trim()
+# v2rayN client UA: the subscription provider serves real (domain) nodes only to
+# recognized client UAs; curl/browser UAs get unroutable placeholder IPs.
+$subBody = (& curl.exe -sL --max-time 60 -A "v2rayN/6.30" $SubUrl 2>&1 | Out-String).Trim()
 if (-not $subBody) { throw "empty subscription response" }
 $decoded = Decode-SubBody -Body $subBody
 $nodes = @()
