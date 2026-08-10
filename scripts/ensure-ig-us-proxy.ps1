@@ -108,6 +108,15 @@ function Test-IsUsNode {
   return $false
 }
 
+function Test-UsableNodeServer {
+  param([string]$Srv)
+  $s = "$Srv".Trim().ToLower()
+  if ($s -match "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$") { return $true }
+  # RFC 5737 documentation ranges + CGNAT: provider serves these as placeholders
+  if ($s -match "^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.)") { return $false }
+  return $true
+}
+
 function Get-UniqueName {
   param([string]$Base, [hashtable]$Used)
   $c = $Base
@@ -150,7 +159,14 @@ foreach ($line in ($decoded -split "`r?`n")) {
 }
 if ($nodes.Count -eq 0) { throw "no parseable nodes in subscription" }
 $us = @($nodes | Where-Object { Test-IsUsNode $_ })
-if ($us.Count -eq 0) { throw "no US nodes found (total=$($nodes.Count))" }
+$us = @($us | Where-Object { Test-UsableNodeServer -Srv $_.server })
+if ($us.Count -eq 0) {
+  if ((Test-ProxyListening -Port $MixedPort) -and (Test-Path $configPath)) {
+    Write-Host "[ig-proxy] no usable US nodes in subscription, keeping existing config"
+    exit 0
+  }
+  throw "no usable US nodes found (total=$($nodes.Count))"
+}
 Write-Host "[ig-proxy] nodes=$($nodes.Count) us=$($us.Count): $(($us | ForEach-Object { $_.name }) -join ', ')"
 
 if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
