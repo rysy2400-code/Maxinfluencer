@@ -39,4 +39,29 @@ assert(userCharge.platformFeeAmount === 1, "user fee 1");
 assert(userCharge.chargeAmount === 101, "user total 101");
 assert(userCharge.influencerSource === INFLUENCER_SOURCE_USER, "source snapshot");
 
+// 报价为 0（免费合作 / 产品置换）：非纯佣金模式下也允许同意，且不扣款
+const zeroFeeRow = { flat_fee: 0, currency: "USD", source: "web_search" };
+const zeroFeeCharge = resolveQuoteApproveCharge(campaign, zeroFeeRow);
+assert(zeroFeeCharge.ok, "zero quote ok in non-commission mode");
+assert(zeroFeeCharge.chargeAmount === 0, "zero quote charge 0");
+assert(zeroFeeCharge.influencerAmount === 0, "zero quote influencer amount 0");
+assert(zeroFeeCharge.platformFeeAmount === 0, "zero quote platform fee 0");
+
+// 报价为空：非纯佣金模式仍拦截
+const nullFeeRow = { flat_fee: null, currency: "USD", source: "web_search" };
+const nullFeeCharge = resolveQuoteApproveCharge(campaign, nullFeeRow);
+assert(!nullFeeCharge.ok, "null quote blocked in non-commission mode");
+
+// 报价为空：纯佣金模式仍允许（无固定费用，仅佣金）
+const commissionOnlyCampaign = {
+  campaignInfo: { influencerPricing: { mode: "commission_only" } },
+};
+const nullFeeCommissionRow = { flat_fee: null, currency: "USD", source: "web_search" };
+const nullFeeCommissionCharge = resolveQuoteApproveCharge(
+  commissionOnlyCampaign,
+  nullFeeCommissionRow
+);
+assert(nullFeeCommissionCharge.ok, "null quote ok in commission-only mode");
+assert(nullFeeCommissionCharge.chargeAmount === 0, "null quote commission charge 0");
+
 console.log("✅ test-approve-quote-charge-logic.mjs passed");
