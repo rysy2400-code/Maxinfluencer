@@ -161,8 +161,16 @@ if ($nodes.Count -eq 0) { throw "no parseable nodes in subscription" }
 $us = @($nodes | Where-Object { Test-IsUsNode $_ })
 $us = @($us | Where-Object { Test-UsableNodeServer -Srv $_.server })
 if ($us.Count -eq 0) {
-  if ((Test-ProxyListening -Port $MixedPort) -and (Test-Path $configPath)) {
+  if (Test-Path $configPath) {
     Write-Host "[ig-proxy] no usable US nodes in subscription, keeping existing config"
+    if (-not (Test-ProxyListening -Port $MixedPort)) {
+      Write-Host "[ig-proxy] mihomo not listening, starting with existing config"
+      Start-Process -FilePath $MihomoExe -ArgumentList @("-f", $configPath, "-d", $mihomoDataDir) -WindowStyle Hidden
+      for ($i = 0; $i -lt 30; $i++) {
+        if (Test-ProxyListening -Port $MixedPort) { break }
+        Start-Sleep -Seconds 1
+      }
+    }
     exit 0
   }
   throw "no usable US nodes found (total=$($nodes.Count))"
