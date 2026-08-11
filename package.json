@@ -11,6 +11,7 @@
     "lint": "next lint",
     "test:account-admin": "node scripts/test-account-admin-validation.mjs",
     "test:captcha-handoff": "node scripts/test-captcha-human-handoff.mjs",
+    "test:exec-scheduler-merge": "node scripts/test-execution-scheduler-merge.mjs",
     "test:email-ops": "node scripts/run-esm-script.cjs scripts/test-email-delivery-classification.mjs",
     "migrate:email-ops": "node scripts/run-esm-script.cjs scripts/migrate-email-ops-facts.mjs",
     "backfill:email-ops": "node scripts/run-esm-script.cjs scripts/backfill-email-ops-facts.mjs",
