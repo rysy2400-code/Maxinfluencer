@@ -67,8 +67,10 @@ export default function AccountBillingPanel({ open, onClose }) {
   const [invoices, setInvoices] = useState([]);
   const [eligibleRecharge, setEligibleRecharge] = useState([]);
   const [eligibleConsumption, setEligibleConsumption] = useState([]);
+  const [eligibleInfluencer, setEligibleInfluencer] = useState([]);
   const [requestType, setRequestType] = useState("recharge");
   const [selectedLedgerId, setSelectedLedgerId] = useState("");
+  const [selectedInfluencerLedgerId, setSelectedInfluencerLedgerId] = useState("");
   const [selectedPeriodYyyymm, setSelectedPeriodYyyymm] = useState("");
   const [requestLoading, setRequestLoading] = useState(false);
   const [invoiceMsg, setInvoiceMsg] = useState("");
@@ -124,11 +126,20 @@ export default function AccountBillingPanel({ open, onClose }) {
     setEligibleConsumption(
       Array.isArray(eligibleData.consumptionOptions) ? eligibleData.consumptionOptions : []
     );
+    setEligibleInfluencer(
+      Array.isArray(eligibleData.influencerOptions) ? eligibleData.influencerOptions : []
+    );
     const recharge = Array.isArray(eligibleData.rechargeOptions) ? eligibleData.rechargeOptions : [];
     const consumption = Array.isArray(eligibleData.consumptionOptions)
       ? eligibleData.consumptionOptions
       : [];
+    const influencer = Array.isArray(eligibleData.influencerOptions)
+      ? eligibleData.influencerOptions
+      : [];
     setSelectedLedgerId((prev) => prev || (recharge[0] ? String(recharge[0].ledgerId) : ""));
+    setSelectedInfluencerLedgerId((prev) =>
+      prev || (influencer[0] ? String(influencer[0].ledgerId) : "")
+    );
     setSelectedPeriodYyyymm((prev) =>
       prev || (consumption[0] ? String(consumption[0].periodYyyymm) : "")
     );
@@ -222,7 +233,9 @@ export default function AccountBillingPanel({ open, onClose }) {
       const body =
         requestType === "recharge"
           ? { type: "recharge", ledgerId: Number(selectedLedgerId) }
-          : { type: "monthly_consumption", periodYyyymm: selectedPeriodYyyymm };
+          : requestType === "monthly_consumption"
+            ? { type: "monthly_consumption", periodYyyymm: selectedPeriodYyyymm }
+            : { type: "influencer_campaign", ledgerId: Number(selectedInfluencerLedgerId) };
       const res = await fetch("/api/billing/invoices/request", {
         method: "POST",
         credentials: "include",
@@ -636,7 +649,7 @@ export default function AccountBillingPanel({ open, onClose }) {
               <section style={sectionCard}>
                 <div style={sectionTitle}>申请发票</div>
                 <p style={sectionHint}>
-                  按需申请 INVOICE：充值按笔、消费按月。提交后生成 PDF 并发送至通知邮箱。
+                  按需申请 INVOICE：充值按笔、消费按月或按红人合作。提交后生成 PDF 并发送至通知邮箱。
                 </p>
                 {invoiceMsg ? (
                   <div
@@ -672,6 +685,15 @@ export default function AccountBillingPanel({ open, onClose }) {
                     />
                     消费发票（按月）
                   </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                    <input
+                      type="radio"
+                      name="invoiceType"
+                      checked={requestType === "influencer_campaign"}
+                      onChange={() => setRequestType("influencer_campaign")}
+                    />
+                    消费发票（按红人）
+                  </label>
                 </div>
                 {requestType === "recharge" ? (
                   eligibleRecharge.length ? (
@@ -691,22 +713,43 @@ export default function AccountBillingPanel({ open, onClose }) {
                       暂无可开票的充值记录
                     </div>
                   )
-                ) : eligibleConsumption.length ? (
-                  <select
-                    value={selectedPeriodYyyymm}
-                    onChange={(e) => setSelectedPeriodYyyymm(e.target.value)}
-                    style={{ ...fieldStyle, minWidth: 280, marginBottom: 12 }}
-                  >
-                    {eligibleConsumption.map((opt) => (
-                      <option key={opt.periodYyyymm} value={opt.periodYyyymm}>
-                        {opt.periodLabel} · {fmtUsd(opt.amountUsd)}（{opt.rowCount} 笔）
-                      </option>
-                    ))}
-                  </select>
+                ) : requestType === "monthly_consumption" ? (
+                  eligibleConsumption.length ? (
+                    <select
+                      value={selectedPeriodYyyymm}
+                      onChange={(e) => setSelectedPeriodYyyymm(e.target.value)}
+                      style={{ ...fieldStyle, minWidth: 280, marginBottom: 12 }}
+                    >
+                      {eligibleConsumption.map((opt) => (
+                        <option key={opt.periodYyyymm} value={opt.periodYyyymm}>
+                          {opt.periodLabel} · {fmtUsd(opt.amountUsd)}（{opt.rowCount} 笔）
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 12 }}>
+                      暂无可开票的消费月份
+                    </div>
+                  )
                 ) : (
-                  <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 12 }}>
-                    暂无可开票的消费月份
-                  </div>
+                  eligibleInfluencer.length ? (
+                    <select
+                      value={selectedInfluencerLedgerId}
+                      onChange={(e) => setSelectedInfluencerLedgerId(e.target.value)}
+                      style={{ ...fieldStyle, minWidth: 320, marginBottom: 12 }}
+                    >
+                      {eligibleInfluencer.map((opt) => (
+                        <option key={opt.ledgerId} value={String(opt.ledgerId)}>
+                          {opt.influencerName} · {opt.campaignName} · {fmtUsd(opt.amountUsd)} ·{" "}
+                          {fmtDate(opt.createdAt)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 12 }}>
+                      暂无可开票的红人合作记录
+                    </div>
+                  )
                 )}
                 <button
                   type="button"
@@ -714,7 +757,9 @@ export default function AccountBillingPanel({ open, onClose }) {
                     requestLoading ||
                     (requestType === "recharge"
                       ? !eligibleRecharge.length
-                      : !eligibleConsumption.length)
+                      : requestType === "monthly_consumption"
+                        ? !eligibleConsumption.length
+                        : !eligibleInfluencer.length)
                   }
                   onClick={() => void submitInvoiceRequest()}
                   style={{
@@ -748,7 +793,15 @@ export default function AccountBillingPanel({ open, onClose }) {
                         {invoices.map((inv) => (
                           <tr key={inv.id} style={{ borderTop: "1px solid #F3F4F6" }}>
                             <td style={tableBodyCell}>{inv.invoiceNo}</td>
-                            <td style={tableBodyCell}>{inv.documentTitle || inv.invoiceType}</td>
+                            <td style={tableBodyCell}>
+                              {inv.typeLabel || inv.documentTitle || inv.invoiceType}
+                              {inv.influencerName ? (
+                                <div style={{ color: "#6B7280", marginTop: 2, fontWeight: 400 }}>
+                                  {inv.influencerName}
+                                  {inv.campaignName ? ` · ${inv.campaignName}` : ""}
+                                </div>
+                              ) : null}
+                            </td>
                             <td style={tableBodyCell}>{fmtUsd(inv.amountUsd)}</td>
                             <td style={tableBodyCell}>{fmtDate(inv.issuedAt || inv.createdAt)}</td>
                             <td style={tableBodyCell}>

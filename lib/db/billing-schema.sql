@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS tiktok_advertiser_invoice (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   advertiser_id INT NOT NULL,
   invoice_no VARCHAR(64) NOT NULL,
-  invoice_type VARCHAR(32) NOT NULL COMMENT 'recharge|monthly_consumption',
+  invoice_type VARCHAR(32) NOT NULL COMMENT 'recharge|monthly_consumption|influencer_campaign',
   document_title VARCHAR(255) NOT NULL,
   period_yyyymm CHAR(6) NOT NULL,
   seq INT NOT NULL,
