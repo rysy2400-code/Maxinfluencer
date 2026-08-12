@@ -8866,8 +8866,6 @@ export default function HomePage() {
                     campaignSummary?.followerRange ?? influencerProfile?.followerRange ?? null;
                   const profileView =
                     campaignSummary?.viewRange ?? influencerProfile?.viewRange ?? null;
-                  const profileVideoDuration =
-                    campaignSummary?.videoDuration ?? influencerProfile?.videoDuration ?? null;
                   const profileAccountType =
                     campaignSummary?.accountType ?? influencerProfile?.accountType ?? null;
                   const intervalHours = report?.intervalHours ?? null;
@@ -8956,10 +8954,6 @@ export default function HomePage() {
                               <div style={{ marginBottom: 4 }}>
                                 <span style={{ fontWeight: 600 }}>红人播放量要求：</span>
                                 {profileView || "未设置"}
-                              </div>
-                              <div style={{ marginBottom: 4 }}>
-                                <span style={{ fontWeight: 600 }}>视频时长要求：</span>
-                                {profileVideoDuration || "未设置"}
                               </div>
                               <div style={{ marginBottom: 12 }}>
                                 <span style={{ fontWeight: 600 }}>红人帐号类型要求：</span>
