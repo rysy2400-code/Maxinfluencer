@@ -254,6 +254,85 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     videoLink = null;
   }
 
+  // —— 结构化交付时间线（脚本 / 视频草稿 / 发布链接），存 last_event.deliverablesTimeline ——
+  const savedAtIso = new Date().toISOString();
+  let deliverablesTimeline = Array.isArray(mergedLastEvent.deliverablesTimeline)
+    ? mergedLastEvent.deliverablesTimeline
+    : [];
+  if (!Array.isArray(deliverablesTimeline)) deliverablesTimeline = [];
+
+  const deliverableSubmission =
+    payload.deliverable &&
+    (payload.deliverable.kind === "script" ||
+      payload.deliverable.kind === "video_draft");
+  if (resolved.allowDraftLinkUpdate && (draftLink || deliverableSubmission)) {
+    const hasScriptApproved = Boolean(
+      mergedLastEvent.scriptApprovedAt ||
+        deliverablesTimeline.some(
+          (e) => e?.kind === "script" && e?.type === "approved"
+        )
+    );
+    let kind = payload.deliverable?.kind;
+    if (kind !== "script" && kind !== "video_draft") {
+      kind = hasScriptApproved ? "video_draft" : "script";
+    }
+    const effectiveLink = draftLink || payload.deliverable?.link || null;
+    const eventAttachments = await listInboundAttachmentsByEmailEventId(
+      emailEvent.id
+    ).catch(() => []);
+    const wantedFilename = payload.deliverable?.attachmentFilename;
+    let attachmentMeta = null;
+    if (wantedFilename && eventAttachments.length) {
+      attachmentMeta =
+        eventAttachments.find((a) => a.filename === wantedFilename) || null;
+    } else if (!wantedFilename && eventAttachments.length === 1) {
+      attachmentMeta = eventAttachments[0];
+    }
+    deliverablesTimeline = [
+      ...deliverablesTimeline,
+      {
+        kind: kind === "published" ? "video_draft" : kind,
+        role: "influencer",
+        type: "submitted",
+        content: payload.deliverable?.content || null,
+        link: effectiveLink,
+        attachment: attachmentMeta
+          ? {
+              inboundAttachmentId: attachmentMeta.inboundAttachmentId,
+              filename: attachmentMeta.filename,
+              contentType: attachmentMeta.contentType,
+            }
+          : null,
+        at: savedAtIso,
+        source: "influencer_email",
+        emailEventId: emailEvent.id || null,
+      },
+    ];
+  }
+
+  if (resolved.allowVideoLinkUpdate && videoLink) {
+    if (videoLink) mergedLastEvent.videoLink = videoLink;
+    if (payload.promoCode) mergedLastEvent.promoCode = payload.promoCode;
+    deliverablesTimeline = [
+      ...deliverablesTimeline,
+      {
+        kind: "published",
+        role: "influencer",
+        type: "published_link",
+        link: videoLink,
+        content: payload.promoCode ? `投流码: ${payload.promoCode}` : null,
+        promoCode: payload.promoCode || null,
+        at: savedAtIso,
+        source: "influencer_email",
+        emailEventId: emailEvent.id || null,
+      },
+    ];
+  }
+
+  if (deliverablesTimeline.length) {
+    mergedLastEvent.deliverablesTimeline = deliverablesTimeline;
+  }
+
   mergedLastEvent = {
     ...mergedLastEvent,
     campaignAgentDecision: {

@@ -628,6 +628,46 @@ async function applyDecision(decision, event, executions) {
         ? upd.draftLink.trim()
         : null;
 
+    let deliverable = null;
+    if (upd.deliverable && typeof upd.deliverable === "object") {
+      const dKind = upd.deliverable.kind;
+      const dType = upd.deliverable.type;
+      deliverable = {
+        kind:
+          dKind === "script" || dKind === "video_draft" || dKind === "published"
+            ? dKind
+            : null,
+        type: dType === "published_link" ? "published_link" : "submitted",
+        content:
+          typeof upd.deliverable.content === "string"
+            ? upd.deliverable.content.trim().slice(0, 20000) || null
+            : null,
+        link:
+          typeof upd.deliverable.link === "string" &&
+          upd.deliverable.link.trim()
+            ? upd.deliverable.link.trim().slice(0, 1024)
+            : null,
+        attachmentFilename:
+          typeof upd.deliverable.attachmentFilename === "string" &&
+          upd.deliverable.attachmentFilename.trim()
+            ? upd.deliverable.attachmentFilename.trim().slice(0, 255)
+            : null,
+      };
+      if (
+        deliverable.kind == null &&
+        deliverable.content == null &&
+        deliverable.link == null &&
+        deliverable.attachmentFilename == null
+      ) {
+        deliverable = null;
+      }
+    }
+
+    let promoCode =
+      typeof upd.promoCode === "string" && upd.promoCode.trim()
+        ? upd.promoCode.trim().slice(0, 255)
+        : null;
+
     let shippingInfo =
       upd.shippingInfo && typeof upd.shippingInfo === "object"
         ? normalizeShippingInfo(upd.shippingInfo)
@@ -668,6 +708,36 @@ async function applyDecision(decision, event, executions) {
       if (parsed.videoLink) videoLink = parsed.videoLink;
     }
 
+    // 兜底：LLM 未返回 deliverable 时，按阶段推断（有脚本通过标记→视频草稿，否则脚本/发布链接）
+    if (!deliverable && (draftLink || videoLink)) {
+      const lastEvent = exec?.lastEvent || {};
+      const timeline = Array.isArray(lastEvent.deliverablesTimeline)
+        ? lastEvent.deliverablesTimeline
+        : [];
+      const hasScriptApproved = Boolean(
+        lastEvent.scriptApprovedAt ||
+          timeline.some(
+            (e) => e?.kind === "script" && e?.type === "approved"
+          )
+      );
+      deliverable = {
+        kind: videoLink ? "published" : hasScriptApproved ? "video_draft" : "script",
+        type: videoLink ? "published_link" : "submitted",
+        content: null,
+        link: draftLink || videoLink,
+        attachmentFilename: null,
+      };
+    }
+    if (
+      deliverable &&
+      deliverable.kind === "script" &&
+      !deliverable.content &&
+      !deliverable.link &&
+      event.body_text
+    ) {
+      deliverable = { ...deliverable, content: event.body_text.trim() };
+    }
+
     const payload = {
       type: upd.type || "execution_update_suggested",
       campaignId,
@@ -677,6 +747,8 @@ async function applyDecision(decision, event, executions) {
       flatFeeUSD: flatFee,
       draftLink,
       videoLink,
+      deliverable,
+      promoCode,
       shippingInfo,
       emailEvent: {
         id: event.id,
@@ -690,6 +762,8 @@ async function applyDecision(decision, event, executions) {
         flatFeeUSD: flatFee,
         draftLink,
         videoLink,
+        deliverable,
+        promoCode,
       },
       createdAt: new Date().toISOString(),
     };
@@ -931,6 +1005,14 @@ ${influencerAgentBasePrompt}
         "flatFeeUSD": 200,
         "draftLink": "https://www.tiktok.com/@xxx/video/123",
         "videoLink": "https://www.tiktok.com/@xxx/video/456",
+        "deliverable": {
+          "kind": "script|video_draft|published",
+          "type": "submitted|published_link",
+          "content": "脚本/草稿正文（从邮件正文或附件提取，去掉寒暄客套；无正文可省略）",
+          "link": "https://...（与 draftLink/videoLink 一致，可选）",
+          "attachmentFilename": "附件文件名（脚本/草稿以附件提交时填，须与 email.attachments[].filename 完全一致，可选）"
+        },
+        "promoCode": "投流码（红人提交最终发布链接时如有，可选）",
         "shippingInfo": {
           "name": "xxx",
           "phone": "xxx",
@@ -997,6 +1079,11 @@ ${influencerAgentBasePrompt}
 - 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
 - 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
 - draftLink 可以是 TikTok、Google Drive、Dropbox、Box、WeTransfer、MediaFire、iCloud 等任意可访问链接；从正文/附件识别到链接时务必填入 draftLink（published 阶段交最终稿除外，才用 videoLink）。
+- 红人提交**文字脚本**（写在邮件正文、作为附件文件、或给链接）时，除 draftLink 外**必须**返回 deliverable：
+  - kind="script"；content 填从邮件正文/附件提取的脚本正文（保留 ON-SCREEN HOOK / VOICEOVER / VISUAL 等完整结构，去掉寒暄客套）；脚本为附件时 attachmentFilename 须与 email.attachments[].filename 完全一致；
+  - 脚本以链接形式提供时，link 与 draftLink 一致。
+- 红人提交**视频草稿**时，deliverable.kind="video_draft"，link=draftLink；如草稿是附件文件，attachmentFilename 填附件文件名。
+- 草稿已通过后红人提交**最终发布视频链接**时，deliverable.kind="published"、type="published_link"、link=videoLink；邮件/正文里如有投流码、推广码或 UTM 等，填 promoCode（没有则省略）。
 
 【报价阶段 · 与红人沟通的纪律（极其重要）】
 - 判断品牌是否已同意报价：看 activeExecutions[].lastEvent.quoteApprovedAt 是否存在。不存在则一律视为**品牌尚未确认**。

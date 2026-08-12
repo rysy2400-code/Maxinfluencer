@@ -227,13 +227,59 @@ export async function PATCH(req, { params }) {
           sampleSentAt: new Date().toISOString(),
         };
         break;
-      case "approveDraft":
-        stage = "published";
-        lastEvent = {
-          draftApprovedAt: new Date().toISOString(),
-          ...payload,
+      case "approveDraft": {
+        const existing = await getExecutionRow(campaignId, influencerId);
+        const prevLastEvent = existing?.lastEvent || {};
+        const prevTimeline = Array.isArray(prevLastEvent.deliverablesTimeline)
+          ? prevLastEvent.deliverablesTimeline
+          : [];
+        const lastSubmitted = [...prevTimeline]
+          .reverse()
+          .find((e) => e?.role === "influencer" && e?.type === "submitted");
+        const hasScriptApproved = Boolean(
+          prevLastEvent.scriptApprovedAt ||
+            prevTimeline.some(
+              (e) => e?.kind === "script" && e?.type === "approved"
+            )
+        );
+        const kind =
+          payload.kind === "script" || payload.kind === "video_draft"
+            ? payload.kind
+            : lastSubmitted?.kind === "script"
+            ? "script"
+            : hasScriptApproved
+            ? "video_draft"
+            : lastSubmitted?.kind || "video_draft";
+        const now = new Date().toISOString();
+        const draftLink =
+          payload.draftLink || prevLastEvent.draftLink || null;
+        const approvedEntry = {
+          kind,
+          role: "advertiser",
+          type: "approved",
+          link: draftLink,
+          at: now,
+          source: "advertiser_portal",
         };
+        if (kind === "script") {
+          // 脚本通过：保持 pending_draft 语义（等待红人提交视频草稿），不新增状态
+          stage = "pending_draft";
+          lastEvent = {
+            scriptApprovedAt: now,
+            scriptApprovedLink: draftLink,
+            draftLink,
+            deliverablesTimeline: [...prevTimeline, approvedEntry],
+          };
+        } else {
+          stage = "published";
+          lastEvent = {
+            draftApprovedAt: now,
+            draftLink,
+            deliverablesTimeline: [...prevTimeline, approvedEntry],
+          };
+        }
         break;
+      }
       case "rejectDraft": {
         const feedback = String(
           payload.feedback || payload.draftFeedback || ""
@@ -247,17 +293,44 @@ export async function PATCH(req, { params }) {
         stage = "draft_submitted";
         const existing = await getExecutionRow(campaignId, influencerId);
         const prevHistory = existing?.lastEvent?.revisionHistory || [];
+        const prevTimeline = Array.isArray(
+          existing?.lastEvent?.deliverablesTimeline
+        )
+          ? existing.lastEvent.deliverablesTimeline
+          : [];
         const draftLink = payload.draftLink || existing?.lastEvent?.draftLink;
+        const lastSubmitted = [...prevTimeline]
+          .reverse()
+          .find((e) => e?.role === "influencer" && e?.type === "submitted");
+        const kind =
+          payload.kind === "script"
+            ? "script"
+            : payload.kind === "video_draft"
+            ? "video_draft"
+            : lastSubmitted?.kind || "video_draft";
+        const now = new Date().toISOString();
         lastEvent = {
           draftFeedback: feedback.slice(0, 2000),
           draftLink,
-          draftRejectedAt: new Date().toISOString(),
+          draftRejectedAt: now,
           revisionHistory: [
             ...prevHistory,
             {
               draftLink,
               feedback: feedback.slice(0, 2000),
-              rejectedAt: new Date().toISOString(),
+              rejectedAt: now,
+            },
+          ],
+          deliverablesTimeline: [
+            ...prevTimeline,
+            {
+              kind,
+              role: "advertiser",
+              type: "feedback",
+              content: feedback.slice(0, 2000),
+              link: draftLink || null,
+              at: now,
+              source: "advertiser_portal",
             },
           ],
         };

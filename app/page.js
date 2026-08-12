@@ -20,6 +20,10 @@ import {
   chatAttachmentDownloadHref,
   isAttachmentOnlyUserMessage,
 } from "./chat-file-utils";
+import {
+  inboundAttachmentDownloadUrl,
+  inboundAttachmentPreviewUrl,
+} from "../lib/influencer/inbound-attachment-urls.js";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import AccountBillingPanel from "./components/AccountBillingPanel";
@@ -1181,6 +1185,29 @@ function ExecutionProgressSubTabs({ tabs, activeKey, onChange }) {
   );
 }
 
+const DELIVERABLE_KIND_LABEL = {
+  script: "脚本",
+  video_draft: "视频草稿",
+  published: "发布链接",
+};
+
+/** 交付时间线条目的动作文案（如：提交脚本 / 脚本修改意见 / 通过脚本 / 提交发布链接） */
+function executionDeliverableTypeLabel(entry) {
+  const kind = DELIVERABLE_KIND_LABEL[entry?.kind] || "交付物";
+  switch (entry?.type) {
+    case "submitted":
+      return `提交${kind}`;
+    case "feedback":
+      return kind === "脚本" ? "脚本修改意见" : `${kind}修改意见`;
+    case "approved":
+      return kind === "脚本" ? "通过脚本" : `通过${kind}`;
+    case "published_link":
+      return "提交发布链接";
+    default:
+      return entry?.type || "";
+  }
+}
+
 /** 执行进度卡片：分析类长文默认两行，可展开；展开后可选 Markdown（sanitize） */
 function executionProgressCollapsibleText(raw) {
   if (raw == null || raw === "") return "—";
@@ -1516,6 +1543,8 @@ function ExecutionProgressRow({
   highlightUsername,
 }) {
   const [draftExpanded, setDraftExpanded] = React.useState(false);
+  const [scriptContentExpanded, setScriptContentExpanded] = React.useState(false);
+  const [deliverablesExpanded, setDeliverablesExpanded] = React.useState(false);
   const [negExpanded, setNegExpanded] = React.useState(false);
   const [contactProfileExpanded, setContactProfileExpanded] = React.useState(false);
   const [contactReasonExpanded, setContactReasonExpanded] = React.useState(true);
@@ -1780,6 +1809,45 @@ function ExecutionProgressRow({
 
   const publishedLink =
     item.videoLink || item.executionVideoLink || item.video_link;
+
+  const deliverablesTimeline = Array.isArray(item.deliverablesTimeline)
+    ? item.deliverablesTimeline
+    : [];
+  const lastSubmittedEntry = [...deliverablesTimeline]
+    .reverse()
+    .find((e) => e?.role === "influencer" && e?.type === "submitted");
+  const currentReviewKind = lastSubmittedEntry?.kind || null;
+  const hasScriptApproved = Boolean(
+    item.scriptApprovedAt ||
+      deliverablesTimeline.some(
+        (e) => e?.kind === "script" && e?.type === "approved"
+      )
+  );
+  const hasDraftApproved = Boolean(
+    item.draftApprovedAt ||
+      deliverablesTimeline.some(
+        (e) => e?.kind === "video_draft" && e?.type === "approved"
+      )
+  );
+  const legacyPendingDraft =
+    deliverablesTimeline.length === 0 && Boolean(draftLink);
+  const lastSubmittedReviewed =
+    lastSubmittedEntry &&
+    ((lastSubmittedEntry.kind === "script" && hasScriptApproved) ||
+      (lastSubmittedEntry.kind === "video_draft" && hasDraftApproved));
+  const canReviewSubmission =
+    legacyPendingDraft || (lastSubmittedEntry && !lastSubmittedReviewed);
+  let draftPhaseStatus = null;
+  if (lastSubmittedEntry && !lastSubmittedReviewed) {
+    draftPhaseStatus =
+      lastSubmittedEntry.kind === "script"
+        ? "已提交脚本，待品牌审核"
+        : "已提交视频草稿，待品牌审核";
+  } else if (hasScriptApproved && !hasDraftApproved) {
+    draftPhaseStatus = "脚本已通过，等待红人提交视频草稿";
+  } else if (hasDraftApproved) {
+    draftPhaseStatus = "视频草稿已通过";
+  }
 
   const labelRow = (k, v) => (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -2245,6 +2313,20 @@ function ExecutionProgressRow({
 
       {stageKey === "pendingDraft" && (
         <>
+          {draftPhaseStatus ? (
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "#3730A3",
+                backgroundColor: "#EEF2FF",
+                borderRadius: 6,
+                padding: "4px 8px",
+              }}
+            >
+              {draftPhaseStatus}
+            </div>
+          ) : null}
           {labelRow(
             "草稿链接",
             draftLink ? (
@@ -2255,6 +2337,15 @@ function ExecutionProgressRow({
               "—"
             )
           )}
+          {currentReviewKind === "script" && lastSubmittedEntry?.content ? (
+            <ExecutionProgressCollapsibleRow
+              label="脚本正文"
+              text={lastSubmittedEntry.content}
+              expanded={scriptContentExpanded}
+              onToggle={setScriptContentExpanded}
+              useMarkdown={false}
+            />
+          ) : null}
           {labelRow("修改建议", item.draftFeedback || item.feedback || "—")}
           {revisionHistory.length > 0 && (
             <>
@@ -2299,53 +2390,191 @@ function ExecutionProgressRow({
                 ))}
             </>
           )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                patchExecution("approveDraft", username, {
-                  draftLink,
-                })
-              }
-              style={{
-                padding: "4px 12px",
-                borderRadius: 8,
-                border: "1px solid #10B981",
-                backgroundColor: "#ECFDF5",
-                color: "#047857",
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
-              同意草稿
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                const feedback = window.prompt("修改建议（必填）") ?? "";
-                const trimmed = feedback.trim();
-                if (!trimmed) {
-                  window.alert("请填写修改建议后再提交");
-                  return;
+          {deliverablesTimeline.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <button
+                type="button"
+                onClick={() => setDeliverablesExpanded(!deliverablesExpanded)}
+                style={{
+                  fontSize: 11,
+                  color: "#4F46E5",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {deliverablesExpanded
+                  ? "收起交付时间线"
+                  : `展开交付时间线（${deliverablesTimeline.length}）`}
+              </button>
+              {deliverablesExpanded && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  {[...deliverablesTimeline].reverse().map((entry, idx) => {
+                    const roleLabel =
+                      entry.role === "advertiser"
+                        ? "品牌方"
+                        : entry.role === "influencer"
+                        ? "红人"
+                        : entry.role === "system"
+                        ? "系统"
+                        : entry.role || "—";
+                    const previewHref = entry.attachment?.inboundAttachmentId
+                      ? inboundAttachmentPreviewUrl(
+                          entry.attachment.inboundAttachmentId
+                        )
+                      : null;
+                    const downloadHref = entry.attachment?.inboundAttachmentId
+                      ? inboundAttachmentDownloadUrl(
+                          entry.attachment.inboundAttachmentId
+                        )
+                      : null;
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          fontSize: 11,
+                          borderLeft: "2px solid #E5E7EB",
+                          paddingLeft: 8,
+                          color: "#4B5563",
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, color: "#374151" }}>
+                          {roleLabel} · {executionDeliverableTypeLabel(entry)}
+                        </div>
+                        {entry.at ? (
+                          <div style={{ fontSize: 10, color: "#9CA3AF" }}>
+                            {formatExecutionTimeBeijing(entry.at) || "—"}
+                          </div>
+                        ) : null}
+                        {entry.link ? (
+                          <div style={{ marginTop: 2, wordBreak: "break-all" }}>
+                            <a
+                              href={entry.link}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: "#4F46E5" }}
+                            >
+                              {entry.link}
+                            </a>
+                          </div>
+                        ) : null}
+                        {entry.attachment ? (
+                          <div style={{ marginTop: 2 }}>
+                            {entry.attachment.filename || "附件"}
+                            {previewHref ? (
+                              <>
+                                {" "}
+                                <a
+                                  href={previewHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ color: "#4F46E5" }}
+                                >
+                                  预览
+                                </a>
+                              </>
+                            ) : null}
+                            {downloadHref ? (
+                              <>
+                                {" "}
+                                <a
+                                  href={downloadHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ color: "#4F46E5" }}
+                                >
+                                  下载
+                                </a>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {entry.content ? (
+                          <div
+                            style={{
+                              marginTop: 2,
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {entry.content}
+                          </div>
+                        ) : null}
+                        {entry.promoCode ? (
+                          <div style={{ marginTop: 2 }}>
+                            投流码: {entry.promoCode}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {canReviewSubmission && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  patchExecution("approveDraft", username, {
+                    draftLink,
+                    kind: currentReviewKind || undefined,
+                  })
                 }
-                patchExecution("rejectDraft", username, {
-                  draftLink,
-                  feedback: trimmed.slice(0, 2000),
-                });
-              }}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 8,
-                border: "1px solid #F59E0B",
-                backgroundColor: "#FFFBEB",
-                color: "#B45309",
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
-              不同意并反馈
-            </button>
-          </div>
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #10B981",
+                  backgroundColor: "#ECFDF5",
+                  color: "#047857",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
+                {busy
+                  ? "处理中…"
+                  : currentReviewKind === "script"
+                  ? "通过脚本"
+                  : "同意草稿"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const feedback = window.prompt("修改建议（必填）") ?? "";
+                  const trimmed = feedback.trim();
+                  if (!trimmed) {
+                    window.alert("请填写修改建议后再提交");
+                    return;
+                  }
+                  patchExecution("rejectDraft", username, {
+                    draftLink,
+                    feedback: trimmed.slice(0, 2000),
+                    kind: currentReviewKind || undefined,
+                  });
+                }}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #F59E0B",
+                  backgroundColor: "#FFFBEB",
+                  color: "#B45309",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
+                不同意并反馈
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -2367,6 +2596,7 @@ function ExecutionProgressRow({
               "—"
             )
           )}
+          {labelRow("投流码", item.promoCode || item.adcode || "—")}
           {labelRow(
             "播放 / 赞 / 评",
             `${formatInfluencerStat(item.views)} / ${formatInfluencerStat(item.likes)} / ${formatInfluencerStat(item.comments)}`
