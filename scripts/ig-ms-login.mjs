@@ -127,17 +127,15 @@ async function main() {
         return;
       }
 
-      if ((await page.locator(MS_EMAIL_SELECTOR).count()) && /login\.live\.com|signin/.test(page.url())) {
-        // 直接落在登录页，继续走下方统一登录流程
-      } else {
-        // 营销页/落地页 Sign in 入口
-        const signIn = page
-          .locator('a:has-text("Sign in"), button:has-text("Sign in"), a[href*="login.live.com"]')
-          .first();
-        if (await signIn.isVisible().catch(() => false)) {
-          await signIn.click({ timeout: 10000 }).catch(() => {});
-          await page.waitForTimeout(4000);
-        }
+      // 未登录：直接进 login.live.com 标准登录流（营销页 Sign in 跳转不稳定）
+      await page.goto("https://login.live.com/", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      }).catch(() => {});
+      await page.waitForTimeout(3000);
+      if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
+        log("Outlook 已是登录态 ✅ " + page.url());
+        return;
       }
 
       const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
