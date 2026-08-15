@@ -157,6 +157,13 @@ async function submitIgLogin(page) {
 
 async function outlookSignIn(context, page) {
   log(`打开 Outlook 登录绑定邮箱 ${EMAIL_USER} ...`);
+  if (process.env.IG_MS_FORCE_RELOGIN === "1") {
+    log("IG_MS_FORCE_RELOGIN=1，清除微软账号登录态（切换邮箱账号）...");
+    await context.clearCookies({ domain: ".live.com" }).catch(() => {});
+    await context.clearCookies({ domain: ".microsoft.com" }).catch(() => {});
+    await context.clearCookies({ domain: ".outlook.com" }).catch(() => {});
+    await context.clearCookies({ domain: ".office.com" }).catch(() => {});
+  }
   // 先探测已登录态；未登录时微软会重定向到 login.live.com 或营销页
   await page.goto("https://outlook.live.com/mail/0/", {
     waitUntil: "domcontentloaded",
