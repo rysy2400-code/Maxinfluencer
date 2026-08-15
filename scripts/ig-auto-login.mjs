@@ -242,13 +242,14 @@ async function outlookSignIn(context, page) {
 
     // 等待落在邮箱页（可能先出现 Stay signed in?）
     const deadline = Date.now() + 120000;
-    let lastMailGoto = 0;
+    let mailGotoDone = false;
     while (Date.now() < deadline) {
       const curUrl = page.url();
       if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(curUrl)) break;
-      // 会话已建立但停在 post.srf/账户页：主动跳去邮箱
-      if (Date.now() - lastMailGoto > 15000 && /login\.live\.com|post\.srf|account\.microsoft|account\.live/.test(curUrl)) {
-        lastMailGoto = Date.now();
+      // 前 60 秒不打断自然跳转（提交验证码后微软会自动回跳登录前页面）；
+      // 超时仍停在中间页才兜底主动跳一次邮箱。
+      if (!mailGotoDone && Date.now() - deadline > -60000 && /login\.live\.com|post\.srf|account\.microsoft|account\.live/.test(curUrl)) {
+        mailGotoDone = true;
         await page
           .goto("https://outlook.live.com/mail/0/", {
             waitUntil: "domcontentloaded",
