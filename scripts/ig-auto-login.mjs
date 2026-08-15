@@ -23,6 +23,7 @@
 import { chromium } from "playwright";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
+const IG_LOGIN_URL = process.env.IG_LOGIN_URL || "https://www.instagram.com/";
 const IG_USER = (process.env.IG_LOGIN_USERNAME || "").trim();
 const IG_PASS = process.env.IG_LOGIN_PASSWORD || "";
 const EMAIL_USER = (process.env.IG_EMAIL_USERNAME || "").trim();
@@ -285,9 +286,11 @@ async function main() {
     let page = context.pages()[0] || (await context.newPage());
 
     log(`连接成功，当前页面: ${page.url()}`);
+    // 注意：/accounts/login/ 路径在部分 IP 上会被 IG 直接 429，
+    // 而首页 www.instagram.com/ 自带登录表单且通常可正常加载，因此默认走首页。
     // IG 对数据中心 IP 偶发限流(429)，首次导航可能超时，重试并等待真实到达 instagram 域
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await page.goto("https://www.instagram.com/accounts/login/", {
+      await page.goto(IG_LOGIN_URL, {
         waitUntil: "domcontentloaded",
         timeout: 90000,
       }).catch(() => {});
