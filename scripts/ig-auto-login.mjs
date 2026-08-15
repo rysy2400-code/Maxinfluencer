@@ -163,6 +163,14 @@ async function outlookSignIn(context, page) {
     await context.clearCookies({ domain: ".microsoft.com" }).catch(() => {});
     await context.clearCookies({ domain: ".outlook.com" }).catch(() => {});
     await context.clearCookies({ domain: ".office.com" }).catch(() => {});
+    // clearCookies 不足以清除微软会话（本地存储/会话 cookie），显式登出
+    await page
+      .goto("https://login.live.com/logout.srf", {
+        waitUntil: "domcontentloaded",
+        timeout: 45000,
+      })
+      .catch(() => {});
+    await page.waitForTimeout(3000);
   }
   // 先探测已登录态；未登录时微软会重定向到 login.live.com 或营销页
   await page.goto("https://outlook.live.com/mail/0/", {

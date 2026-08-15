@@ -98,6 +98,13 @@ async function main() {
         await ctx.clearCookies({ domain: ".microsoft.com" }).catch(() => {});
         await ctx.clearCookies({ domain: ".outlook.com" }).catch(() => {});
         await ctx.clearCookies({ domain: ".office.com" }).catch(() => {});
+        await page
+          .goto("https://login.live.com/logout.srf", {
+            waitUntil: "domcontentloaded",
+            timeout: 45000,
+          })
+          .catch(() => {});
+        await page.waitForTimeout(3000);
       }
       // 已登录时直接落在邮箱；未登录时微软会重定向到 login.live.com 或营销页
       await page.goto("https://outlook.live.com/mail/0/", {
