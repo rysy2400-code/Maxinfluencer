@@ -188,11 +188,23 @@ async function main() {
 
       log("等待进入 Outlook 邮箱...");
       const deadline = Date.now() + 90000;
+      let redirected = false;
       while (Date.now() < deadline) {
         const url = page.url();
         if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(url)) {
           log("Outlook 登录成功 ✅ " + url);
           return;
+        }
+        // 登录成功但落在账户页/其他落地页时，主动跳去邮箱
+        if (!redirected && /account\.microsoft\.com|outlook\.live\.com|account\.live\.com/.test(url)) {
+          redirected = true;
+          log("已登录微软账号，主动跳转 Outlook 邮箱: " + url);
+          await page.goto("https://outlook.live.com/mail/0/", {
+            waitUntil: "domcontentloaded",
+            timeout: 60000,
+          }).catch(() => {});
+          await sleep(3000);
+          continue;
         }
         const stay = page
           .locator('button[value="No"], input[value="No"], button:has-text("No"), button:has-text("否")')
