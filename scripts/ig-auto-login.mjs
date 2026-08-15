@@ -154,13 +154,12 @@ async function submitIgLogin(page) {
 
 async function outlookSignIn(context, page) {
   log(`打开 Outlook 登录绑定邮箱 ${EMAIL_USER} ...`);
-  // 未登录时 outlook.live.com/mail/0/ 会被微软重定向到营销页，
-  // 直接进 login.live.com 走标准登录流更稳。
-  await page.goto("https://login.live.com/", {
+  // 先探测已登录态；未登录时微软会重定向到 login.live.com 或营销页
+  await page.goto("https://outlook.live.com/mail/0/", {
     waitUntil: "domcontentloaded",
     timeout: 60000,
   }).catch(() => {});
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(5000);
 
   const url = page.url();
   if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(url)) {
@@ -168,13 +167,15 @@ async function outlookSignIn(context, page) {
     return;
   }
 
-  // 营销页/落地页上的 Sign in 入口
-  const signIn = page
-    .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
-    .first();
-  if (await signIn.isVisible().catch(() => false) && !(await page.locator(MS_EMAIL_SELECTOR).count())) {
-    await signIn.click({ timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(3500);
+  if (!((await page.locator(MS_EMAIL_SELECTOR).count()) && /login\.live\.com|signin/.test(page.url()))) {
+    // 营销页/落地页上的 Sign in 入口
+    const signIn = page
+      .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
+      .first();
+    if (await signIn.isVisible().catch(() => false)) {
+      await signIn.click({ timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(4000);
+    }
   }
 
   if ((await page.locator(MS_EMAIL_SELECTOR).count()) || /login\.live\.com|signin/.test(page.url())) {
