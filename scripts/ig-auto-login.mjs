@@ -189,39 +189,21 @@ async function outlookSignIn(context, page) {
 
     // 无密码(passkey)账号：微软要求先验证恢复邮箱
     const recoveryBox = page.locator(MS_RECOVERY_SELECTOR).first();
-    const recoveryVisible = await recoveryBox.isVisible({ timeout: 15000 }).catch(() => false);
+    let recoveryVisible = await recoveryBox.isVisible({ timeout: 30000 }).catch(() => false);
+    if (!recoveryVisible) {
+      // 兜底：页面文案/元素再判断一次（慢加载场景）
+      const text = await pageText(page);
+      recoveryVisible =
+        /verify your email|recovery email|proof-confirmation|验证你的电子邮件|恢复邮箱/i.test(text) ||
+        (await page.locator(MS_RECOVERY_SELECTOR).count()) > 0;
+      if (recoveryVisible) {
+        await recoveryBox.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+      }
+    }
     if (recoveryVisible) {
-      if (!EMAIL_RECOVERY || !EMAIL_RECOVERY_PASS) {
-        throw new Error("微软要求验证恢复邮箱，请配置 IG_EMAIL_RECOVERY / IG_EMAIL_RECOVERY_PASSWORD");
-      }
-      log(`微软要求验证恢复邮箱，自动填入 ${EMAIL_RECOVERY} 并发送验证码...`);
-      await recoveryBox.fill(EMAIL_RECOVERY, { timeout: 10000 });
-      await page
-        .locator('button:has-text("Send code"), input[type="submit"]')
-        .first()
-        .click({ timeout: 10000 });
-      log("已发送恢复邮箱验证码，等待 IMAP 收码...");
-      const codeBox = page.locator(MS_CODE_BOX_SELECTOR).first();
-      await codeBox.waitFor({ state: "visible", timeout: 30000 });
-      const msCode = await readMsCodeFromImap();
-      log(`IMAP 收到微软验证码: ${msCode}`);
-      const boxes = page.locator(MS_CODE_BOX_SELECTOR);
-      const n = await boxes.count();
-      for (let i = 0; i < n && i < 6; i += 1) {
-        await boxes.nth(i).fill(msCode[i] || "", { timeout: 5000 }).catch(() => {});
-      }
-      await page.keyboard.press("Enter");
-      log("已提交微软验证码，等待登录结果...");
+      await handleMsRecovery(page, recoveryBox);
     } else {
-      // 常规密码登录
-      const passInput = page.locator(MS_PASS_SELECTOR).first();
-      await passInput.waitFor({ state: "visible", timeout: 30000 });
-      await passInput.fill(EMAIL_PASS, { timeout: 10000 });
-      await page
-        .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
-        .first()
-        .click({ timeout: 10000 });
-      log("已提交 Outlook 密码，等待登录结果...");
+      await completeMsPasswordOrRecovery(page);
     }
 
     // 等待落在邮箱页（可能先出现 Stay signed in?）
@@ -247,6 +229,57 @@ async function outlookSignIn(context, page) {
     return;
   }
   throw new Error("无法定位 Outlook 登录入口");
+}
+
+/**
+ * 常规密码登录；若实际是恢复邮箱验证页（慢加载），自动切换恢复邮箱流程。
+ */
+async function completeMsPasswordOrRecovery(page) {
+  const passInput = page.locator(MS_PASS_SELECTOR).first();
+  let passVisible = await passInput.isVisible({ timeout: 25000 }).catch(() => false);
+  if (!passVisible) {
+    const text = await pageText(page);
+    const rec2 = page.locator(MS_RECOVERY_SELECTOR).first();
+    const isRecovery = (await rec2.count()) > 0 ||
+      /verify your email|recovery email|proof-confirmation|验证你的电子邮件|恢复邮箱/i.test(text);
+    if (isRecovery) {
+      await handleMsRecovery(page, rec2);
+      return;
+    }
+    await passInput.waitFor({ state: "visible", timeout: 15000 });
+    passVisible = true;
+  }
+  await passInput.fill(EMAIL_PASS, { timeout: 10000 });
+  await page
+    .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
+    .first()
+    .click({ timeout: 10000 });
+  log("已提交 Outlook 密码，等待登录结果...");
+}
+
+async function handleMsRecovery(page, recoveryBox) {
+  if (!EMAIL_RECOVERY || !EMAIL_RECOVERY_PASS) {
+    throw new Error("微软要求验证恢复邮箱，请配置 IG_EMAIL_RECOVERY / IG_EMAIL_RECOVERY_PASSWORD");
+  }
+  log(`检测到恢复邮箱验证页，自动填入 ${EMAIL_RECOVERY} 并发送验证码...`);
+  await recoveryBox.waitFor({ state: "visible", timeout: 20000 });
+  await recoveryBox.fill(EMAIL_RECOVERY, { timeout: 10000 });
+  await page
+    .locator('button:has-text("Send code"), input[type="submit"]')
+    .first()
+    .click({ timeout: 10000 });
+  log("已发送恢复邮箱验证码，等待 IMAP 收码...");
+  const codeBox = page.locator(MS_CODE_BOX_SELECTOR).first();
+  await codeBox.waitFor({ state: "visible", timeout: 30000 });
+  const msCode = await readMsCodeFromImap();
+  log(`IMAP 收到微软验证码: ${msCode}`);
+  const boxes = page.locator(MS_CODE_BOX_SELECTOR);
+  const n = await boxes.count();
+  for (let i = 0; i < n && i < 6; i += 1) {
+    await boxes.nth(i).fill(msCode[i] || "", { timeout: 5000 }).catch(() => {});
+  }
+  await page.keyboard.press("Enter");
+  log("已提交微软验证码，等待登录结果...");
 }
 
 async function findIgCodeEmail(page) {
