@@ -526,32 +526,39 @@ async function main() {
         if (!codeSent) {
           log(`检测到邮箱验证码页: ${ch.pattern || "存在验证码输入框"}`);
           codeSent = true;
-        }
-        // 若已有输入框说明 IG 已把验证码发出/展示，直接尝试收码回填
-        const outlookPage = await openPage(context, "https://outlook.live.com/mail/0/");
-        try {
-          await outlookSignIn(context, outlookPage);
-          const code = await findIgCodeEmail(outlookPage, usedIgCodes);
-          await page.bringToFront().catch(() => {});
-          await page.waitForTimeout(1000);
-          await submitIgCode(page, code);
-          usedIgCodes.add(code);
-          // 若 IG 提示验证码错误，点 Get a new code 触发新码
-          await sleep(3000);
-          const afterText = await pageText(page);
-          if (/incorrect|不正确|wrong code|didn'?t work|invalid code/i.test(afterText)) {
-            log("IG 提示验证码错误，点击 Get a new code 重新获取...");
-            const getNew = page
-              .locator('div[role="button"]:has-text("Get a new code"), div[role="button"]:has-text("重新获取"), a:has-text("Get a new code")')
-              .first();
-            if (await getNew.isVisible().catch(() => false)) {
-              await getNew.click({ timeout: 8000 }).catch(() => {});
+          // 若已有输入框说明 IG 已把验证码发出/展示，直接尝试收码回填
+          const outlookPage = await openPage(context, "https://outlook.live.com/mail/0/");
+          try {
+            await outlookSignIn(context, outlookPage);
+            const code = await findIgCodeEmail(outlookPage, usedIgCodes);
+            await page.bringToFront().catch(() => {});
+            await page.waitForTimeout(1000);
+            await submitIgCode(page, code);
+            usedIgCodes.add(code);
+            // 若 IG 提示验证码错误，点 Get a new code 触发新码并允许重新收码
+            await sleep(5000);
+            const afterText = await pageText(page);
+            if (/incorrect|不正确|wrong code|didn'?t work|invalid code/i.test(afterText)) {
+              log("IG 提示验证码错误，点击 Get a new code 重新获取...");
+              const getNew = page
+                .locator('div[role="button"]:has-text("Get a new code"), div[role="button"]:has-text("重新获取"), a:has-text("Get a new code")')
+                .first();
+              if (await getNew.isVisible().catch(() => false)) {
+                await getNew.click({ timeout: 8000 }).catch(() => {});
+              }
+              codeSent = false;
               await sleep(3000);
+            } else {
+              // 给 IG 处理验证码留足时间，避免主循环立刻重开 Outlook
+              await sleep(10000);
             }
+          } finally {
+            await outlookPage.close().catch(() => {});
           }
-        } finally {
-          await outlookPage.close().catch(() => {});
+          continue;
         }
+        // 已提交过验证码：等待登录结果，不重复打开 Outlook
+        await sleep(POLL_MS);
         continue;
       }
 
