@@ -68,8 +68,13 @@ async function detectIgChallenge(page) {
 async function isIgLoggedIn(page, context) {
   const cookies = await context.cookies("https://www.instagram.com").catch(() => []);
   if (cookies.some((c) => c.name === "sessionid")) return true;
+  const url = page.url();
+  // 只有真实落在 instagram.com 且不是登录页才算已登录；about:blank/中间页一律不算
+  if (!/instagram\.com/i.test(url) || /accounts\/login|login\/?$|accounts\/recovery/i.test(url)) {
+    return false;
+  }
   const text = await pageText(page);
-  return !/login|log in|登录|登入/i.test(text) && !/accounts\/login/i.test(page.url());
+  return text.length > 300 && !/log in|登录|登入|sign up/i.test(text);
 }
 
 async function openPage(context, url) {
@@ -280,11 +285,18 @@ async function main() {
     let page = context.pages()[0] || (await context.newPage());
 
     log(`连接成功，当前页面: ${page.url()}`);
-    await page.goto("https://www.instagram.com/accounts/login/", {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    }).catch(() => {});
-    await page.waitForTimeout(3000);
+    // IG 对数据中心 IP 偶发限流(429)，首次导航可能超时，重试并等待真实到达 instagram 域
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await page.goto("https://www.instagram.com/accounts/login/", {
+        waitUntil: "domcontentloaded",
+        timeout: 90000,
+      }).catch(() => {});
+      const url = page.url();
+      if (/instagram\.com/i.test(url)) break;
+      log(`导航未到达 instagram (当前: ${url})，第 ${attempt} 次重试...`);
+      await sleep(5000);
+    }
+    await page.waitForTimeout(4000);
 
     if (await isIgLoggedIn(page, context)) {
       log("IG 已是登录态，无需登录 ✅");
@@ -303,6 +315,15 @@ async function main() {
       }
 
       const ch = await detectIgChallenge(page);
+      if (!ch.hasCodeInput && !ch.pattern && !(await page.locator('input[name="username"]').isVisible().catch(() => false))) {
+        const url = page.url();
+        const text = await pageText(page);
+        if (/instagram\.com/i.test(url) && text.length < 200) {
+          log("登录页内容为空/仍在加载，等待...");
+          await sleep(POLL_MS);
+          continue;
+        }
+      }
       if (ch.hasCodeInput || ch.pattern) {
         if (!codeSent) {
           log(`检测到邮箱验证码页: ${ch.pattern || "存在验证码输入框"}`);
