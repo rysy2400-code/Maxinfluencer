@@ -21,6 +21,9 @@
  * 凭据只从环境变量读取，不写入任何文件。
  */
 import { chromium } from "playwright";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
 const IG_LOGIN_URL = process.env.IG_LOGIN_URL || "https://www.instagram.com/";
@@ -28,8 +31,13 @@ const IG_USER = (process.env.IG_LOGIN_USERNAME || "").trim();
 const IG_PASS = process.env.IG_LOGIN_PASSWORD || "";
 const EMAIL_USER = (process.env.IG_EMAIL_USERNAME || "").trim();
 const EMAIL_PASS = process.env.IG_EMAIL_PASSWORD || "";
+const EMAIL_RECOVERY = (process.env.IG_EMAIL_RECOVERY || "").trim();
+const EMAIL_RECOVERY_PASS = process.env.IG_EMAIL_RECOVERY_PASSWORD || "";
+const IMAP_HOST = process.env.IG_IMAP_HOST || "mail.reevalmail.com";
+const IMAP_PORT = Number(process.env.IG_IMAP_PORT || 993);
 const TOTAL_TIMEOUT_MS = Number(process.env.IG_LOGIN_TIMEOUT_MS || 600_000);
 const POLL_MS = 1500;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 if (!IG_USER || !IG_PASS || !EMAIL_USER || !EMAIL_PASS) {
   console.error(
@@ -52,9 +60,43 @@ const IG_USER_SELECTOR = 'input[name="username"], input[name="email"]';
 const IG_PASS_SELECTOR = 'input[name="password"], input[name="pass"]';
 const MS_EMAIL_SELECTOR = 'input[name="loginfmt"], input#usernameEntry, input[type="email"]';
 const MS_PASS_SELECTOR = 'input[name="passwd"], input#passwordEntry, input[type="password"]';
+const MS_RECOVERY_SELECTOR = "#proof-confirmation-email-input";
+const MS_CODE_BOX_SELECTOR = 'input[id^="codeEntry-"]';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function readMsCodeFromImap() {
+  return new Promise((resolve, reject) => {
+    const py = path.join(__dirname, "ig-imap-code.py");
+    execFile(
+      "python3",
+      [py, "--poll-seconds", "90"],
+      {
+        timeout: 100000,
+        env: {
+          ...process.env,
+          IMAP_HOST,
+          IMAP_PORT: String(IMAP_PORT),
+          IMAP_USER: EMAIL_RECOVERY,
+          IMAP_PASS: EMAIL_RECOVERY_PASS,
+        },
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error((stderr || err.message || "").trim().slice(0, 300)));
+          return;
+        }
+        const code = String(stdout || "").trim();
+        if (!/^\d{6}$/.test(code)) {
+          reject(new Error("IMAP 未返回有效验证码: " + code));
+          return;
+        }
+        resolve(code);
+      }
+    );
+  });
 }
 
 async function pageText(page) {
@@ -145,14 +187,42 @@ async function outlookSignIn(context, page) {
       .click({ timeout: 10000 });
     log("已提交 Outlook 邮箱，等待密码框...");
 
-    const passInput = page.locator(MS_PASS_SELECTOR).first();
-    await passInput.waitFor({ state: "visible", timeout: 30000 });
-    await passInput.fill(EMAIL_PASS, { timeout: 10000 });
-    await page
-      .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
-      .first()
-      .click({ timeout: 10000 });
-    log("已提交 Outlook 密码，等待登录结果...");
+    // 无密码(passkey)账号：微软要求先验证恢复邮箱
+    const recoveryBox = page.locator(MS_RECOVERY_SELECTOR).first();
+    const recoveryVisible = await recoveryBox.isVisible({ timeout: 15000 }).catch(() => false);
+    if (recoveryVisible) {
+      if (!EMAIL_RECOVERY || !EMAIL_RECOVERY_PASS) {
+        throw new Error("微软要求验证恢复邮箱，请配置 IG_EMAIL_RECOVERY / IG_EMAIL_RECOVERY_PASSWORD");
+      }
+      log(`微软要求验证恢复邮箱，自动填入 ${EMAIL_RECOVERY} 并发送验证码...`);
+      await recoveryBox.fill(EMAIL_RECOVERY, { timeout: 10000 });
+      await page
+        .locator('button:has-text("Send code"), input[type="submit"]')
+        .first()
+        .click({ timeout: 10000 });
+      log("已发送恢复邮箱验证码，等待 IMAP 收码...");
+      const codeBox = page.locator(MS_CODE_BOX_SELECTOR).first();
+      await codeBox.waitFor({ state: "visible", timeout: 30000 });
+      const msCode = await readMsCodeFromImap();
+      log(`IMAP 收到微软验证码: ${msCode}`);
+      const boxes = page.locator(MS_CODE_BOX_SELECTOR);
+      const n = await boxes.count();
+      for (let i = 0; i < n && i < 6; i += 1) {
+        await boxes.nth(i).fill(msCode[i] || "", { timeout: 5000 }).catch(() => {});
+      }
+      await page.keyboard.press("Enter");
+      log("已提交微软验证码，等待登录结果...");
+    } else {
+      // 常规密码登录
+      const passInput = page.locator(MS_PASS_SELECTOR).first();
+      await passInput.waitFor({ state: "visible", timeout: 30000 });
+      await passInput.fill(EMAIL_PASS, { timeout: 10000 });
+      await page
+        .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
+        .first()
+        .click({ timeout: 10000 });
+      log("已提交 Outlook 密码，等待登录结果...");
+    }
 
     // 等待落在邮箱页（可能先出现 Stay signed in?）
     const deadline = Date.now() + 60000;
