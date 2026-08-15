@@ -13,16 +13,24 @@ import re
 import ssl
 import sys
 import time
+from email.utils import parsedate_to_datetime
 
 host = os.environ.get("IMAP_HOST", "mail.reevalmail.com")
 port = int(os.environ.get("IMAP_PORT", "993"))
 user = os.environ.get("IMAP_USER", "")
 password = os.environ.get("IMAP_PASS", "")
 poll_seconds = 90
+not_before = 0.0
 if "--poll-seconds" in sys.argv:
     idx = sys.argv.index("--poll-seconds")
     try:
         poll_seconds = int(sys.argv[idx + 1])
+    except (IndexError, ValueError):
+        pass
+if "--not-before" in sys.argv:
+    idx = sys.argv.index("--not-before")
+    try:
+        not_before = float(sys.argv[idx + 1])
     except (IndexError, ValueError):
         pass
 
@@ -44,13 +52,22 @@ def fetch_code(mail):
     if not ids:
         return None
     # 最新邮件在后，倒序遍历确保取到最新一封验证码
-    for i in reversed(ids[-5:]):
-        typ, md = mail.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+    for i in reversed(ids[-8:]):
+        typ, md = mail.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
         if typ != "OK":
             continue
         head = md[0][1].decode("utf-8", "replace")
         if "single-use code" not in head.lower() and "security code" not in head.lower():
             continue
+        if not_before > 0:
+            dm = re.search(r"(?im)^Date:\s*(.+)$", head)
+            if dm:
+                try:
+                    dt = parsedate_to_datetime(dm.group(1).strip())
+                    if dt.timestamp() < not_before:
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
         typ2, md2 = mail.fetch(i, "(BODY.PEEK[TEXT])")
         if typ2 != "OK":
             continue
@@ -64,30 +81,13 @@ def fetch_code(mail):
     return None
 
 
-def inbox_count(mail):
-    typ, data = mail.select("INBOX")
-    if typ != "OK":
-        return 0, []
-    typ, data = mail.search(None, "ALL")
-    ids = data[0].split() if typ == "OK" else []
-    return len(ids), ids
-
-
 deadline = time.time() + poll_seconds
 last_err = None
-initial_count = None
 while time.time() < deadline:
     mail = None
     try:
         mail = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
         mail.login(user, password)
-        count, _ids = inbox_count(mail)
-        if initial_count is None:
-            initial_count = count
-            # 首次连接后新邮件数未变化：等新邮件到达（避免取到旧码）
-        if count <= initial_count:
-            time.sleep(5)
-            continue
         code = fetch_code(mail)
         if code:
             print(code)

@@ -73,9 +73,10 @@ function sleep(ms) {
 function readMsCodeFromImap() {
   return new Promise((resolve, reject) => {
     const py = path.join(__dirname, "ig-imap-code.py");
+    const notBefore = Math.floor(Date.now() / 1000) - 30;
     execFile(
       "python3",
-      [py, "--poll-seconds", "90"],
+      [py, "--poll-seconds", "90", "--not-before", String(notBefore)],
       {
         timeout: 100000,
         env: {
