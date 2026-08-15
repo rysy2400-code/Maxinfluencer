@@ -64,13 +64,30 @@ def fetch_code(mail):
     return None
 
 
+def inbox_count(mail):
+    typ, data = mail.select("INBOX")
+    if typ != "OK":
+        return 0, []
+    typ, data = mail.search(None, "ALL")
+    ids = data[0].split() if typ == "OK" else []
+    return len(ids), ids
+
+
 deadline = time.time() + poll_seconds
 last_err = None
+initial_count = None
 while time.time() < deadline:
     mail = None
     try:
         mail = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
         mail.login(user, password)
+        count, _ids = inbox_count(mail)
+        if initial_count is None:
+            initial_count = count
+            # 首次连接后新邮件数未变化：等新邮件到达（避免取到旧码）
+        if count <= initial_count:
+            time.sleep(5)
+            continue
         code = fetch_code(mail)
         if code:
             print(code)
