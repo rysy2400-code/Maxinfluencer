@@ -90,28 +90,44 @@ async function main() {
     const page = await ctx.newPage();
     try {
       log("打开 login.live.com ...");
-      await page.goto("https://login.live.com/", {
+      // 已登录时直接落在邮箱；未登录时微软会重定向到 login.live.com 或营销页
+      await page.goto("https://outlook.live.com/mail/0/", {
         waitUntil: "domcontentloaded",
         timeout: 60000,
       }).catch(() => {});
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(5000);
 
       if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
         log("Outlook 已是登录态 ✅ " + page.url());
         return;
       }
 
-      // 营销页 Sign in 入口
-      const signIn = page
-        .locator('a:has-text("Sign in"), button:has-text("Sign in"), a[href*="login.live.com"]')
-        .first();
-      if (await signIn.isVisible().catch(() => false) && !(await page.locator(MS_EMAIL_SELECTOR).count())) {
-        await signIn.click({ timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(3000);
+      if ((await page.locator(MS_EMAIL_SELECTOR).count()) && /login\.live\.com|signin/.test(page.url())) {
+        // 直接落在登录页，继续走下方统一登录流程
+      } else {
+        // 营销页/落地页 Sign in 入口
+        const signIn = page
+          .locator('a:has-text("Sign in"), button:has-text("Sign in"), a[href*="login.live.com"]')
+          .first();
+        if (await signIn.isVisible().catch(() => false)) {
+          await signIn.click({ timeout: 10000 }).catch(() => {});
+          await page.waitForTimeout(4000);
+        }
       }
 
       const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
-      await emailInput.waitFor({ state: "visible", timeout: 30000 });
+      const emailOk = await emailInput
+        .waitFor({ state: "visible", timeout: 30000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!emailOk) {
+        // 点击 Sign in 后可能已经直接进邮箱
+        if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
+          log("Outlook 已是登录态 ✅ " + page.url());
+          return;
+        }
+        throw new Error("未找到微软登录输入框，当前 URL: " + page.url());
+      }
       log("填写微软邮箱: " + EMAIL_USER);
       await emailInput.fill(EMAIL_USER, { timeout: 10000 });
       await page
