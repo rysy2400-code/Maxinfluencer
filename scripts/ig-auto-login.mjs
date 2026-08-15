@@ -48,6 +48,8 @@ const IG_CODE_PATTERNS = [
 ];
 
 const CODE_INPUT_PATTERN = 'input[autocomplete="one-time-code"], input[name="verificationCode"], input[name="code"]';
+const IG_USER_SELECTOR = 'input[name="username"], input[name="email"]';
+const IG_PASS_SELECTOR = 'input[name="password"], input[name="pass"]';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -88,12 +90,12 @@ async function openPage(context, url) {
 async function submitIgLogin(page) {
   log("填写 IG 账号密码...");
   const userInput = page
-    .locator('input[name="username"], input[type="text"][name*="user"]')
+    .locator(IG_USER_SELECTOR)
     .first();
   await userInput.waitFor({ state: "visible", timeout: 30000 });
   await userInput.fill(IG_USER, { timeout: 10000 });
   await page
-    .locator('input[name="password"], input[type="password"]')
+    .locator(IG_PASS_SELECTOR)
     .first()
     .fill(IG_PASS, { timeout: 10000 });
   await page
@@ -318,7 +320,7 @@ async function main() {
       }
 
       const ch = await detectIgChallenge(page);
-      if (!ch.hasCodeInput && !ch.pattern && !(await page.locator('input[name="username"]').isVisible().catch(() => false))) {
+      if (!ch.hasCodeInput && !ch.pattern && !(await page.locator(IG_USER_SELECTOR).first().isVisible().catch(() => false))) {
         const url = page.url();
         const text = await pageText(page);
         if (/instagram\.com/i.test(url) && text.length < 200) {
