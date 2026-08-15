@@ -425,18 +425,28 @@ function extractCode(text) {
 async function submitIgCode(page, code) {
   log("回填 IG 验证码...");
   const single = page.locator(CODE_INPUT_PATTERN).first();
-  if (await single.isVisible().catch(() => false)) {
+  const singleOk = await single
+    .waitFor({ state: "visible", timeout: 15000 })
+    .then(() => true)
+    .catch(() => false);
+  if (singleOk) {
     await single.fill(code, { timeout: 10000 });
   } else {
     // 6 个独立输入框
     const boxes = page.locator('input[inputmode="numeric"], input[type="tel"], input[type="text"][maxlength="1"]');
-    const n = await boxes.count().catch(() => 0);
+    const boxOk = await boxes
+      .first()
+      .waitFor({ state: "visible", timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+    const n = boxOk ? await boxes.count().catch(() => 0) : 0;
     if (n >= 6) {
       for (let i = 0; i < 6; i += 1) {
         await boxes.nth(i).fill(code[i] || "", { timeout: 5000 }).catch(() => {});
       }
     } else {
-      throw new Error("未找到 IG 验证码输入框");
+      const text = await pageText(page);
+      throw new Error("未找到 IG 验证码输入框, URL=" + page.url() + " text=" + text.slice(0, 200));
     }
   }
   await page
