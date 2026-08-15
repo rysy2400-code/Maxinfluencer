@@ -182,44 +182,34 @@ async function outlookSignIn(context, page) {
     }
     await context.clearCookies().catch(() => {});
   }
-  // 先探测已登录态；未登录时微软会重定向到 login.live.com 或营销页
+  // 1) 快速探测已登录态
   await page.goto("https://outlook.live.com/mail/0/", {
     waitUntil: "domcontentloaded",
     timeout: 60000,
   }).catch(() => {});
   await page.waitForTimeout(5000);
-
-  const url = page.url();
-  if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(url)) {
+  if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
     log("Outlook 已是登录态");
     return;
   }
 
-  // 营销页/落地页上的 Sign in 入口
-  const signIn = page
-    .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
-    .first();
-  if (await signIn.isVisible().catch(() => false) && !(await page.locator(MS_EMAIL_SELECTOR).count())) {
-    await signIn.click({ timeout: 10000 }).catch(() => {});
+  // 2) 未登录：直接进 login.live.com 标准登录流（避免营销页跳转不稳定）
+  await page.goto("https://login.live.com/", {
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
+  }).catch(() => {});
+  await page.waitForTimeout(3000);
+  if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
+    log("Outlook 已是登录态");
+    return;
   }
 
-  // 轮询等待真实到达登录表单或已登录邮箱（营销页跳转有延迟）
   const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
-  let onLoginPage = false;
-  const waitDeadline = Date.now() + 30000;
-  while (Date.now() < waitDeadline) {
-    if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
-      log("Outlook 已是登录态");
-      return;
-    }
-    if (await emailInput.isVisible().catch(() => false)) {
-      onLoginPage = true;
-      break;
-    }
-    await sleep(1000);
-  }
-  if (onLoginPage) {
-    await emailInput.waitFor({ state: "visible", timeout: 15000 });
+  const emailOk = await emailInput
+    .waitFor({ state: "visible", timeout: 30000 })
+    .then(() => true)
+    .catch(() => false);
+  if (emailOk) {
     await emailInput.fill(EMAIL_USER, { timeout: 10000 });
     await page
       .locator('input[type="submit"], button:has-text("Next"), button:has-text("下一步")')
