@@ -195,20 +195,31 @@ async function outlookSignIn(context, page) {
     return;
   }
 
-  if (!((await page.locator(MS_EMAIL_SELECTOR).count()) && /login\.live\.com|signin/.test(page.url()))) {
-    // 营销页/落地页上的 Sign in 入口
-    const signIn = page
-      .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
-      .first();
-    if (await signIn.isVisible().catch(() => false)) {
-      await signIn.click({ timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(4000);
-    }
+  // 营销页/落地页上的 Sign in 入口
+  const signIn = page
+    .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
+    .first();
+  if (await signIn.isVisible().catch(() => false) && !(await page.locator(MS_EMAIL_SELECTOR).count())) {
+    await signIn.click({ timeout: 10000 }).catch(() => {});
   }
 
-  if ((await page.locator(MS_EMAIL_SELECTOR).count()) || /login\.live\.com|signin/.test(page.url())) {
-    const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
-    await emailInput.waitFor({ state: "visible", timeout: 30000 });
+  // 轮询等待真实到达登录表单或已登录邮箱（营销页跳转有延迟）
+  const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
+  let onLoginPage = false;
+  const waitDeadline = Date.now() + 30000;
+  while (Date.now() < waitDeadline) {
+    if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
+      log("Outlook 已是登录态");
+      return;
+    }
+    if (await emailInput.isVisible().catch(() => false)) {
+      onLoginPage = true;
+      break;
+    }
+    await sleep(1000);
+  }
+  if (onLoginPage) {
+    await emailInput.waitFor({ state: "visible", timeout: 15000 });
     await emailInput.fill(EMAIL_USER, { timeout: 10000 });
     await page
       .locator('input[type="submit"], button:has-text("Next"), button:has-text("下一步")')
@@ -260,7 +271,7 @@ async function outlookSignIn(context, page) {
     log(`Outlook 登录完成，当前 URL: ${page.url()}`);
     return;
   }
-  throw new Error("无法定位 Outlook 登录入口");
+  throw new Error("无法定位 Outlook 登录入口, URL=" + page.url());
 }
 
 /**
