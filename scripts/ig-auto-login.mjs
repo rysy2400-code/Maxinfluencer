@@ -55,7 +55,8 @@ const IG_CODE_PATTERNS = [
   "check your email|查收邮件|邮箱查收",
 ];
 
-const CODE_INPUT_PATTERN = 'input[autocomplete="one-time-code"], input[name="verificationCode"], input[name="code"]';
+const CODE_INPUT_PATTERN =
+  'input[autocomplete="one-time-code"], input[name="verificationCode"], input[name="code"], input[name="email"]';
 const IG_USER_SELECTOR = 'input[name="username"], input[name="email"]';
 const IG_PASS_SELECTOR = 'input[name="password"], input[name="pass"]';
 const MS_EMAIL_SELECTOR = 'input[name="loginfmt"], input#usernameEntry, input[type="email"]';
@@ -375,7 +376,9 @@ async function submitIgCode(page, code) {
     }
   }
   await page
-    .locator('button[type="submit"], div[role="button"]:has-text("Confirm"), div[role="button"]:has-text("确认"), div[role="button"]:has-text("Submit")')
+    .locator(
+      'button[type="submit"], div[role="button"]:has-text("Confirm"), div[role="button"]:has-text("确认"), div[role="button"]:has-text("Submit"), div[role="button"]:has-text("Continue"), div[role="button"]:has-text("继续")'
+    )
     .first()
     .click({ timeout: 10000 })
     .catch(() => page.keyboard.press("Enter"));
