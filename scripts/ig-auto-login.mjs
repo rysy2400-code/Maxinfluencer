@@ -240,9 +240,23 @@ async function outlookSignIn(context, page) {
     }
 
     // 等待落在邮箱页（可能先出现 Stay signed in?）
-    const deadline = Date.now() + 60000;
+    const deadline = Date.now() + 120000;
+    let lastMailGoto = 0;
     while (Date.now() < deadline) {
-      if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) break;
+      const curUrl = page.url();
+      if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(curUrl)) break;
+      // 会话已建立但停在 post.srf/账户页：主动跳去邮箱
+      if (Date.now() - lastMailGoto > 15000 && /login\.live\.com|post\.srf|account\.microsoft|account\.live/.test(curUrl)) {
+        lastMailGoto = Date.now();
+        await page
+          .goto("https://outlook.live.com/mail/0/", {
+            waitUntil: "domcontentloaded",
+            timeout: 60000,
+          })
+          .catch(() => {});
+        await page.waitForTimeout(3500);
+        continue;
+      }
       const stay = page
         .locator('button[value="No"], input[value="No"], button:has-text("No"), button:has-text("否")')
         .first();
@@ -329,16 +343,29 @@ async function findIgCodeEmail(page, usedIgCodes) {
         waitUntil: "domcontentloaded",
         timeout: 60000,
       }).catch(() => {});
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(4000);
+      if (!/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(page.url())) {
+        await page.goto("https://outlook.live.com/mail/0/", {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        }).catch(() => {});
+        await page.waitForTimeout(5000);
+      }
       const searchInput = page
         .locator(
           'input[aria-label*="Search" i], input[placeholder*="Search" i], input[placeholder*="搜索" i], input[aria-label*="搜索" i]'
         )
         .first();
-      if (await searchInput.isVisible().catch(() => false)) {
+      const searchOk = await searchInput
+        .waitFor({ state: "visible", timeout: 20000 })
+        .then(() => true)
+        .catch(() => false);
+      if (searchOk) {
         await searchInput.fill("Instagram");
         await page.keyboard.press("Enter");
         await page.waitForTimeout(2500);
+      } else {
+        log("Outlook 邮箱页未加载（搜索框不可见），URL=" + page.url() + " text=" + (await pageText(page)).slice(0, 120));
       }
     }
     // 新 Outlook：搜索结果列表项；兼容多种选择器
