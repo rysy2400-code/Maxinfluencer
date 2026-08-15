@@ -50,6 +50,8 @@ const IG_CODE_PATTERNS = [
 const CODE_INPUT_PATTERN = 'input[autocomplete="one-time-code"], input[name="verificationCode"], input[name="code"]';
 const IG_USER_SELECTOR = 'input[name="username"], input[name="email"]';
 const IG_PASS_SELECTOR = 'input[name="password"], input[name="pass"]';
+const MS_EMAIL_SELECTOR = 'input[name="loginfmt"], input#usernameEntry, input[type="email"]';
+const MS_PASS_SELECTOR = 'input[name="passwd"], input#passwordEntry, input[type="password"]';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -128,13 +130,13 @@ async function outlookSignIn(context, page) {
   const signIn = page
     .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
     .first();
-  if (await signIn.isVisible().catch(() => false) && !(await page.locator('input[name="loginfmt"]').count())) {
+  if (await signIn.isVisible().catch(() => false) && !(await page.locator(MS_EMAIL_SELECTOR).count())) {
     await signIn.click({ timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(3500);
   }
 
-  if ((await page.locator('input[name="loginfmt"]').count()) || /login\.live\.com|signin/.test(page.url())) {
-    const emailInput = page.locator('input[name="loginfmt"]').first();
+  if ((await page.locator(MS_EMAIL_SELECTOR).count()) || /login\.live\.com|signin/.test(page.url())) {
+    const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
     await emailInput.waitFor({ state: "visible", timeout: 30000 });
     await emailInput.fill(EMAIL_USER, { timeout: 10000 });
     await page
@@ -143,7 +145,7 @@ async function outlookSignIn(context, page) {
       .click({ timeout: 10000 });
     log("已提交 Outlook 邮箱，等待密码框...");
 
-    const passInput = page.locator('input[name="passwd"]').first();
+    const passInput = page.locator(MS_PASS_SELECTOR).first();
     await passInput.waitFor({ state: "visible", timeout: 30000 });
     await passInput.fill(EMAIL_PASS, { timeout: 10000 });
     await page
