@@ -110,14 +110,30 @@ async function submitIgLogin(page) {
 
 async function outlookSignIn(context, page) {
   log(`打开 Outlook 登录绑定邮箱 ${EMAIL_USER} ...`);
-  await page.goto("https://outlook.live.com/mail/0/", {
+  // 未登录时 outlook.live.com/mail/0/ 会被微软重定向到营销页，
+  // 直接进 login.live.com 走标准登录流更稳。
+  await page.goto("https://login.live.com/", {
     waitUntil: "domcontentloaded",
     timeout: 60000,
   }).catch(() => {});
   await page.waitForTimeout(2500);
 
   const url = page.url();
-  if (/login\.live\.com|signin/.test(url) || (await page.locator('input[name="loginfmt"]').count())) {
+  if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(url)) {
+    log("Outlook 已是登录态");
+    return;
+  }
+
+  // 营销页/落地页上的 Sign in 入口
+  const signIn = page
+    .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录"), a[href*="login.live.com"]')
+    .first();
+  if (await signIn.isVisible().catch(() => false) && !(await page.locator('input[name="loginfmt"]').count())) {
+    await signIn.click({ timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(3500);
+  }
+
+  if ((await page.locator('input[name="loginfmt"]').count()) || /login\.live\.com|signin/.test(page.url())) {
     const emailInput = page.locator('input[name="loginfmt"]').first();
     await emailInput.waitFor({ state: "visible", timeout: 30000 });
     await emailInput.fill(EMAIL_USER, { timeout: 10000 });
@@ -156,23 +172,6 @@ async function outlookSignIn(context, page) {
       await sleep(POLL_MS);
     }
     log(`Outlook 登录完成，当前 URL: ${page.url()}`);
-    return;
-  }
-
-  // 已在邮箱页（此前登录过）
-  if (/outlook\.live\.com\/mail|outlook\.office\.com\/mail/.test(url)) {
-    log("Outlook 已是登录态");
-    return;
-  }
-
-  // landing 页需要点 Sign in
-  const signIn = page
-    .locator('a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("登录"), button:has-text("登录")')
-    .first();
-  if (await signIn.isVisible().catch(() => false)) {
-    await signIn.click({ timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(3000);
-    await outlookSignIn(context, page);
     return;
   }
   throw new Error("无法定位 Outlook 登录入口");
