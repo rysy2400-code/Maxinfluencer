@@ -121,7 +121,10 @@ async function main() {
       log("已提交邮箱，等待下一步...");
 
       const recoveryBox = page.locator(MS_RECOVERY_SELECTOR).first();
-      let recoveryVisible = await recoveryBox.isVisible({ timeout: 30000 }).catch(() => false);
+      let recoveryVisible = await recoveryBox
+        .waitFor({ state: "visible", timeout: 30000 })
+        .then(() => true)
+        .catch(() => false);
       if (!recoveryVisible) {
         const text = await pageText(page);
         recoveryVisible = /verify your email|recovery email|proof-confirmation|验证你的电子邮件|恢复邮箱/i.test(text);
@@ -151,12 +154,36 @@ async function main() {
       } else {
         log("进入密码登录...");
         const passInput = page.locator(MS_PASS_SELECTOR).first();
-        await passInput.waitFor({ state: "visible", timeout: 30000 });
-        await passInput.fill(EMAIL_PASS, { timeout: 10000 });
-        await page
-          .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
-          .first()
-          .click({ timeout: 10000 });
+        const passOk = await passInput
+          .waitFor({ state: "visible", timeout: 30000 })
+          .then(() => true)
+          .catch(() => false);
+        if (!passOk) {
+          // 可能是恢复邮箱页加载慢，再兜底一次
+          const text = await pageText(page);
+          if (/verify your email|recovery email|proof-confirmation|验证你的电子邮件|恢复邮箱/i.test(text)) {
+            const rec2 = page.locator(MS_RECOVERY_SELECTOR).first();
+            await rec2.waitFor({ state: "visible", timeout: 15000 });
+            if (!EMAIL_RECOVERY || !EMAIL_RECOVERY_PASS) {
+              throw new Error("微软要求验证恢复邮箱，请配置 IG_EMAIL_RECOVERY / IG_EMAIL_RECOVERY_PASSWORD");
+            }
+            log("兜底：检测到恢复邮箱验证页，填写: " + EMAIL_RECOVERY);
+            await rec2.fill(EMAIL_RECOVERY, { timeout: 10000 });
+            await page.locator('button:has-text("Send code"), input[type="submit"]').first().click({ timeout: 10000 });
+            const codeBox2 = page.locator(MS_CODE_BOX_SELECTOR).first();
+            await codeBox2.waitFor({ state: "visible", timeout: 30000 });
+            const code2 = await readMsCodeFromImap();
+            log("IMAP 收到微软验证码: " + code2);
+            await fillCodeBoxes(page, code2);
+          } else {
+            await passInput.waitFor({ state: "visible", timeout: 15000 });
+            await passInput.fill(EMAIL_PASS, { timeout: 10000 });
+            await page.locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")').first().click({ timeout: 10000 });
+          }
+        } else {
+          await passInput.fill(EMAIL_PASS, { timeout: 10000 });
+          await page.locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")').first().click({ timeout: 10000 });
+        }
       }
 
       log("等待进入 Outlook 邮箱...");

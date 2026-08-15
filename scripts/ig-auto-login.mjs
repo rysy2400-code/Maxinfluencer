@@ -189,7 +189,10 @@ async function outlookSignIn(context, page) {
 
     // 无密码(passkey)账号：微软要求先验证恢复邮箱
     const recoveryBox = page.locator(MS_RECOVERY_SELECTOR).first();
-    let recoveryVisible = await recoveryBox.isVisible({ timeout: 30000 }).catch(() => false);
+    let recoveryVisible = await recoveryBox
+      .waitFor({ state: "visible", timeout: 30000 })
+      .then(() => true)
+      .catch(() => false);
     if (!recoveryVisible) {
       // 兜底：页面文案/元素再判断一次（慢加载场景）
       const text = await pageText(page);
@@ -236,7 +239,10 @@ async function outlookSignIn(context, page) {
  */
 async function completeMsPasswordOrRecovery(page) {
   const passInput = page.locator(MS_PASS_SELECTOR).first();
-  let passVisible = await passInput.isVisible({ timeout: 25000 }).catch(() => false);
+  let passVisible = await passInput
+    .waitFor({ state: "visible", timeout: 25000 })
+    .then(() => true)
+    .catch(() => false);
   if (!passVisible) {
     const text = await pageText(page);
     const rec2 = page.locator(MS_RECOVERY_SELECTOR).first();
