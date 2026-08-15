@@ -159,18 +159,28 @@ async function outlookSignIn(context, page) {
   log(`打开 Outlook 登录绑定邮箱 ${EMAIL_USER} ...`);
   if (process.env.IG_MS_FORCE_RELOGIN === "1") {
     log("IG_MS_FORCE_RELOGIN=1，清除微软账号登录态（切换邮箱账号）...");
-    await context.clearCookies({ domain: ".live.com" }).catch(() => {});
-    await context.clearCookies({ domain: ".microsoft.com" }).catch(() => {});
-    await context.clearCookies({ domain: ".outlook.com" }).catch(() => {});
-    await context.clearCookies({ domain: ".office.com" }).catch(() => {});
-    // clearCookies 不足以清除微软会话（本地存储/会话 cookie），显式登出
-    await page
-      .goto("https://login.live.com/logout.srf", {
-        waitUntil: "domcontentloaded",
-        timeout: 45000,
-      })
-      .catch(() => {});
-    await page.waitForTimeout(3000);
+    // 微软 Web 登录令牌存在各域 localStorage + 会话 cookie，
+    // 必须逐域清 localStorage 并显式登出，否则旧会话会一直续用。
+    for (const u of [
+      "https://login.live.com/",
+      "https://outlook.live.com/",
+      "https://account.microsoft.com/",
+      "https://account.live.com/",
+    ]) {
+      await page.goto(u, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
+      await page
+        .evaluate(() => {
+          try {
+            localStorage.clear();
+            sessionStorage.clear();
+          } catch {
+            /* ignore */
+          }
+        })
+        .catch(() => {});
+      await page.waitForTimeout(1200);
+    }
+    await context.clearCookies().catch(() => {});
   }
   // 先探测已登录态；未登录时微软会重定向到 login.live.com 或营销页
   await page.goto("https://outlook.live.com/mail/0/", {
@@ -428,8 +438,7 @@ async function main() {
     log(`连接成功，当前页面: ${page.url()}`);
     if (process.env.IG_FORCE_RELOGIN === "1") {
       log("IG_FORCE_RELOGIN=1，清除 instagram 登录态...");
-      await context.clearCookies({ domain: ".instagram.com" }).catch(() => {});
-      await context.clearCookies({ domain: "www.instagram.com" }).catch(() => {});
+      await context.clearCookies().catch(() => {});
     }
     // 注意：/accounts/login/ 路径在部分 IP 上会被 IG 直接 429，
     // 而首页 www.instagram.com/ 自带登录表单且通常可正常加载，因此默认走首页。

@@ -94,17 +94,26 @@ async function main() {
       log("打开 login.live.com ...");
       if (process.env.IG_MS_FORCE_RELOGIN === "1") {
         log("IG_MS_FORCE_RELOGIN=1，清除微软账号登录态（切换邮箱账号）...");
-        await ctx.clearCookies({ domain: ".live.com" }).catch(() => {});
-        await ctx.clearCookies({ domain: ".microsoft.com" }).catch(() => {});
-        await ctx.clearCookies({ domain: ".outlook.com" }).catch(() => {});
-        await ctx.clearCookies({ domain: ".office.com" }).catch(() => {});
-        await page
-          .goto("https://login.live.com/logout.srf", {
-            waitUntil: "domcontentloaded",
-            timeout: 45000,
-          })
-          .catch(() => {});
-        await page.waitForTimeout(3000);
+        for (const u of [
+          "https://login.live.com/",
+          "https://outlook.live.com/",
+          "https://account.microsoft.com/",
+          "https://account.live.com/",
+        ]) {
+          await page.goto(u, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
+          await page
+            .evaluate(() => {
+              try {
+                localStorage.clear();
+                sessionStorage.clear();
+              } catch {
+                /* ignore */
+              }
+            })
+            .catch(() => {});
+          await page.waitForTimeout(1200);
+        }
+        await ctx.clearCookies().catch(() => {});
       }
       // 已登录时直接落在邮箱；未登录时微软会重定向到 login.live.com 或营销页
       await page.goto("https://outlook.live.com/mail/0/", {
