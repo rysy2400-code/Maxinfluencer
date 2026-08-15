@@ -43,7 +43,8 @@ def fetch_code(mail):
     ids = data[0].split()
     if not ids:
         return None
-    for i in ids[-3:]:
+    # 最新邮件在后，倒序遍历确保取到最新一封验证码
+    for i in reversed(ids[-5:]):
         typ, md = mail.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
         if typ != "OK":
             continue
