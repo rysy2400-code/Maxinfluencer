@@ -20,7 +20,9 @@ const EMAIL_USER = (process.env.IG_EMAIL_USERNAME || "").trim();
 const EMAIL_PASS = process.env.IG_EMAIL_PASSWORD || "";
 const EMAIL_RECOVERY = (process.env.IG_EMAIL_RECOVERY || "").trim();
 const EMAIL_RECOVERY_PASS = process.env.IG_EMAIL_RECOVERY_PASSWORD || "";
-const IMAP_HOST = process.env.IG_IMAP_HOST || "mail.reevalmail.com";
+const IMAP_HOST =
+  process.env.IG_IMAP_HOST ||
+  (EMAIL_RECOVERY.includes("@") ? `mail.${EMAIL_RECOVERY.split("@")[1]}` : "mail.reevalmail.com");
 const IMAP_PORT = Number(process.env.IG_IMAP_PORT || 993);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

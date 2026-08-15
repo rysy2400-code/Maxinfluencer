@@ -33,7 +33,9 @@ const EMAIL_USER = (process.env.IG_EMAIL_USERNAME || "").trim();
 const EMAIL_PASS = process.env.IG_EMAIL_PASSWORD || "";
 const EMAIL_RECOVERY = (process.env.IG_EMAIL_RECOVERY || "").trim();
 const EMAIL_RECOVERY_PASS = process.env.IG_EMAIL_RECOVERY_PASSWORD || "";
-const IMAP_HOST = process.env.IG_IMAP_HOST || "mail.reevalmail.com";
+const IMAP_HOST =
+  process.env.IG_IMAP_HOST ||
+  (EMAIL_RECOVERY.includes("@") ? `mail.${EMAIL_RECOVERY.split("@")[1]}` : "mail.reevalmail.com");
 const IMAP_PORT = Number(process.env.IG_IMAP_PORT || 993);
 const TOTAL_TIMEOUT_MS = Number(process.env.IG_LOGIN_TIMEOUT_MS || 600_000);
 const POLL_MS = 1500;
@@ -409,6 +411,11 @@ async function main() {
     let page = context.pages()[0] || (await context.newPage());
 
     log(`连接成功，当前页面: ${page.url()}`);
+    if (process.env.IG_FORCE_RELOGIN === "1") {
+      log("IG_FORCE_RELOGIN=1，清除 instagram 登录态...");
+      await context.clearCookies({ domain: ".instagram.com" }).catch(() => {});
+      await context.clearCookies({ domain: "www.instagram.com" }).catch(() => {});
+    }
     // 注意：/accounts/login/ 路径在部分 IP 上会被 IG 直接 429，
     // 而首页 www.instagram.com/ 自带登录表单且通常可正常加载，因此默认走首页。
     // IG 对数据中心 IP 偶发限流(429)，首次导航可能超时，重试并等待真实到达 instagram 域
