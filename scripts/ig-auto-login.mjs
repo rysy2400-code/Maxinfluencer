@@ -290,26 +290,29 @@ async function handleMsRecovery(page, recoveryBox) {
   log("已提交微软验证码，等待登录结果...");
 }
 
-async function findIgCodeEmail(page) {
+async function findIgCodeEmail(page, usedIgCodes) {
   log("在 Outlook 中搜索 Instagram 验证码邮件...");
-  await page.goto("https://outlook.live.com/mail/0/", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  }).catch(() => {});
-  await page.waitForTimeout(3000);
-
-  const searchInput = page
-    .locator(
-      'input[aria-label*="Search" i], input[placeholder*="Search" i], input[placeholder*="搜索" i], input[aria-label*="搜索" i]'
-    )
-    .first();
-  await searchInput.waitFor({ state: "visible", timeout: 30000 });
-  await searchInput.fill("Instagram");
-  await page.keyboard.press("Enter");
-  log("已搜索 Instagram，等待邮件列表...");
-
   const deadline = Date.now() + 180000;
+  let lastRefresh = 0;
   while (Date.now() < deadline) {
+    if (Date.now() - lastRefresh > 15000) {
+      lastRefresh = Date.now();
+      await page.goto("https://outlook.live.com/mail/0/", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      }).catch(() => {});
+      await page.waitForTimeout(2500);
+      const searchInput = page
+        .locator(
+          'input[aria-label*="Search" i], input[placeholder*="Search" i], input[placeholder*="搜索" i], input[aria-label*="搜索" i]'
+        )
+        .first();
+      if (await searchInput.isVisible().catch(() => false)) {
+        await searchInput.fill("Instagram");
+        await page.keyboard.press("Enter");
+        await page.waitForTimeout(2500);
+      }
+    }
     // 新 Outlook：搜索结果列表项；兼容多种选择器
     const items = page.locator(
       '[role="option"], div[data-testid^="message"], [aria-label*="Instagram" i], div[title*="Instagram" i]'
@@ -341,8 +344,12 @@ async function findIgCodeEmail(page) {
       const body = await pageText(page);
       const code = extractCode(body);
       if (code) {
-        log(`已找到验证码邮件，验证码: ${code}`);
-        return code;
+        if (usedIgCodes.has(code)) {
+          log(`命中已用过的验证码 ${code}，等待新邮件...`);
+        } else {
+          log(`已找到验证码邮件，验证码: ${code}`);
+          return code;
+        }
       }
     }
     await sleep(POLL_MS);
@@ -426,6 +433,7 @@ async function main() {
 
     const deadline = Date.now() + TOTAL_TIMEOUT_MS;
     let codeSent = false;
+    const usedIgCodes = new Set();
     while (Date.now() < deadline) {
       if (await isIgLoggedIn(page, context)) {
         await dismissSaveInfoPrompt(page);
@@ -452,10 +460,24 @@ async function main() {
         const outlookPage = await openPage(context, "https://outlook.live.com/mail/0/");
         try {
           await outlookSignIn(context, outlookPage);
-          const code = await findIgCodeEmail(outlookPage);
+          const code = await findIgCodeEmail(outlookPage, usedIgCodes);
           await page.bringToFront().catch(() => {});
           await page.waitForTimeout(1000);
           await submitIgCode(page, code);
+          usedIgCodes.add(code);
+          // 若 IG 提示验证码错误，点 Get a new code 触发新码
+          await sleep(3000);
+          const afterText = await pageText(page);
+          if (/incorrect|不正确|wrong code|didn'?t work|invalid code/i.test(afterText)) {
+            log("IG 提示验证码错误，点击 Get a new code 重新获取...");
+            const getNew = page
+              .locator('div[role="button"]:has-text("Get a new code"), div[role="button"]:has-text("重新获取"), a:has-text("Get a new code")')
+              .first();
+            if (await getNew.isVisible().catch(() => false)) {
+              await getNew.click({ timeout: 8000 }).catch(() => {});
+              await sleep(3000);
+            }
+          }
         } finally {
           await outlookPage.close().catch(() => {});
         }
