@@ -254,7 +254,9 @@ foreach ($m in $Mappings) {
 $mihomoGuard = Write-MihomoGuard $Mappings
 $chromeGuard = Write-ChromeGuard
 
-schtasks.exe /Change /TN "maxin-guard-chrome-9223" /DISABLE 2>$null | Out-Null
+if (Get-ScheduledTask -TaskName "maxin-guard-chrome-9223" -ErrorAction SilentlyContinue) {
+  schtasks.exe /Change /TN "maxin-guard-chrome-9223" /DISABLE 2>$null | Out-Null
+}
 Stop-ProcessesByPattern "run-guard-chrome-9223|guard-chrome-9223"
 
 Ensure-Task "maxin-guard-tiktok-enrich-mihomo" $mihomoGuard
