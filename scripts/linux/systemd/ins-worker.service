@@ -1,0 +1,35 @@
+[Unit]
+Description=INS lite search worker (instagram, 2 tabs / 2 accounts / 2 concurrency)
+After=ins-chrome-9222.service ins-chrome-9223.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/maxinfluencer
+Environment=SEARCH_WORKER_PLATFORMS=instagram
+Environment=SEARCH_WORKER_SLOTS=1
+Environment=SEARCH_IMPORT_TASK_LOOP=false
+Environment=SCRAPER_MODE=search
+Environment=CDP_ENDPOINT=http://127.0.0.1:9222
+Environment=CDP_9222_MODE=serial
+Environment=CDP_9222_SESSION_LOCK=true
+Environment=SEARCH_TASK_STUCK_RECLAIM_MINUTES=7
+Environment=IG_LITE_ENRICH_CDP_ENDPOINTS=http://127.0.0.1:9222,http://127.0.0.1:9223
+Environment=IG_LITE_TAB_POOL_SIZE=2
+Environment=LITE_IG_ENRICH_CONCURRENCY=2
+Environment=LITE_IG_ENRICH_CONCURRENCY_MAX=2
+Environment=LITE_IG_ENRICH_HARD_MAX=2
+Environment=IG_LITE_REQUIRE_EMAIL_FOR_ANALYSIS=1
+Environment=IG_LITE_EVALUATE_CONCURRENCY=1
+Environment=IG_REQUEST_DELAY_MIN_MS=1000
+Environment=IG_REQUEST_DELAY_MAX_MS=3000
+Environment=IG_ABOUT_CONCURRENCY=1
+Environment=IG_API_ONLY_NO_NAVIGATION=0
+Environment=IG_LITE_SKIP_RELAY_WARMUP=0
+Environment=IG_ALLOW_REELS_SCROLL_FALLBACK=0
+ExecStart=/usr/bin/node --experimental-default-type=module /opt/maxinfluencer/scripts/worker-influencer-search.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
