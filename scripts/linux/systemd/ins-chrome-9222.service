@@ -1,0 +1,16 @@
+[Unit]
+Description=INS Chrome CDP 9222 (headful under Xvfb)
+After=ins-xvfb.service
+Requires=ins-xvfb.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=DISPLAY=:99
+WorkingDirectory=/opt/maxinfluencer
+ExecStart=/usr/bin/google-chrome --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=/opt/maxinfluencer/.chrome-cdp-9222 --no-first-run --no-default-browser-check --disable-dev-shm-usage --window-size=1280,800 --proxy-server=http://127.0.0.1:7897 --proxy-bypass-list=<-loopback> about:blank
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

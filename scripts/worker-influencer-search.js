@@ -1075,8 +1075,13 @@ async function platformLoop(platformSlug) {
           // 按账户端口设置 Chrome 重启信号文件，连接失败时对应端口的 guard 才能真正重启
           const sigMatch = String(igAccountEndpoint || "").match(/:(\d+)$/);
           const sigPort = sigMatch ? sigMatch[1] : "9222";
+          const sigDir =
+            process.env.CDP_RESTART_SIGNAL_DIR ||
+            (process.platform === "win32"
+              ? "C:\\maxinfluencer\\signals"
+              : path.join(projectRoot, "signals"));
           process.env.CDP_RESTART_SIGNAL_FILE =
-            "C:\\maxinfluencer\\signals\\restart-chrome-" + sigPort + ".flag";
+            path.join(sigDir, `restart-chrome-${sigPort}.flag`);
           // 任务开始前清理该账户端口上遗留的 about:blank 标签
           await cleanupIgBlankTabs(igAccountEndpoint);
           resetIgAccountThrottleFlag();
