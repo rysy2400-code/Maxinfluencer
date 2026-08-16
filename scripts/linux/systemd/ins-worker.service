@@ -8,7 +8,7 @@ User=ubuntu
 WorkingDirectory=/opt/maxinfluencer
 Environment=SEARCH_WORKER_PLATFORMS=instagram
 Environment=SEARCH_WORKER_SLOTS=1
-Environment=SEARCH_IMPORT_TASK_LOOP=false
+Environment=SEARCH_IMPORT_TASK_LOOP=true
 Environment=SCRAPER_MODE=lite
 Environment=CDP_ENDPOINT=http://127.0.0.1:9222
 Environment=CDP_9222_MODE=serial
