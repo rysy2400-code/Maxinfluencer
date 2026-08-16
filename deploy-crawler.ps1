@@ -465,7 +465,7 @@ $guardCrawlerContent = @"
 $instagramGuardEnv
 $(if ($isYoutubeDedicatedWorker) {
 '$env:SEARCH_WORKER_LOOP = "true"
-$env:SEARCH_IMPORT_TASK_LOOP = "false"
+$env:SEARCH_IMPORT_TASK_LOOP = "true"
 $env:YT_LITE_TAB_POOL_SIZE = "3"
 $env:LITE_YT_ENRICH_CONCURRENCY = "150"
 $env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
