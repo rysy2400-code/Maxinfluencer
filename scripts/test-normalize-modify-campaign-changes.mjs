@@ -46,5 +46,21 @@ assert(
   "nested influencerPricing coerce"
 );
 
+const p6 = normalizeModifyCampaignChanges({
+  productLink: " https://relxnow.fr/ ",
+});
+assert(
+  p6.error == null && p6.changes?.productLink === "https://relxnow.fr/",
+  "productLink trim"
+);
+
+const p7 = normalizeModifyCampaignChanges({ productLink: "relxnow.fr" });
+assert(p7.error != null, "productLink without protocol rejected");
+
+const p8 = normalizeModifyCampaignChanges({
+  productLink: "",
+});
+assert(p8.error != null, "empty productLink rejected");
+
 console.log(`\n${ok} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -9134,6 +9134,10 @@ export default function HomePage() {
                                 1、Campaign信息
                               </div>
                               <div style={{ marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600 }}>产品链接：</span>
+                                {campaignSummary?.productLink ?? "未设置"}
+                              </div>
+                              <div style={{ marginBottom: 4 }}>
                                 <span style={{ fontWeight: 600 }}>品牌：</span>
                                 {campaignSummary?.brand ?? "未知"}
                               </div>
