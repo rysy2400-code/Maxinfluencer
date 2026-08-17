@@ -75,7 +75,8 @@ function workerIpToken() {
 
 /** @param {'tiktok'|'instagram'|'youtube'} platformSlug */
 function workerIdForPlatform(platformSlug) {
-  return `search-worker-${workerIpToken()}-${platformSlug}`;
+  const suffix = String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+  return `search-worker-${workerIpToken()}${suffix ? `-${suffix}` : ""}-${platformSlug}`;
 }
 
 function resolveSearchWorkerSlots() {
