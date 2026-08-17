@@ -41,6 +41,7 @@ assert(platformLabel("youtube") === "YouTube", "平台标签 YouTube");
 const summary = buildImportBatchSummary([
   {
     platform: "youtube",
+    contact_mode: "contact_all",
     status: "succeeded",
     total_rows: 3,
     progress_analyzed_count: 3,
@@ -59,6 +60,7 @@ const summary = buildImportBatchSummary([
 console.log(summary);
 assert(summary.includes("共 4 位红人"), "汇总含总数");
 assert(summary.includes("YouTube（3 位）：已分析 3 · 推荐 2 · 已联系 2"), "汇总含 YouTube 明细");
+assert(summary.includes("直接联系模式"), "直接联系模式标注");
 assert(summary.includes("TikTok（1 位）：失败"), "汇总含 TikTok 失败");
 assert(summary.includes("connectOverCDP"), "汇总含失败原因");
 
