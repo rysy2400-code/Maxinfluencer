@@ -52,7 +52,7 @@ Register-MaxinNodeRepeatMinutes -Name "PollInfluencerReplies" -ScriptRelative "s
 Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerEmailEvents" -ScriptRelative "scripts\process-influencer-email-events.js" -Minutes 1 -OffsetSeconds 15
 Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEvents" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 25
 Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1 -OffsetSeconds 35
-Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 1 -OffsetSeconds 45
+Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 30 -OffsetSeconds 45
 Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10 -OffsetSeconds 55
 
 Write-Host "[register-tasks] Done (6 tasks)."
