@@ -1181,7 +1181,7 @@ async function platformLoop(platformSlug) {
             "../lib/ops/tiktok-session-manager.js"
           );
           const cdp = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
-          const health = await withTimeout(
+          const health = await withTaskTimeout(
             ensureTkIpSessionHealthy(cdp, { proxyPort: resolveTkIpProxyPort() }),
             150000,
             "tkip-session-health"
@@ -1240,7 +1240,7 @@ async function platformLoop(platformSlug) {
           const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState } = await import(
             "../lib/ops/tiktok-session-manager.js"
           );
-          const rot = await withTimeout(
+          const rot = await withTaskTimeout(
             rotateTkIpSession(resolveTkIpProxyPort()),
             45000,
             "tkip-session-rotate"
