@@ -1255,6 +1255,7 @@ async function platformLoop(platformSlug) {
             const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
             st.healthy = false;
             st.checkedAt = 0;
+            st.forceFresh = true;
           }
         } catch (e) {
           console.warn(
