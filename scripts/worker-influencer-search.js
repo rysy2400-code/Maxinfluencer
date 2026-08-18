@@ -1237,7 +1237,7 @@ async function platformLoop(platformSlug) {
         String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
       ) {
         try {
-          const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState } = await import(
+          const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState, cleanupTkIpTabs } = await import(
             "../lib/ops/tiktok-session-manager.js"
           );
           const rot = await withTaskTimeout(
@@ -1256,6 +1256,12 @@ async function platformLoop(platformSlug) {
             st.healthy = false;
             st.checkedAt = 0;
             st.forceFresh = true;
+          }
+          // 任务边界清理多余 tab（每个端口只保留 1 个 tiktok tab，防 renderer 累积）
+          try {
+            await cleanupTkIpTabs(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222", { keep: 1 });
+          } catch (e) {
+            console.warn(`[worker-influencer-search] tiktok tab cleanup 异常: ${e?.message || e}`);
           }
         } catch (e) {
           console.warn(
