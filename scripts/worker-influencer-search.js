@@ -83,6 +83,26 @@ function resolveSearchWorkerSlots() {
   return Math.min(4, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
 }
 
+function withTaskTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} timeout ${ms}ms`)),
+        ms
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function resolveSearchTaskTimeoutMs() {
+  return Math.max(
+    60_000,
+    Number(process.env.SEARCH_TASK_TIMEOUT_MS || 20 * 60 * 1000)
+  );
+}
+
 function resolveWorkerPlatforms() {
   const raw = process.env.SEARCH_WORKER_PLATFORMS || "tiktok,instagram,youtube";
   return raw
@@ -1118,6 +1138,26 @@ async function platformLoop(platformSlug) {
     `[worker-influencer-search][${platformSlug}] loop workerId=${platformWorkerId} ip=${CURRENT_WORKER_IP || "unknown"}`
   );
 
+  // 重启后清理本 worker 名下残留的 processing 任务（上次进程中断的孤儿任务），
+  // 避免 hasInflightForPlatform 阻塞新任务认领、任务永久卡 processing。
+  try {
+    const released = await queryTikTok(
+      `UPDATE tiktok_influencer_search_task
+       SET status='pending', worker_id=NULL, worker_ip=NULL, worker_host=NULL, started_at=NULL
+       WHERE status='processing' AND worker_id=? AND worker_ip=? AND last_progress_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)`,
+      [platformWorkerId, CURRENT_WORKER_IP]
+    );
+    if (Number(released?.affectedRows || 0) > 0) {
+      console.warn(
+        `[worker-influencer-search] 启动清理本 worker 孤儿 processing 任务: ${released.affectedRows}`
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[worker-influencer-search] 启动孤儿任务清理失败: ${e?.message || e}`
+    );
+  }
+
   for (;;) {
     try {
       if (Date.now() - lastReclaimMs > 60_000) {
@@ -1139,10 +1179,27 @@ async function platformLoop(platformSlug) {
         continue;
       }
 
-      await runInCdpLoop(
-        { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
-        () => processTask(task, platformSlug)
-      );
+      try {
+        await runInCdpLoop(
+          { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
+          () =>
+            withTaskTimeout(
+              processTask(task, platformSlug),
+              resolveSearchTaskTimeoutMs(),
+              `task:${task.id}`
+            )
+        );
+      } catch (err) {
+        console.error(
+          `[worker-influencer-search][${platformSlug}] 任务 ${task.id} 处理失败：`,
+          err?.message || err
+        );
+        await markTaskStatus(
+          task.id,
+          "failed",
+          `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
+        ).catch(() => {});
+      }
 
     } catch (err) {
       console.error(
