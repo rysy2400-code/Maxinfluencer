@@ -1170,6 +1170,36 @@ async function platformLoop(platformSlug) {
         }
       }
 
+      // tk-ip 会话准入：任务认领前确保出口 IP 能出数据（综合搜索探测），
+      // 不合格自动轮换；全失败则冷却后重试，不认领任务避免浪费。
+      if (
+        platformSlug === "tiktok" &&
+        String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+      ) {
+        try {
+          const { ensureTkIpSessionHealthy, resolveTkIpProxyPort } = await import(
+            "../lib/ops/tiktok-session-manager.js"
+          );
+          const cdp = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
+          const health = await withTimeout(
+            ensureTkIpSessionHealthy(cdp, { proxyPort: resolveTkIpProxyPort() }),
+            150000,
+            "tkip-session-health"
+          );
+          if (health?.ok === false) {
+            console.warn(
+              `[worker-influencer-search] tiktok 会话准入失败（${health.reason || "no-clean-ip"}），冷却 30s 后重试`
+            );
+            await sleep(30000);
+            continue;
+          }
+        } catch (e) {
+          console.warn(
+            `[worker-influencer-search] tiktok 会话准入异常（跳过本轮）: ${e?.message || e}`
+          );
+        }
+      }
+
       const task = await claimOnePendingTaskForPlatform(
         platformSlug,
         platformWorkerId
@@ -1199,6 +1229,38 @@ async function platformLoop(platformSlug) {
           "failed",
           `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
         ).catch(() => {});
+      }
+
+      // 任务边界轮换 tk-ip 会话（换 sid = 换 IP，0 流量），下一个任务用新 IP。
+      if (
+        platformSlug === "tiktok" &&
+        String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+      ) {
+        try {
+          const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState } = await import(
+            "../lib/ops/tiktok-session-manager.js"
+          );
+          const rot = await withTimeout(
+            rotateTkIpSession(resolveTkIpProxyPort()),
+            45000,
+            "tkip-session-rotate"
+          );
+          if (rot?.skipped) {
+            /* 非 tk-ip 配置，跳过 */
+          } else {
+            console.log(
+              `[worker-influencer-search] tiktok 会话轮换 ok=${rot?.ok} sid=${rot?.sid || "-"} ip=${rot?.ip || "-"}`
+            );
+            // 轮换后强制下一次认领前重新准入探测（新 IP 未验证）
+            const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
+            st.healthy = false;
+            st.checkedAt = 0;
+          }
+        } catch (e) {
+          console.warn(
+            `[worker-influencer-search] tiktok 会话轮换异常: ${e?.message || e}`
+          );
+        }
       }
 
     } catch (err) {
