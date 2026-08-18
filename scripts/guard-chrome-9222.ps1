@@ -27,6 +27,7 @@ $proxyServer = if ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SE
 $chromeArgList = @(
   "--disable-quic",
   "--blink-settings=imagesEnabled=false",
+  "--autoplay-policy=user-gesture-required",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9222",
   "--user-data-dir=$chromeDir",

@@ -80,7 +80,7 @@ function workerIdForPlatform(platformSlug) {
 }
 
 function resolveSearchWorkerSlots() {
-  return Math.min(3, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+  return Math.min(4, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
 }
 
 function resolveWorkerPlatforms() {
