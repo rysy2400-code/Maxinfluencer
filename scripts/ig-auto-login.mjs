@@ -207,7 +207,7 @@ async function outlookSignIn(context, page) {
 
   const emailInput = page.locator(MS_EMAIL_SELECTOR).first();
   const emailOk = await emailInput
-    .waitFor({ state: "visible", timeout: 30000 })
+    .waitFor({ state: "visible", timeout: Number(process.env.MS_EMAIL_WAIT_MS) || 45000 })
     .then(() => true)
     .catch(() => false);
   if (emailOk) {
@@ -221,7 +221,7 @@ async function outlookSignIn(context, page) {
     // 无密码(passkey)账号：微软要求先验证恢复邮箱
     const recoveryBox = page.locator(MS_RECOVERY_SELECTOR).first();
     let recoveryVisible = await recoveryBox
-      .waitFor({ state: "visible", timeout: 30000 })
+      .waitFor({ state: "visible", timeout: Number(process.env.MS_RECOVERY_WAIT_MS) || 45000 })
       .then(() => true)
       .catch(() => false);
     if (!recoveryVisible) {
@@ -286,7 +286,7 @@ async function outlookSignIn(context, page) {
 async function completeMsPasswordOrRecovery(page) {
   const passInput = page.locator(MS_PASS_SELECTOR).first();
   let passVisible = await passInput
-    .waitFor({ state: "visible", timeout: 25000 })
+    .waitFor({ state: "visible", timeout: Number(process.env.MS_PASS_WAIT_MS) || 40000 })
     .then(() => true)
     .catch(() => false);
   if (!passVisible) {
@@ -298,7 +298,7 @@ async function completeMsPasswordOrRecovery(page) {
       await handleMsRecovery(page, rec2);
       return;
     }
-    await passInput.waitFor({ state: "visible", timeout: 15000 });
+    await passInput.waitFor({ state: "visible", timeout: Number(process.env.MS_PASS_WAIT_MS) || 25000 });
     passVisible = true;
   }
   await passInput.fill(EMAIL_PASS, { timeout: 10000 });
@@ -432,6 +432,10 @@ async function submitIgCode(page, code) {
   if (singleOk) {
     await single.fill(code, { timeout: 10000 });
   } else {
+    if (/auth_platform\/no_challenge/i.test(page.url())) {
+      log("无验证码输入框且页面为 no_challenge，视为无需验证码，等待登录建立");
+      return;
+    }
     // 6 个独立输入框
     const boxes = page.locator('input[inputmode="numeric"], input[type="tel"], input[type="text"][maxlength="1"]');
     const boxOk = await boxes
