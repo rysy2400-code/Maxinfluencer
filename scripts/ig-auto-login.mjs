@@ -523,6 +523,13 @@ async function main() {
         }
       }
       if (ch.hasCodeInput || ch.pattern) {
+        // IG 判定无需挑战时（auth_platform/no_challenge）没有验证码输入框，
+        // 不打开 Outlook，静候登录态建立即可。
+        if (/auth_platform\/no_challenge/i.test(page.url())) {
+          log("IG 判定无需挑战（no_challenge），等待登录建立...");
+          await sleep(8000);
+          continue;
+        }
         if (!codeSent) {
           log(`检测到邮箱验证码页: ${ch.pattern || "存在验证码输入框"}`);
           codeSent = true;
