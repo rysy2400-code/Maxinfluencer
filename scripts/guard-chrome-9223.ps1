@@ -20,6 +20,7 @@ $launchUrl = if ($env:CHROME_9223_URL) { "$($env:CHROME_9223_URL)" } else { "htt
 $proxyServer = if ($env:CHROME_9223_PROXY_SERVER) { "$($env:CHROME_9223_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
 $chromeArgList = @(
   "--disable-quic",
+  "--blink-settings=imagesEnabled=false",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9223",
   "--user-data-dir=$chromeDir",
