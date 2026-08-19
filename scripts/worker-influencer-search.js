@@ -3,6 +3,7 @@
  */
 
 import dotenv from "dotenv";
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
@@ -63,6 +64,93 @@ function applyTiktokLiteProductionDefaults() {
   setDefaultEnv("TT_LITE_MAX_VIDEOS", "50");
   setDefaultEnv("LITE_DISABLE_SCREENSHOTS", "true");
   setDefaultEnv("LITE_ENRICH_SCREENSHOTS", "false");
+  // Affiliate GMV 依赖 9222 登录 partner 后台，当前未登录必然失败；
+  // 关闭避免每个 enrich 红人白调一次 partner API + 白开 partner 页面。
+  setDefaultEnv("AFFILIATE_GMV_ENRICH", "0");
+}
+
+/** 任务失败冷却：只对“搜索经换 IP 重试仍失败”生效，30min，持久化到 config（worker 重启后仍生效） */
+function workerPortSuffix() {
+  return String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+}
+function workerCooldownFile() {
+  const suffix = workerPortSuffix();
+  return suffix ? path.join(projectRoot, "config", `tt-worker-cooldown-${suffix}.json`) : null;
+}
+function readWorkerCooldown() {
+  const fp = workerCooldownFile();
+  if (!fp) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function workerCooldownRemainingMs() {
+  const cd = readWorkerCooldown();
+  return cd && Number.isFinite(cd.untilEpochMs) ? Math.max(0, cd.untilEpochMs - Date.now()) : 0;
+}
+function setWorkerCooldown(reason, taskId, minutes = 30) {
+  const fp = workerCooldownFile();
+  if (!fp) return;
+  try {
+    const cd = {
+      untilEpochMs: Date.now() + minutes * 60 * 1000,
+      reason,
+      taskId,
+      setAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(fp, JSON.stringify(cd, null, 2), "utf8");
+    console.warn(
+      `[worker-influencer-search] 写入失败冷却 ${minutes}min（${fp}）reason=${reason} task=${taskId}`
+    );
+  } catch (e) {
+    console.warn(`[worker-influencer-search] 写入冷却失败: ${e?.message || e}`);
+  }
+}
+function clearWorkerCooldown() {
+  const fp = workerCooldownFile();
+  if (!fp) return;
+  try {
+    if (fs.existsSync(fp)) {
+      fs.unlinkSync(fp);
+      console.log("[worker-influencer-search] 任务成功，清除失败冷却");
+    }
+  } catch (e) {
+    console.warn(`[worker-influencer-search] 清除冷却失败: ${e?.message || e}`);
+  }
+}
+
+/** 搜索阶段失败时轮换 tk-ip IP（0 数据流量），并标记会话需重新准入探测 */
+async function rotateTkIpForSearchRetry(label) {
+  try {
+    const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState } = await import(
+      "../lib/ops/tiktok-session-manager.js"
+    );
+    const rot = await rotateTkIpSession(resolveTkIpProxyPort());
+    if (rot?.ok) {
+      const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
+      st.healthy = false;
+      st.checkedAt = 0;
+      st.forceFresh = true;
+      console.warn(
+        `[worker-influencer-search] ${label} 轮换 IP ok sid=${rot.sid || "-"} ip=${rot.ip || "-"}`
+      );
+      return true;
+    }
+    console.warn(`[worker-influencer-search] ${label} 轮换未生效: ${rot?.error || "skipped"}`);
+    return false;
+  } catch (e) {
+    console.warn(`[worker-influencer-search] ${label} 轮换异常: ${e?.message || e}`);
+    return false;
+  }
+}
+
+/** 判断异常是否属于搜索阶段（避免 enrich/国家环节的异常也触发换 IP 重试） */
+function isSearchStageFailureMsg(msg) {
+  return /未获取到数据|general search|search\/general\/full|EMPTY|CDP timeout|Runtime\.evaluate|Failed to fetch|tiktok_api_session_unavailable|无结果/i.test(
+    String(msg || "")
+  );
 }
 
 function detectWorkerIp() {
@@ -674,6 +762,7 @@ async function processTask(task, platformSlug) {
     Number(process.env.SEARCH_MAX_POOL_SIZE || 500)
   );
   let result = null;
+  let searchIpRetriesExhausted = false;
   try {
     if (taskPlatformSlug === "tiktok") {
       try {
@@ -708,32 +797,63 @@ async function processTask(task, platformSlug) {
       (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
       null;
 
-    result = await searchAndExtractInfluencers(
-      {
-        keywords: { search_queries: kwResult.search_queries },
-        platform: taskPlatformSlug,
-        platforms: campaignPlatforms,
-        countries: resolveAllowedCountriesFromCampaign(campaignInfo),
-        productInfo,
-        campaignInfo,
-        influencerProfile,
-        campaignId,
-      },
-      {
-        maxResults: searchPoolMax,
-        maxEnrichCount: searchPoolMax,
-        enrichProfileData: true,
-        platform: taskPlatformSlug,
-        taskId: task.id,
-        runId: runId || null,
-        searchKeyword: primaryKeyword,
-        platform: taskPlatformSlug,
-        workerIp: CURRENT_WORKER_IP,
-        workerHost: CURRENT_WORKER_HOST,
-        onStepUpdate,
-        onTaskProgress: scheduleKeywordProgressPublish,
-      }
+    // 搜索失败 → 轮换 IP 重试（最多 TT_SEARCH_IP_RETRIES 次，默认 2），
+    // 换 IP 本身 0 数据流量；仍失败才判任务失败并进入 30min 冷却。
+    const maxSearchIpRetries = Math.max(
+      0,
+      Number(process.env.TT_SEARCH_IP_RETRIES ?? 2) || 0
     );
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        result = await searchAndExtractInfluencers(
+          {
+            keywords: { search_queries: kwResult.search_queries },
+            platform: taskPlatformSlug,
+            platforms: campaignPlatforms,
+            countries: resolveAllowedCountriesFromCampaign(campaignInfo),
+            productInfo,
+            campaignInfo,
+            influencerProfile,
+            campaignId,
+          },
+          {
+            maxResults: searchPoolMax,
+            maxEnrichCount: searchPoolMax,
+            enrichProfileData: true,
+            platform: taskPlatformSlug,
+            taskId: task.id,
+            runId: runId || null,
+            searchKeyword: primaryKeyword,
+            platform: taskPlatformSlug,
+            workerIp: CURRENT_WORKER_IP,
+            workerHost: CURRENT_WORKER_HOST,
+            onStepUpdate,
+            onTaskProgress: scheduleKeywordProgressPublish,
+          }
+        );
+      } catch (searchErr) {
+        if (attempt >= maxSearchIpRetries || !isSearchStageFailureMsg(searchErr?.message || searchErr)) {
+          if (attempt >= maxSearchIpRetries) searchIpRetriesExhausted = true;
+          throw searchErr;
+        }
+        console.warn(
+          `[worker-influencer-search] 搜索异常（${String(searchErr?.message || searchErr).slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
+        );
+        await rotateTkIpForSearchRetry("搜索异常重试");
+        await sleep(3000);
+        continue;
+      }
+      if (result?.success) break;
+      if (attempt >= maxSearchIpRetries) {
+        searchIpRetriesExhausted = true;
+        break;
+      }
+      console.warn(
+        `[worker-influencer-search] 搜索未成功（${String(result?.error || "no_data").slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
+      );
+      await rotateTkIpForSearchRetry("搜索空结果重试");
+      await sleep(3000);
+    }
   } catch (err) {
     clearKeywordProgressPublish();
     const failMsg = `searchAndExtractInfluencers throw: ${String(err?.message || err).slice(0, 300)}`;
@@ -769,6 +889,9 @@ async function processTask(task, platformSlug) {
       status: "failed",
       error: String(err?.message || "search_throw"),
     });
+    if (searchIpRetriesExhausted) {
+      setWorkerCooldown("search_ip_retries_exhausted", task.id, 30);
+    }
     await consumeSignalForCompletedTask({
       campaignId,
       platform: taskPlatformSlug,
@@ -792,8 +915,9 @@ async function processTask(task, platformSlug) {
       console.log(
         `[worker-influencer-search] 任务完成（搜索无结果）id=${task.id}, campaign=${campaignId}`
       );
-      await markTaskStatus(task.id, "succeeded", null);
-      await upsertKeywordRunResult({
+    await markTaskStatus(task.id, "succeeded", null);
+    clearWorkerCooldown();
+    await upsertKeywordRunResult({
         campaignId,
         sessionId,
         runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
@@ -855,6 +979,7 @@ async function processTask(task, platformSlug) {
     );
     await setSearchTaskFinalMetrics(task.id, taskMetrics);
     await markTaskStatus(task.id, "succeeded", null);
+    clearWorkerCooldown();
     console.log(
       `[worker-influencer-search] 任务指标 id=${task.id}:`,
       JSON.stringify(taskMetrics)
@@ -937,6 +1062,9 @@ async function processTask(task, platformSlug) {
     metrics: taskMetricsFail,
     error: String(result?.error || "search_failed"),
   });
+  if (searchIpRetriesExhausted) {
+    setWorkerCooldown("search_ip_retries_exhausted", task.id, 30);
+  }
   await consumeSignalForCompletedTask({
     campaignId,
     platform: taskPlatformSlug,
@@ -1065,6 +1193,17 @@ async function importTaskLoop() {
 
   for (;;) {
     try {
+      // 搜索失败冷却：仅“搜索经换 IP 重试仍失败”触发（30min，持久化），
+      // 冷却期间不认领任务，避免坏状态端口持续消耗任务。
+      const cdRemain = workerCooldownRemainingMs();
+      if (cdRemain > 0) {
+        console.warn(
+          `[worker-influencer-search] 搜索失败冷却中，剩余 ${Math.round(cdRemain / 1000)}s，暂不认领任务`
+        );
+        await sleep(Math.min(30000, cdRemain));
+        continue;
+      }
+
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingImportTasks();
