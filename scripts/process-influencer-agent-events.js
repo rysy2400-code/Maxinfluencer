@@ -25,6 +25,11 @@ import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thre
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
 import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
+import {
+  attachOutboundAttachmentsToConversationMessage,
+  insertOutboundAttachment,
+} from "../lib/db/influencer-outbound-attachments-dao.js";
+import { readSessionImportFile } from "../lib/influencer/session-import-storage.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
 import { generateAdvertiserExecutionFollowupEmailBody } from "../lib/agents/advertiser-execution-followup-email.js";
@@ -154,6 +159,8 @@ async function sendOrDraftAgentEmail({
   traceId,
   emailPayload = {},
   payload = {},
+  attachments = null,
+  attachmentMetas = [],
 }) {
   const fromEmail =
     fromAccount.email ||
@@ -162,6 +169,9 @@ async function sendOrDraftAgentEmail({
     fromAccount.account ||
     null;
   const handoverMode = (await getInfluencerHandoverMode(influencerId)) || "auto";
+  const normalizedAttachmentMetas = Array.isArray(attachmentMetas)
+    ? attachmentMetas.filter((a) => a?.fileName || a?.storageKey)
+    : [];
 
   if (handoverMode === "assist") {
     await logDraftOutboundMessage({
@@ -178,6 +188,14 @@ async function sendOrDraftAgentEmail({
       traceId,
       payload: {
         ...payload,
+        ...(normalizedAttachmentMetas.length
+          ? {
+              attachments: {
+                source: "outbound_attachments",
+                items: normalizedAttachmentMetas,
+              },
+            }
+          : {}),
         email: {
           to: toEmail,
           subject,
@@ -203,6 +221,9 @@ async function sendOrDraftAgentEmail({
       subject,
       text: bodyText,
       headers,
+      ...(Array.isArray(attachments) && attachments.length
+        ? { attachments }
+        : {}),
     });
   } catch (err) {
     sendErr = err;
@@ -388,6 +409,31 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
   const specialRequestStatus = payload.specialRequestStatus || "pending_creator";
   const brandMessage = payload.brandMessage || "";
 
+  // 解析随信 PDF 附件：storageKey 指向 data/session-imports（与 Web 同机，worker 可直接读取）
+  const rawAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+  const attachmentMetas = [];
+  const nodemailerAttachments = [];
+  for (let idx = 0; idx < rawAttachments.length; idx++) {
+    const att = rawAttachments[idx] || {};
+    const storageKey = String(att.storageKey || "").trim();
+    const fileName = String(att.fileName || "").trim();
+    if (!storageKey || !fileName) continue;
+    const buffer = readSessionImportFile(storageKey);
+    if (!buffer?.length) {
+      throw new Error(
+        `ask_influencer_special_request 附件「${fileName}」不存在或读取失败（storageKey=${storageKey}）`
+      );
+    }
+    const contentType = String(att.contentType || "").trim() || "application/pdf";
+    const sizeBytes =
+      typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
+        ? att.sizeBytes
+        : buffer.length;
+    attachmentMetas.push({ fileName, storageKey, contentType, sizeBytes });
+    nodemailerAttachments.push({ filename: fileName, contentType, content: buffer });
+  }
+  const attachmentNames = attachmentMetas.map((a) => a.fileName).filter(Boolean);
+
   const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
     campaignId,
     eventRow,
@@ -439,6 +485,7 @@ ${influencerAgentBasePrompt}
 - specialRequestId 表示这一轮特殊请求会话的唯一 ID，你可以在心里当作标签，用于保持这轮沟通的一致性，但不需要在邮件里直接写出 ID。
 - 本轮对应的 campaignId 为 ${campaignId || "null"}；若 conversationHistory 涉及多个 campaign，你必须在正文中自然区分，避免混淆。
 - brandMessage 是品牌/执行侧给你的自然语言说明，你需要用自己的话把它转述给红人。
+- 随邮件附带的 PDF 资料：${attachmentNames.length ? attachmentNames.join("、") : "（无）"}。若有附件，正文必须自然提及（例如「请查收随附的 xxx.pdf」），并简要说明附件用途（按 brandMessage 提供的信息）；不要写「见附件」而没有文件名。
 - 语气：专业、友好、简洁，像一对一沟通，而不是群发模板。
 - 要清楚地告诉红人：品牌方希望他/她确认是否愿意按这个请求执行（例如改时间、改脚本、多加一条内容并增加预算等），并邀请红人表达自己的想法或修改意见。
 - 可以根据 conversationHistory 判断目前合作进展，适当提及之前的沟通，但不要重复上一封几乎一模一样的句子。
@@ -456,6 +503,11 @@ ${influencerAgentBasePrompt}
     specialRequestId,
     specialRequestStatus,
     brandMessage,
+    attachments: attachmentMetas.map((a) => ({
+      fileName: a.fileName,
+      contentType: a.contentType,
+      sizeBytes: a.sizeBytes,
+    })),
     conversationHistory,
   };
 
@@ -510,9 +562,29 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
         specialRequestStatus,
       },
     },
+    attachments: nodemailerAttachments,
+    attachmentMetas,
   });
   if (delivery.drafted) return;
   const { result, sendErr, fromEmail } = delivery;
+
+  // 发送成功后把附件落库（与人工发信一致），时间线即可预览/下载
+  const dedupeKeys = [];
+  if (nodemailerAttachments.length) {
+    for (let idx = 0; idx < attachmentMetas.length; idx++) {
+      const a = attachmentMetas[idx];
+      const dedupeKey = `sr-att:${specialRequestId || eventRow.id}:${idx}`;
+      const attachmentId = await insertOutboundAttachment({
+        dedupeKey,
+        filename: a.fileName,
+        contentType: a.contentType,
+        sizeBytes: a.sizeBytes,
+        content: nodemailerAttachments[idx].content,
+      });
+      dedupeKeys.push(dedupeKey);
+      a.attachmentId = attachmentId || null;
+    }
+  }
 
   // 记录到对话记忆表
   try {
@@ -550,6 +622,14 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
           specialRequestId,
           specialRequestStatus,
         },
+        ...(attachmentMetas.length
+          ? {
+              attachments: {
+                source: "outbound_attachments",
+                items: attachmentMetas,
+              },
+            }
+          : {}),
         source: {
           eventTable: "tiktok_influencer_agent_event",
           eventId: eventRow.id,
@@ -561,6 +641,33 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
       "[ProcessInfluencerAgentEvents] 写入特殊请求邮件到对话表失败:",
       err
     );
+  }
+
+  if (dedupeKeys.length && result?.messageId) {
+    try {
+      const rows = await queryTikTok(
+        `
+        SELECT id
+        FROM tiktok_influencer_conversation_messages
+        WHERE influencer_id = ? AND message_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+        [platformInfluencerId, result.messageId]
+      );
+      const conversationMessageId = rows?.[0]?.id || null;
+      if (conversationMessageId) {
+        await attachOutboundAttachmentsToConversationMessage({
+          conversationMessageId,
+          dedupeKeys,
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ProcessInfluencerAgentEvents] 绑定特殊请求附件到对话消息失败:",
+        err
+      );
+    }
   }
 
   if (sendErr) {

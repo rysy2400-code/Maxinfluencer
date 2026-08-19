@@ -5129,11 +5129,12 @@ export default function HomePage() {
     }
     const lower = String(file.name || "").toLowerCase();
     if (
+      !lower.endsWith(".pdf") &&
       !lower.endsWith(".xlsx") &&
       !lower.endsWith(".xls") &&
       !lower.endsWith(".csv")
     ) {
-      window.alert("仅支持 .xlsx / .xls / .csv");
+      window.alert("仅支持 .pdf / .xlsx / .xls / .csv");
       return;
     }
     setImportListUploading(true);
@@ -8232,7 +8233,7 @@ export default function HomePage() {
                           <input
                             ref={importListFileInputRef}
                             type="file"
-                            accept=".xlsx,.xls,.csv"
+                            accept=".pdf,.xlsx,.xls,.csv"
                             style={{ display: "none" }}
                             onChange={handleInfluencerListFileChange}
                           />
@@ -8241,7 +8242,7 @@ export default function HomePage() {
                             className="bin-chat-composer__icon-btn"
                             disabled={importListUploading || loading}
                             onClick={() => importListFileInputRef.current?.click()}
-                            title="上传附件（Excel/CSV）"
+                            title="上传附件（PDF/Excel/CSV）"
                             aria-label="上传附件"
                           >
                             {importListUploading ? (

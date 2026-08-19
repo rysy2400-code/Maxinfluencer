@@ -2,6 +2,7 @@
 
 import React from "react";
 import { ChatExcelFileIcon } from "./chat-excel-file-icon";
+import { ChatPdfFileIcon } from "./chat-pdf-file-icon";
 import { buildAttachmentMetaLine } from "./chat-file-utils";
 
 /**
@@ -19,12 +20,13 @@ export function ChatAttachmentCard({
 }) {
   const fileName = String(attachment?.name || "附件").trim() || "附件";
   const meta = buildAttachmentMetaLine(attachment);
+  const isPdf = String(attachment?.name || "").toLowerCase().endsWith(".pdf");
   const removable = variant === "composer" && typeof onRemove === "function";
   const clickable = variant === "message" && !!downloadHref;
 
   const content = (
     <>
-      <ChatExcelFileIcon size={36} />
+      {isPdf ? <ChatPdfFileIcon size={36} /> : <ChatExcelFileIcon size={36} />}
       <div className="bin-chat-attachment-card__text">
         <div className="bin-chat-attachment-card__name">{fileName}</div>
         <div className="bin-chat-attachment-card__meta">{meta}</div>

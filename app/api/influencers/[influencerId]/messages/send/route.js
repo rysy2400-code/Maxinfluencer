@@ -10,6 +10,7 @@ import {
   attachOutboundAttachmentsToConversationMessage,
   insertOutboundAttachment,
 } from "../../../../../../lib/db/influencer-outbound-attachments-dao.js";
+import { readSessionImportFile } from "../../../../../../lib/influencer/session-import-storage.js";
 import {
   buildTraceIdFromInboundMessageId,
   buildTraceIdFromSourceKey,
@@ -121,6 +122,77 @@ export async function POST(req, { params }) {
         contentType,
         content: buf,
       });
+    }
+
+    // 草稿审批：agent 草稿若携带附件引用（storageKey），发送时一并解析并附上
+    if (draftEventId) {
+      try {
+        const draftRows = await queryTikTok(
+          `
+          SELECT payload
+          FROM tiktok_influencer_conversation_messages
+          WHERE id = ? AND event_type = 'draft_outbound'
+          LIMIT 1
+        `,
+          [draftEventId]
+        );
+        const draftPayloadRaw = draftRows?.[0]?.payload;
+        let draftPayload = null;
+        if (typeof draftPayloadRaw === "string") {
+          try {
+            draftPayload = JSON.parse(draftPayloadRaw);
+          } catch {
+            draftPayload = null;
+          }
+        } else if (draftPayloadRaw && typeof draftPayloadRaw === "object") {
+          draftPayload = draftPayloadRaw;
+        }
+        const draftAttachments = Array.isArray(draftPayload?.attachments?.items)
+          ? draftPayload.attachments.items.filter((a) => a?.storageKey && a?.fileName)
+          : [];
+        for (let idx = 0; idx < draftAttachments.length; idx++) {
+          const a = draftAttachments[idx];
+          const buf = readSessionImportFile(a.storageKey);
+          if (!buf?.length) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: `草稿附件「${a.fileName}」不存在或读取失败，无法发送`,
+              },
+              { status: 400 }
+            );
+          }
+          const filename = String(a.fileName || `attachment-${idx + 1}`);
+          const contentType = String(a.contentType || "").trim() || "application/pdf";
+          const sizeBytes =
+            typeof a.sizeBytes === "number" && Number.isFinite(a.sizeBytes)
+              ? a.sizeBytes
+              : buf.length;
+          const dedupeKey = `outatt:${clientMessageId}:draft:${idx}`;
+          const attachmentId = await insertOutboundAttachment({
+            dedupeKey,
+            filename,
+            contentType,
+            sizeBytes,
+            content: buf,
+          });
+          dedupeKeys.push(dedupeKey);
+          attachmentMetas.push({
+            attachmentId: attachmentId || null,
+            dedupeKey,
+            filename,
+            contentType,
+            sizeBytes,
+          });
+          nodemailerAttachments.push({
+            filename,
+            contentType,
+            content: buf,
+          });
+        }
+      } catch (err) {
+        console.warn("[Influencer Send API] 读取草稿附件失败:", err?.message || err);
+      }
     }
 
     const traceId = latestInboundMid

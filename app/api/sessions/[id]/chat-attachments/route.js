@@ -10,7 +10,29 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const MAX_BYTES = 15 * 1024 * 1024;
+const MAX_BYTES = 25 * 1024 * 1024;
+
+const SUPPORTED_EXTENSIONS = [".pdf", ".xlsx", ".xls", ".csv"];
+
+function isSupportedFileName(fileName) {
+  const lower = String(fileName || "").toLowerCase();
+  return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+function isPdfFileName(fileName) {
+  return String(fileName || "").toLowerCase().endsWith(".pdf");
+}
+
+function looksLikePdf(buffer) {
+  if (!buffer || buffer.length < 5) return false;
+  return (
+    buffer[0] === 0x25 && // %
+    buffer[1] === 0x50 && // P
+    buffer[2] === 0x44 && // D
+    buffer[3] === 0x46 && // F
+    buffer[4] === 0x2d    // -
+  );
+}
 
 function contentTypeForFileName(fileName) {
   const lower = String(fileName || "").toLowerCase();
@@ -19,6 +41,7 @@ function contentTypeForFileName(fileName) {
   }
   if (lower.endsWith(".xls")) return "application/vnd.ms-excel";
   if (lower.endsWith(".csv")) return "text/csv; charset=utf-8";
+  if (lower.endsWith(".pdf")) return "application/pdf";
   return "application/octet-stream";
 }
 
@@ -122,13 +145,16 @@ export async function POST(req, { params }) {
 
     const fileName = String(file.name || "attachment.xlsx");
     const lower = fileName.toLowerCase();
-    if (
-      !lower.endsWith(".xlsx") &&
-      !lower.endsWith(".xls") &&
-      !lower.endsWith(".csv")
-    ) {
+    if (!isSupportedFileName(fileName)) {
       return NextResponse.json(
-        { success: false, error: "仅支持 .xlsx / .xls / .csv" },
+        { success: false, error: "仅支持 .pdf / .xlsx / .xls / .csv" },
+        { status: 400 }
+      );
+    }
+
+    if (isPdfFileName(fileName) && !looksLikePdf(buffer)) {
+      return NextResponse.json(
+        { success: false, error: "PDF 文件内容校验失败，请确认文件未损坏" },
         { status: 400 }
       );
     }
