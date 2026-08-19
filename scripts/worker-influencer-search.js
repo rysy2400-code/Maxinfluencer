@@ -48,8 +48,11 @@ function applyTiktokLiteProductionDefaults() {
   // 生产默认先保守串行，后续用压测数据再提高到 2/3/5。
   setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY", "1");
   setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY_MAX", "1");
-  setDefaultEnv("TT_LITE_POST_ITEM_RETRIES", "2");
-  setDefaultEnv("TT_LITE_EMPTY_ITEMS_COOLDOWN_MS", "15000");
+  // item_list 同 tab 只试 1 次 + 20s 求值超时：失败快速交给“新 tab / 换 IP + 新 tab”恢复，
+  // 避免卡死 tab 上的队列把单红人 120s 预算吃光（预算不足时中途换 IP 永远无法触发）。
+  setDefaultEnv("TT_LITE_POST_ITEM_RETRIES", "1");
+  setDefaultEnv("TT_LITE_API_EVAL_TIMEOUT_MS", "20000");
+  setDefaultEnv("TT_LITE_EMPTY_ITEMS_COOLDOWN_MS", "0");
   setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MIN_MS", "3000");
   setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MAX_MS", "5000");
   setDefaultEnv("TT_LITE_COUNTRY_SEARCH_ALT_VIDEOS", "1");
