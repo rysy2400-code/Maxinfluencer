@@ -1212,17 +1212,9 @@ async function importTaskLoop() {
 
   for (;;) {
     try {
-      // 搜索失败冷却：仅“搜索经换 IP 重试仍失败”触发（30min，持久化），
-      // 冷却期间不认领任务，避免坏状态端口持续消耗任务。
-      const cdRemain = workerCooldownRemainingMs();
-      if (cdRemain > 0) {
-        console.warn(
-          `[worker-influencer-search] 搜索失败冷却中，剩余 ${Math.round(cdRemain / 1000)}s，暂不认领任务`
-        );
-        await sleep(Math.min(30000, cdRemain));
-        continue;
-      }
-
+      // 注意：搜索失败冷却只作用于搜索循环（platformLoop），
+      // 不阻塞导入循环——导入走 item_list/user_detail，且自带换 IP 恢复链，
+      // 搜索 API 被风控时导入仍可正常消费。
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingImportTasks();
