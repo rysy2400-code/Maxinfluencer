@@ -172,8 +172,26 @@ function workerIdForPlatform(platformSlug) {
 }
 
 function resolveSearchWorkerSlots() {
-  // 上限 8：4 个端口搜索任务 + 导入任务可并行认领（导入优先，pending 导入会先于搜索被消费）
-  return Math.min(8, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+  // 每端口同一时刻只执行 1 个任务（搜索/导入互斥，见 portTaskLock），
+  // 机器上限 = 端口数 4。
+  return Math.min(4, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+}
+
+/**
+ * 每端口任务锁：同一 worker 进程内，搜索循环与导入循环互斥使用该端口浏览器。
+ * 保证单个浏览器端口同一时期只执行 1 个任务（搜索或导入）。
+ */
+const portTaskLock = { busy: false, owner: null };
+async function acquirePortTaskLock(owner) {
+  while (portTaskLock.busy) {
+    await sleep(1000);
+  }
+  portTaskLock.busy = true;
+  portTaskLock.owner = owner;
+}
+function releasePortTaskLock() {
+  portTaskLock.busy = false;
+  portTaskLock.owner = null;
 }
 
 function withTaskTimeout(promise, ms, label) {
@@ -1213,26 +1231,33 @@ async function importTaskLoop() {
         }
       }
 
-      const task = await claimOnePendingImportTask();
+      // 每端口任务锁：与搜索循环互斥，同一端口同一时刻只执行 1 个任务。
+      await acquirePortTaskLock("import");
+      let task = null;
+      try {
+        task = await claimOnePendingImportTask();
+        if (task) {
+          console.log(
+            `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
+          );
+          await runInCdpLoop(
+            {
+              platform: "mixed",
+              persistentPlatforms: ["instagram", "youtube"],
+              taskId: task.id,
+              workerId: IMPORT_WORKER_ID,
+              kind: "import",
+            },
+            () => processImportTaskRow(task)
+          );
+        }
+      } finally {
+        releasePortTaskLock();
+      }
       if (!task) {
         await sleep(idleSleepMs);
         continue;
       }
-
-      console.log(
-        `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
-      );
-
-      await runInCdpLoop(
-        {
-          platform: "mixed",
-          persistentPlatforms: ["instagram", "youtube"],
-          taskId: task.id,
-          workerId: IMPORT_WORKER_ID,
-          kind: "import",
-        },
-        () => processImportTaskRow(task)
-      );
 
     } catch (err) {
       console.error(
@@ -1314,104 +1339,115 @@ async function platformLoop(platformSlug) {
         }
       }
 
-      // tk-ip 会话准入：任务认领前确保出口 IP 能出数据（综合搜索探测），
-      // 不合格自动轮换；全失败则冷却后重试，不认领任务避免浪费。
-      if (
-        platformSlug === "tiktok" &&
-        String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
-      ) {
-        try {
-          const { ensureTkIpSessionHealthy, resolveTkIpProxyPort } = await import(
-            "../lib/ops/tiktok-session-manager.js"
-          );
-          const cdp = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
-          const health = await withTaskTimeout(
-            ensureTkIpSessionHealthy(cdp, { proxyPort: resolveTkIpProxyPort() }),
-            150000,
-            "tkip-session-health"
-          );
-          if (health?.ok === false) {
-            console.warn(
-              `[worker-influencer-search] tiktok 会话准入失败（${health.reason || "no-clean-ip"}），冷却 30s 后重试`
+      // 每端口任务锁：搜索循环与导入循环互斥，同一端口同一时刻只执行 1 个任务。
+      await acquirePortTaskLock("search");
+      let task = null;
+      let portReady = true;
+      try {
+        // tk-ip 会话准入：任务认领前确保出口 IP 能出数据（综合搜索探测），
+        // 不合格自动轮换；全失败则冷却后重试，不认领任务避免浪费。
+        if (
+          platformSlug === "tiktok" &&
+          String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+        ) {
+          try {
+            const { ensureTkIpSessionHealthy, resolveTkIpProxyPort } = await import(
+              "../lib/ops/tiktok-session-manager.js"
             );
-            await sleep(30000);
-            continue;
+            const cdp = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
+            const health = await withTaskTimeout(
+              ensureTkIpSessionHealthy(cdp, { proxyPort: resolveTkIpProxyPort() }),
+              150000,
+              "tkip-session-health"
+            );
+            if (health?.ok === false) {
+              console.warn(
+                `[worker-influencer-search] tiktok 会话准入失败（${health.reason || "no-clean-ip"}），冷却 30s 后重试`
+              );
+              await sleep(30000);
+              portReady = false;
+            }
+          } catch (e) {
+            console.warn(
+              `[worker-influencer-search] tiktok 会话准入异常（跳过本轮）: ${e?.message || e}`
+            );
           }
-        } catch (e) {
-          console.warn(
-            `[worker-influencer-search] tiktok 会话准入异常（跳过本轮）: ${e?.message || e}`
+        }
+
+        if (portReady) {
+          task = await claimOnePendingTaskForPlatform(
+            platformSlug,
+            platformWorkerId
           );
         }
-      }
+        if (task) {
+          try {
+            await runInCdpLoop(
+              { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
+              () =>
+                withTaskTimeout(
+                  processTask(task, platformSlug),
+                  resolveSearchTaskTimeoutMs(),
+                  `task:${task.id}`
+                )
+            );
+          } catch (err) {
+            console.error(
+              `[worker-influencer-search][${platformSlug}] 任务 ${task.id} 处理失败：`,
+              err?.message || err
+            );
+            await markTaskStatus(
+              task.id,
+              "failed",
+              `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
+            ).catch(() => {});
+          }
 
-      const task = await claimOnePendingTaskForPlatform(
-        platformSlug,
-        platformWorkerId
-      );
+          // 任务边界轮换 tk-ip 会话（换 sid = 换 IP，0 流量），下一个任务用新 IP。
+          if (
+            platformSlug === "tiktok" &&
+            String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+          ) {
+            try {
+              const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState, cleanupTkIpTabs } = await import(
+                "../lib/ops/tiktok-session-manager.js"
+              );
+              const rot = await withTaskTimeout(
+                rotateTkIpSession(resolveTkIpProxyPort()),
+                45000,
+                "tkip-session-rotate"
+              );
+              if (rot?.skipped) {
+                /* 非 tk-ip 配置，跳过 */
+              } else {
+                console.log(
+                  `[worker-influencer-search] tiktok 会话轮换 ok=${rot?.ok} sid=${rot?.sid || "-"} ip=${rot?.ip || "-"}`
+                );
+                // 轮换后强制下一次认领前重新准入探测（新 IP 未验证）
+                const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
+                st.healthy = false;
+                st.checkedAt = 0;
+                st.forceFresh = true;
+              }
+              // 任务边界清理多余 tab（每个端口只保留 1 个 tiktok tab，防 renderer 累积）
+              try {
+                await cleanupTkIpTabs(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222", { keep: 1 });
+              } catch (e) {
+                console.warn(`[worker-influencer-search] tiktok tab cleanup 异常: ${e?.message || e}`);
+              }
+            } catch (e) {
+              console.warn(
+                `[worker-influencer-search] tiktok 会话轮换异常: ${e?.message || e}`
+              );
+            }
+          }
+        }
+      } finally {
+        releasePortTaskLock();
+      }
       if (!task) {
         await sleep(idleSleepMs);
         continue;
-      }
-
-      try {
-        await runInCdpLoop(
-          { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
-          () =>
-            withTaskTimeout(
-              processTask(task, platformSlug),
-              resolveSearchTaskTimeoutMs(),
-              `task:${task.id}`
-            )
-        );
-      } catch (err) {
-        console.error(
-          `[worker-influencer-search][${platformSlug}] 任务 ${task.id} 处理失败：`,
-          err?.message || err
-        );
-        await markTaskStatus(
-          task.id,
-          "failed",
-          `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
-        ).catch(() => {});
-      }
-
-      // 任务边界轮换 tk-ip 会话（换 sid = 换 IP，0 流量），下一个任务用新 IP。
-      if (
-        platformSlug === "tiktok" &&
-        String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
-      ) {
-        try {
-          const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState, cleanupTkIpTabs } = await import(
-            "../lib/ops/tiktok-session-manager.js"
-          );
-          const rot = await withTaskTimeout(
-            rotateTkIpSession(resolveTkIpProxyPort()),
-            45000,
-            "tkip-session-rotate"
-          );
-          if (rot?.skipped) {
-            /* 非 tk-ip 配置，跳过 */
-          } else {
-            console.log(
-              `[worker-influencer-search] tiktok 会话轮换 ok=${rot?.ok} sid=${rot?.sid || "-"} ip=${rot?.ip || "-"}`
-            );
-            // 轮换后强制下一次认领前重新准入探测（新 IP 未验证）
-            const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
-            st.healthy = false;
-            st.checkedAt = 0;
-            st.forceFresh = true;
-          }
-          // 任务边界清理多余 tab（每个端口只保留 1 个 tiktok tab，防 renderer 累积）
-          try {
-            await cleanupTkIpTabs(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222", { keep: 1 });
-          } catch (e) {
-            console.warn(`[worker-influencer-search] tiktok tab cleanup 异常: ${e?.message || e}`);
-          }
-        } catch (e) {
-          console.warn(
-            `[worker-influencer-search] tiktok 会话轮换异常: ${e?.message || e}`
-          );
-        }
       }
 
     } catch (err) {
