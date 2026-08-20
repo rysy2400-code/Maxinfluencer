@@ -172,7 +172,8 @@ function workerIdForPlatform(platformSlug) {
 }
 
 function resolveSearchWorkerSlots() {
-  return Math.min(4, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+  // 上限 8：4 个端口搜索任务 + 导入任务可并行认领（导入优先，pending 导入会先于搜索被消费）
+  return Math.min(8, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
 }
 
 function withTaskTimeout(promise, ms, label) {
