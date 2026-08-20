@@ -1329,6 +1329,17 @@ async function platformLoop(platformSlug) {
 
   for (;;) {
     try {
+      // 搜索失败冷却：仅“搜索经换 IP 重试仍失败”触发（30min，持久化），
+      // 冷却期间搜索/导入均不认领任务，避免坏状态端口持续消耗任务。
+      const cdRemain = workerCooldownRemainingMs();
+      if (cdRemain > 0) {
+        console.warn(
+          `[worker-influencer-search] 搜索失败冷却中，剩余 ${Math.round(cdRemain / 1000)}s，暂不认领任务`
+        );
+        await sleep(Math.min(30000, cdRemain));
+        continue;
+      }
+
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingTasks();
