@@ -29,6 +29,9 @@ const projectRoot = path.resolve(__dirname, "..");
 // 加载环境变量（.env 再 .env.local）
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
+// Affiliate GMV 依赖 9222 登录 partner 后台，当前未登录必然失败；
+// 在进程启动即关闭，覆盖搜索 worker 与导入 worker（import 路径不经过 applyTiktokLiteProductionDefaults）。
+setDefaultEnv("AFFILIATE_GMV_ENRICH", "0");
 
 function setDefaultEnv(key, value) {
   if (process.env[key] == null || String(process.env[key]).trim() === "") {
@@ -64,9 +67,6 @@ function applyTiktokLiteProductionDefaults() {
   setDefaultEnv("TT_LITE_MAX_VIDEOS", "50");
   setDefaultEnv("LITE_DISABLE_SCREENSHOTS", "true");
   setDefaultEnv("LITE_ENRICH_SCREENSHOTS", "false");
-  // Affiliate GMV 依赖 9222 登录 partner 后台，当前未登录必然失败；
-  // 关闭避免每个 enrich 红人白调一次 partner API + 白开 partner 页面。
-  setDefaultEnv("AFFILIATE_GMV_ENRICH", "0");
 }
 
 /** 任务失败冷却：只对“搜索经换 IP 重试仍失败”生效，30min，持久化到 config（worker 重启后仍生效） */
