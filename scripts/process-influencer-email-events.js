@@ -16,6 +16,7 @@ import {
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { normalizeCanonicalInfluencerId } from "../lib/influencer/influencer-id-resolver.js";
 import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
 import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
@@ -125,6 +126,7 @@ async function fetchPendingEvents(limit = 10) {
     SELECT *
     FROM tiktok_influencer_email_events
     WHERE status = 'pending'
+      AND influencer_id IS NOT NULL
     ORDER BY created_at ASC
     LIMIT ${n}
   `,
@@ -373,11 +375,13 @@ async function handleOutboundEmails(decision, event, executions) {
       null;
 
     const campaignId = email.campaignId || exec?.campaignId || null;
-    const influencerId = resolveCanonicalInfluencerId({
+    const canonicalId = resolveCanonicalInfluencerId({
       requestedInfluencerId: email.influencerId,
       event,
       exec,
     });
+    // 统一归一化成平台 influencer_id，禁止 handle/用户名落库
+    const influencerId = await normalizeCanonicalInfluencerId(canonicalId);
 
     const to = email.to || event.from_email;
 

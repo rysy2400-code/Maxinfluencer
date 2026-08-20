@@ -221,6 +221,12 @@ export default function InfluencersLayout({ children }) {
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState(null);
 
+  const [queueItems, setQueueItems] = useState([]);
+  const [queueCount, setQueueCount] = useState(0);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [claimInput, setClaimInput] = useState({});
+
   const [projectData, setProjectData] = useState({
     accounts: [],
     orphans: [],
@@ -276,6 +282,23 @@ export default function InfluencersLayout({ children }) {
     },
     [debouncedQ]
   );
+
+  const loadAttributionQueue = useCallback(async () => {
+    setQueueLoading(true);
+    try {
+      const res = await fetch(`/api/influencers/email-attribution-queue?limit=50`, {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (!data?.success) throw new Error(data?.error || "加载失败");
+      setQueueItems(data.items || []);
+      setQueueCount(Number(data.count) || 0);
+    } catch (e) {
+      console.error("[未归属邮件队列] 加载失败:", e?.message || e);
+    } finally {
+      setQueueLoading(false);
+    }
+  }, []);
 
   const loadProjectTree = useCallback(
     async ({ accountCursor, reset }) => {
@@ -336,6 +359,11 @@ export default function InfluencersLayout({ children }) {
   }, [debouncedQ, listView, loadConversations]);
 
   useEffect(() => {
+    if (!inboxUser || listView !== "time") return;
+    loadAttributionQueue();
+  }, [inboxUser, listView, loadAttributionQueue]);
+
+  useEffect(() => {
     if (listView !== "project") return;
     loadProjectTree({ accountCursor: null, reset: true });
   }, [debouncedQ, listView, loadProjectTree]);
@@ -368,10 +396,43 @@ export default function InfluencersLayout({ children }) {
       } else {
         if (opts.afterSend) pendingScrollListToTopAfterSendRef.current = true;
         await loadConversations({ cursor: null, reset: true });
+        await loadAttributionQueue();
       }
     },
-    [listView, loadConversations, loadProjectTree]
+    [listView, loadConversations, loadProjectTree, loadAttributionQueue]
   );
+
+  const submitQueueAction = async (item, action) => {
+    try {
+      const payload =
+        action === "claim"
+          ? { action: "claim", influencerId: (claimInput[item.id] || "").trim() }
+          : { action: "ignore" };
+      if (action === "claim" && !payload.influencerId) return;
+      const res = await fetch(
+        `/api/influencers/email-attribution-queue/${item.id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!data?.success) {
+        alert(data?.error || "操作失败");
+        return;
+      }
+      setClaimInput((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      await loadAttributionQueue();
+      await loadConversations({ cursor: null, reset: true });
+    } catch (e) {
+      alert(e?.message || String(e));
+    }
+  };
 
   const inboxValue = useMemo(() => ({ refreshConversations }), [refreshConversations]);
 
@@ -654,6 +715,137 @@ export default function InfluencersLayout({ children }) {
                     WebkitOverflowScrolling: "touch",
                   }}
                 >
+                  {queueCount > 0 ? (
+                    <div
+                      style={{
+                        borderBottom: "1px solid rgba(0,0,0,0.06)",
+                        background: "#FFF8E6",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setQueueOpen((v) => !v)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          width: "100%",
+                          padding: "9px 12px",
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          color: "#7A5B00",
+                          fontSize: 13,
+                          fontWeight: 700,
+                        }}
+                      >
+                        <span>未归属邮件（{queueCount}）</span>
+                        <span style={{ fontSize: 11 }}>{queueOpen ? "收起 ▲" : "展开 ▼"}</span>
+                      </button>
+                      {queueOpen ? (
+                        <div style={{ padding: "0 10px 10px" }}>
+                          {queueLoading ? (
+                            <div style={{ color: "#8A7A40", fontSize: 12 }}>加载中…</div>
+                          ) : queueItems.length === 0 ? (
+                            <div style={{ color: "#8A7A40", fontSize: 12 }}>暂无待确认邮件</div>
+                          ) : (
+                            queueItems.map((item) => (
+                              <div
+                                key={item.id}
+                                style={{
+                                  border: "1px solid rgba(122,91,0,0.2)",
+                                  borderRadius: 8,
+                                  background: "#fff",
+                                  padding: 8,
+                                  marginBottom: 8,
+                                }}
+                              >
+                                <div style={{ fontSize: 12, color: "#444", lineHeight: 1.4 }}>
+                                  <div>
+                                    <b>{item.from_email}</b> → {item.to_email}
+                                  </div>
+                                  <div style={{ color: "#666" }}>
+                                    {item.subject || "（无主题）"}
+                                    {item.received_at ? ` · ${formatTime(item.received_at)}` : ""}
+                                  </div>
+                                  <div style={{ color: "#999", fontSize: 11 }}>
+                                    未归属原因：{item.reason || "unresolved"}
+                                  </div>
+                                  {item.body_excerpt ? (
+                                    <div
+                                      style={{
+                                        color: "#777",
+                                        fontSize: 11,
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                        marginTop: 2,
+                                      }}
+                                    >
+                                      {String(item.body_excerpt).replace(/\n/g, " ").slice(0, 120)}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                  <input
+                                    value={claimInput[item.id] || ""}
+                                    onChange={(e) =>
+                                      setClaimInput((prev) => ({
+                                        ...prev,
+                                        [item.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="红人 ID / username"
+                                    style={{
+                                      flex: 1,
+                                      minWidth: 0,
+                                      padding: "5px 7px",
+                                      fontSize: 12,
+                                      borderRadius: 5,
+                                      border: "1px solid rgba(0,0,0,0.15)",
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => submitQueueAction(item, "claim")}
+                                    disabled={!(claimInput[item.id] || "").trim()}
+                                    style={{
+                                      padding: "5px 9px",
+                                      borderRadius: 5,
+                                      border: "1px solid rgba(0,0,0,0.2)",
+                                      background: "#111",
+                                      color: "#fff",
+                                      fontSize: 12,
+                                      cursor: "pointer",
+                                      opacity: (claimInput[item.id] || "").trim() ? 1 : 0.5,
+                                    }}
+                                  >
+                                    认领
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => submitQueueAction(item, "ignore")}
+                                    style={{
+                                      padding: "5px 9px",
+                                      borderRadius: 5,
+                                      border: "1px solid rgba(0,0,0,0.2)",
+                                      background: "#fff",
+                                      color: "#555",
+                                      fontSize: 12,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    忽略
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {listLoading && !conversations.length ? (
                     <div style={{ padding: 12, color: "#666", fontSize: 13 }}>加载中…</div>
                   ) : null}

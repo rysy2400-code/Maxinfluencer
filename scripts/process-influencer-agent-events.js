@@ -23,6 +23,7 @@ import {
 import { sendMail, OutboundCooldownError } from "../lib/email/enterprise-mail-client.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
+import { normalizeCanonicalInfluencerId } from "../lib/influencer/influencer-id-resolver.js";
 import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
 import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import {
@@ -285,7 +286,13 @@ async function handleOutboundEmail(eventRow, payload) {
     eventRow,
     payload
   );
-  const influencerId = platformInfluencerId || payload.influencerId || eventRow.influencer_id || null;
+  // 统一归一化成平台 influencer_id，禁止 handle/用户名落库
+  const influencerId =
+    platformInfluencerId ||
+    (await normalizeCanonicalInfluencerId(
+      payload.influencerId || eventRow.influencer_id
+    )) ||
+    null;
 
   const to =
     payload.to ||

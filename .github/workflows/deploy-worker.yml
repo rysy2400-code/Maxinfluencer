@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "scripts/process-*.js"
+      - "scripts/poll-*.js"
       - "scripts/run-*.js"
       - "scripts/crawler-health-checker.js"
       - "lib/agents/**"

@@ -26,6 +26,11 @@ import {
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
 import { buildTraceIdFromInboundMessageId } from "../lib/utils/timeline-ids.js";
+import {
+  enqueueUnattributedEmail,
+  isBounceEmail,
+  resolveInfluencerIdForInboundEmail,
+} from "../lib/influencer/inbound-email-attribution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -172,8 +177,25 @@ async function pollOnce() {
         continue;
       }
 
-      const influencerId = await resolveInfluencerIdByEmail(msg.from);
+      let influencerId = await resolveInfluencerIdByEmail(msg.from);
+      if (!influencerId) {
+        const deep = await resolveInfluencerIdForInboundEmail({
+          fromEmail: msg.from,
+          inReplyTo: msg.inReplyTo,
+          subject: msg.subject,
+        });
+        influencerId = deep?.influencerId || null;
+      }
       const cleanedBody = extractLatestReply(msg.bodyText || "");
+
+      // 归属失败：退信直接跳过；真实邮件进“待确认队列”，不进入 LLM 处理
+      const bounce = isBounceEmail(msg.from, msg.subject);
+      const eventStatus = influencerId ? "pending" : "skipped";
+      const eventError = influencerId
+        ? null
+        : bounce
+          ? "bounce_email"
+          : "unattributed_email";
 
       // 事件表使用 message_id 做唯一键，避免重复插入
       try {
@@ -191,7 +213,8 @@ async function pollOnce() {
             in_reply_to,
             received_at,
             candidate_campaign_ids,
-            status
+            status,
+            error_message
           ) VALUES (
             ?,
             ?,
@@ -204,7 +227,8 @@ async function pollOnce() {
             ?,
             ?,
             NULL,
-            'pending'
+            ?,
+            ?
           )
         `,
           [
@@ -217,6 +241,8 @@ async function pollOnce() {
             msg.rawHeaders || null,
             msg.inReplyTo || null,
             msg.date || null,
+            eventStatus,
+            eventError,
           ]
         );
 
@@ -225,6 +251,18 @@ async function pollOnce() {
           [msg.messageId]
         );
         const eventId = idRows && idRows[0] ? idRows[0].id : null;
+
+        if (eventId && !influencerId && !bounce) {
+          await enqueueUnattributedEmail({
+            eventId,
+            fromEmail: msg.from,
+            toEmail: msg.to,
+            subject: msg.subject,
+            inReplyTo: msg.inReplyTo,
+            bodyExcerpt: cleanedBody,
+            reason: "unresolved_at_poll",
+          });
+        }
 
         if (eventId && Array.isArray(msg.attachments) && msg.attachments.length) {
           for (const a of msg.attachments) {
@@ -343,4 +381,3 @@ pollOnce()
     console.error("[PollInfluencerReplies] 轮询过程中出错:", err);
     process.exit(1);
   });
-
