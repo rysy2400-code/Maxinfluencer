@@ -656,6 +656,9 @@ async function processTask(task, platformSlug) {
       console.log(
         `[worker-influencer-search] 任务完成（搜索无结果）id=${task.id}, campaign=${campaignId}`
       );
+      if (taskPlatformSlug === "instagram") {
+        await noteIgSearchResult(true);
+      }
       await markTaskStatus(task.id, "succeeded", null);
       await upsertKeywordRunResult({
         campaignId,
@@ -702,6 +705,9 @@ async function processTask(task, platformSlug) {
     console.log(
       `[worker-influencer-search] 任务完成 id=${task.id}, campaign=${campaignId}`
     );
+    if (taskPlatformSlug === "instagram") {
+      await noteIgSearchResult(false);
+    }
     try {
       const { getLitePageNavStats } = await import(
         "../lib/tools/influencer-functions/tiktok/lite-page-nav.js"
@@ -1047,6 +1053,28 @@ async function cleanupIgBlankTabs(endpoint) {
   }
 }
 
+/**
+ * 记录本次 IG 搜索是否空结果：连续空结果达到阈值后由 ig-account-rotation
+ * 自动把当前账户标记冷却，下一任务切换到其他端口。
+ * @param {boolean} empty
+ */
+async function noteIgSearchResult(empty) {
+  try {
+    const {
+      noteIgAccountSearchResult,
+      resolveIgAccountEndpoints,
+    } = await import("../lib/ig-account-rotation.js");
+    const endpoint =
+      process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
+      process.env.CDP_ENDPOINT ||
+      resolveIgAccountEndpoints()[0] ||
+      null;
+    if (endpoint) noteIgAccountSearchResult(endpoint, empty);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function platformLoop(platformSlug) {
   const platformWorkerId = workerIdForPlatform(platformSlug);
   const idleSleepMs = Math.max(
@@ -1096,13 +1124,54 @@ async function platformLoop(platformSlug) {
             await sleep(getIgAccountCooldownPollMs());
             continue;
           }
+      } catch (err) {
+        console.warn(
+          "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
+          err?.message || err
+        );
+      }
+
+      // 登录态校验：选中的 IG 账户必须先通过探测（只读 cookies/URL，不导航），
+      // 掉登录/封号/验证码/CDP 不可达的账户直接标记冷却并换下一个端口，
+      // 避免“搜索无结果”空转在坏账户上。
+      if (platformSlug === "instagram" && igAccountEndpoint) {
+        try {
+          const {
+            checkIgAccountLoginState,
+            markIgAccountLoginBroken,
+            markIgAccountUnreachable,
+          } = await import("../lib/ig-account-rotation.js");
+          const health = await checkIgAccountLoginState(igAccountEndpoint);
+          if (!health.ok) {
+            console.warn(
+              `[worker-influencer-search][instagram] 账户 ${igAccountEndpoint} 登录态异常（${health.reason}），标记后跳过本任务`
+            );
+            if (String(health.reason || "").startsWith("cdp_connect_failed")) {
+              await markIgAccountUnreachable(igAccountEndpoint);
+            } else {
+              await markIgAccountLoginBroken(igAccountEndpoint, health.reason);
+            }
+            await sleep(1000);
+            continue;
+          }
         } catch (err) {
           console.warn(
-            "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
+            "[worker-influencer-search][instagram] 登录态探测失败，按 CDP 不可达处理:",
             err?.message || err
           );
+          try {
+            const { markIgAccountUnreachable } = await import(
+              "../lib/ig-account-rotation.js"
+            );
+            await markIgAccountUnreachable(igAccountEndpoint);
+          } catch {
+            /* ignore */
+          }
+          await sleep(1000);
+          continue;
         }
       }
+    }
 
       const task = await claimOnePendingTaskForPlatform(
         platformSlug,
