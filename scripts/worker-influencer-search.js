@@ -1181,7 +1181,7 @@ async function processImportTaskRow(task) {
 async function reclaimStuckProcessingImportTasks() {
   const stuckMinutes = Math.min(
     24 * 60,
-    Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 7)
+    Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 12)
   );
   const rows = await queryTikTok(
     `
