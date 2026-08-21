@@ -46,7 +46,7 @@ const summary = buildImportBatchSummary([
     total_rows: 3,
     progress_analyzed_count: 3,
     progress_recommended_count: 2,
-    result_summary: "已分析：3 位\n推荐：2 位\n已联系：2 位",
+    result_summary: "已分析：3 位\n推荐：2 位\n将联系：2 位（符合投放地区且有邮箱，已置为待联系，按每天节奏联系）",
   },
   {
     platform: "tiktok",
@@ -59,8 +59,8 @@ const summary = buildImportBatchSummary([
 ]);
 console.log(summary);
 assert(summary.includes("共 4 位红人"), "汇总含总数");
-assert(summary.includes("YouTube（3 位）：已分析 3 · 推荐 2 · 已联系 2"), "汇总含 YouTube 明细");
-assert(summary.includes("直接联系模式"), "直接联系模式标注");
+assert(summary.includes("YouTube（3 位）：已分析 3 · 推荐 2 · 将联系 2"), "汇总含 YouTube 明细");
+assert(summary.includes("模式：联系符合campaign投放地区的所有红人"), "contact_all 模式标注");
 assert(summary.includes("TikTok（1 位）：失败"), "汇总含 TikTok 失败");
 assert(summary.includes("connectOverCDP"), "汇总含失败原因");
 

@@ -1,5 +1,5 @@
 /**
- * 导入任务联系模式：recommended_only（分析后只联系推荐）| contact_all（直接联系，有邮箱即联系，跳过地区过滤）。
+ * 导入任务联系模式：recommended_only（只联系符合投放地区和画像要求且推荐的红人）| contact_all（联系符合投放地区的所有红人）。
  *
  * 用法:
  *   node scripts/add-import-contact-mode-column.js
@@ -22,7 +22,7 @@ if (rows?.length) {
     `
     ALTER TABLE tiktok_influencer_import_task
     ADD COLUMN contact_mode VARCHAR(24) NOT NULL DEFAULT 'recommended_only'
-      COMMENT 'recommended_only=分析后只联系推荐; contact_all=直接联系(有邮箱即联系,跳过地区过滤)'
+      COMMENT 'recommended_only=只联系符合投放地区和画像要求且推荐的红人; contact_all=联系符合投放地区的所有红人'
       AFTER platform
   `
   );
