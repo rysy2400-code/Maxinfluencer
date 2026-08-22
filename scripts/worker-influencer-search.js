@@ -909,7 +909,11 @@ async function processTask(task, platformSlug) {
       error: String(err?.message || "search_throw"),
     });
     if (searchIpRetriesExhausted) {
-      setWorkerCooldown("search_ip_retries_exhausted", task.id, 30);
+      setWorkerCooldown(
+        "search_ip_retries_exhausted",
+        task.id,
+        Number(process.env.TT_WORKER_FAIL_COOLDOWN_MIN ?? 10)
+      );
     }
     await consumeSignalForCompletedTask({
       campaignId,
@@ -1082,7 +1086,11 @@ async function processTask(task, platformSlug) {
     error: String(result?.error || "search_failed"),
   });
   if (searchIpRetriesExhausted) {
-    setWorkerCooldown("search_ip_retries_exhausted", task.id, 30);
+    setWorkerCooldown(
+      "search_ip_retries_exhausted",
+      task.id,
+      Number(process.env.TT_WORKER_FAIL_COOLDOWN_MIN ?? 10)
+    );
   }
   await consumeSignalForCompletedTask({
     campaignId,
