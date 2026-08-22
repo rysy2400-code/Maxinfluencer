@@ -592,6 +592,20 @@ async function markTaskStatus(id, status, errorMessage = null) {
   );
 }
 
+/** 搜索阶段心跳：任务在搜索/轮换 IP 重试时也定期推进 last_progress_at，避免被 stuck 回收误杀 */
+async function touchTaskProgress(taskId) {
+  try {
+    await queryTikTok(
+      `UPDATE tiktok_influencer_search_task
+       SET last_progress_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND status = 'processing'`,
+      [taskId]
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 async function loadTaskWorkNoteMetrics(taskId) {
   try {
     return await fetchSearchTaskWorkNoteMetrics(taskId);
@@ -847,6 +861,7 @@ async function processTask(task, platformSlug) {
       Number(process.env.TT_SEARCH_IP_RETRIES ?? 2) || 0
     );
     for (let attempt = 0; ; attempt += 1) {
+      await touchTaskProgress(task.id);
       try {
         result = await searchAndExtractInfluencers(
           {
@@ -874,6 +889,7 @@ async function processTask(task, platformSlug) {
             onTaskProgress: scheduleKeywordProgressPublish,
           }
         );
+        await touchTaskProgress(task.id);
       } catch (searchErr) {
         if (attempt >= maxSearchIpRetries || !isSearchStageFailureMsg(searchErr?.message || searchErr)) {
           if (attempt >= maxSearchIpRetries) searchIpRetriesExhausted = true;
