@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_import_task (
   import_batch_id VARCHAR(64) NOT NULL COMMENT '本批导入业务 ID',
   batch_group_id VARCHAR(64) NULL COMMENT '平台子任务公共批次号（全部完成后汇总汇报）',
   platform VARCHAR(24) NOT NULL DEFAULT 'mixed' COMMENT '主平台或 mixed（行内可带平台）',
+  contact_mode VARCHAR(24) NOT NULL DEFAULT 'recommended_only' COMMENT 'recommended_only=分析后只联系推荐; contact_all=直接联系(有邮箱即联系,跳过地区过滤)',
   priority INT NOT NULL DEFAULT 150 COMMENT '默认高于关键词搜索任务',
   payload JSON NOT NULL COMMENT 'rows: [{ profileUrl, email?, platform? }], summary stats',
   status ENUM('pending','processing','succeeded','failed','cancelled') NOT NULL DEFAULT 'pending',
