@@ -22,6 +22,7 @@ import {
   setSearchTaskFinalMetrics,
 } from "../lib/db/campaign-candidates-dao.js";
 import { consumeKeywordSignalForSearch } from "../lib/db/campaign-keyword-signals-dao.js";
+import { notifyImportBatchOrSession } from "../lib/influencer/import-batch-coordinator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -220,6 +221,28 @@ function resolveWorkerPlatforms() {
     .split(",")
     .map((s) => normalizePlatformSlug(s.trim()))
     .filter(Boolean);
+}
+
+/**
+ * 导入任务认领平台：worker 平台 + 遗留 mixed 兜底（仅 tiktok 角色认领 mixed）
+ * @param {string[]} [platforms]
+ */
+function importClaimPlatforms(platforms) {
+  const base = Array.isArray(platforms) ? platforms : resolveWorkerPlatforms();
+  const set = new Set(base);
+  if (set.has("tiktok")) set.add("mixed");
+  return [...set];
+}
+
+/**
+ * @param {string[]} platforms
+ * @returns {{ sql: string, params: string[] }}
+ */
+function buildImportPlatformFilter(platforms) {
+  const list = importClaimPlatforms(platforms);
+  if (!list.length) return { sql: "1 = 0", params: [] };
+  const placeholders = list.map(() => "?").join(", ");
+  return { sql: `platform IN (${placeholders})`, params: list };
 }
 
 function taskPlatformFromPayload(payload) {
@@ -471,16 +494,17 @@ function isSearchImportTaskLoopEnabled() {
   return String(process.env.SEARCH_IMPORT_TASK_LOOP ?? "true").toLowerCase() !== "false";
 }
 
-/** 有 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
-async function hasPendingImportTask() {
+/** 有本平台 pending 导入任务时，搜索 loop 让出 slot 给 importTaskLoop（与 DB priority 150>100 一致） */
+async function hasPendingImportTask(platforms) {
   if (!isSearchImportTaskLoopEnabled()) return false;
+  const { sql, params } = buildImportPlatformFilter(platforms);
   const rows = await queryTikTok(
     `
     SELECT id FROM tiktok_influencer_import_task
-    WHERE status = 'pending'
+    WHERE status = 'pending' AND ${sql}
     LIMIT 1
   `,
-    []
+    params
   );
   return Boolean(rows?.[0]);
 }
@@ -493,7 +517,7 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
   const slots = resolveSearchWorkerSlots();
   if (await hasInflightForPlatform(platformSlug, platformWorkerId)) return null;
   if ((await countProcessingOnWorkerIp()) >= slots) return null;
-  if (await hasPendingImportTask()) return null;
+  if (await hasPendingImportTask([platformSlug])) return null;
 
   // mysql2 预处理不支持 LIMIT ?（ER_WRONG_ARGUMENTS），limit 为常量整数
   const rows = await queryTikTok(
@@ -1102,21 +1126,22 @@ async function processTask(task, platformSlug) {
 
 const IMPORT_WORKER_ID = `import-worker-${workerIpToken()}`;
 
-async function claimOnePendingImportTask() {
+async function claimOnePendingImportTask(platforms) {
   const slots = resolveSearchWorkerSlots();
   if ((await countProcessingOnWorkerIp()) >= slots) return null;
+  const { sql, params } = buildImportPlatformFilter(platforms);
 
   // 勿在 ORDER BY 扫描中带 payload（大名单 JSON 会触发 Out of sort memory）
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, import_batch_id,
-           skipped_duplicate_count, parse_error_count
+           batch_group_id, skipped_duplicate_count, parse_error_count
     FROM tiktok_influencer_import_task
-    WHERE status = 'pending'
+    WHERE status = 'pending' AND ${sql}
     ORDER BY priority DESC, id ASC
     LIMIT 5
   `,
-    []
+    params
   );
   if (!rows?.length) return null;
 
@@ -1183,6 +1208,12 @@ async function processImportTaskRow(task) {
       "failed",
       String(err?.message || err).slice(0, 500)
     );
+    await notifyImportBatchOrSession({ task, fallbackSummary: null }).catch((e) => {
+      console.warn(
+        `[worker-influencer-search] import task ${task.id} 批次汇报失败:`,
+        e?.message || e
+      );
+    });
   }
 }
 
@@ -1191,7 +1222,19 @@ async function reclaimStuckProcessingImportTasks() {
     24 * 60,
     Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 12)
   );
-  const rows = await queryTikTok(
+  const stuckRows = await queryTikTok(
+    `
+    SELECT id, campaign_id, session_id, batch_group_id
+    FROM tiktok_influencer_import_task
+    WHERE status = 'processing'
+      AND last_progress_at IS NOT NULL
+      AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
+  `,
+    []
+  );
+  if (!stuckRows?.length) return 0;
+  const errorMessage = `stuck_reclaimed(import_last_progress>${stuckMinutes}m)`;
+  await queryTikTok(
     `
     UPDATE tiktok_influencer_import_task
     SET status = 'failed',
@@ -1202,9 +1245,17 @@ async function reclaimStuckProcessingImportTasks() {
       AND last_progress_at IS NOT NULL
       AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
-    [`stuck_reclaimed(import_last_progress>${stuckMinutes}m)`]
+    [errorMessage]
   );
-  return Number(rows?.affectedRows || 0);
+  for (const r of stuckRows) {
+    await notifyImportBatchOrSession({ task: r, fallbackSummary: null }).catch((e) => {
+      console.warn(
+        `[worker-influencer-search] 回收任务 ${r.id} 批次汇报失败:`,
+        e?.message || e
+      );
+    });
+  }
+  return stuckRows.length;
 }
 
 async function importTaskLoop() {
@@ -1215,7 +1266,7 @@ async function importTaskLoop() {
   let lastReclaimMs = 0;
 
   console.log(
-    `[worker-influencer-search][import] loop workerId=${IMPORT_WORKER_ID} ip=${CURRENT_WORKER_IP || "unknown"}`
+    `[worker-influencer-search][import] loop workerId=${IMPORT_WORKER_ID} ip=${CURRENT_WORKER_IP || "unknown"} platforms=${importClaimPlatforms().join(",")}`
   );
 
   for (;;) {
@@ -1235,7 +1286,7 @@ async function importTaskLoop() {
       await acquirePortTaskLock("import");
       let task = null;
       try {
-        task = await claimOnePendingImportTask();
+        task = await claimOnePendingImportTask(importClaimPlatforms());
         if (task) {
           console.log(
             `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
