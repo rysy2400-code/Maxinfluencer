@@ -579,6 +579,7 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
 }
 
 async function markTaskStatus(id, status, errorMessage = null) {
+  stopTaskHeartbeat(id);
   await queryTikTok(
     `
     UPDATE tiktok_influencer_search_task
@@ -603,6 +604,24 @@ async function touchTaskProgress(taskId) {
     );
   } catch {
     /* ignore */
+  }
+}
+
+/** 任务级心跳定时器：认领后每 60s touch，覆盖搜索/预过滤/国家/enrich 全程；markTaskStatus 时自动停止 */
+const taskHeartbeats = new Map();
+function startTaskHeartbeat(taskId) {
+  stopTaskHeartbeat(taskId);
+  const t = setInterval(() => {
+    touchTaskProgress(taskId).catch(() => {});
+  }, 60_000);
+  if (typeof t.unref === "function") t.unref();
+  taskHeartbeats.set(taskId, t);
+}
+function stopTaskHeartbeat(taskId) {
+  const t = taskHeartbeats.get(taskId);
+  if (t) {
+    clearInterval(t);
+    taskHeartbeats.delete(taskId);
   }
 }
 
@@ -666,6 +685,7 @@ async function processTask(task, platformSlug) {
   const runId = task.run_id || payload.runId || null;
   const keywordReason = String(payload.keywordReason || "").trim();
   const taskStartMs = Date.now();
+  startTaskHeartbeat(task.id);
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
