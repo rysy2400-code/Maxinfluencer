@@ -26,7 +26,7 @@ $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module scripts\run-im
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $Root
 $start = (Get-Date).AddMinutes(1)
 $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::FromDays(3650))
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Write-Host "[ensure-import-report-loop] registered $taskName (every 1 min)"
 
