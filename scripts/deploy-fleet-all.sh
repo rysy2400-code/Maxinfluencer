@@ -44,7 +44,7 @@ deploy_worker() {
   local log="/tmp/deploy-worker-${host}.log"
   echo "[deploy-worker] $host sha=$TARGET_SHA"
   if ssh_cmd "${USER}@${host}" \
-    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"${git_sync_ps1}; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'deploy-worker.ps1'); powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Set-Location C:\\\\maxinfluencer; node --experimental-default-type=module scripts/create-campaign-keyword-signals-table.js\\\"\"" \
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"${git_sync_ps1}; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'deploy-worker.ps1'); powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Set-Location C:\\\\maxinfluencer; node --experimental-default-type=module scripts/create-campaign-keyword-signals-table.js\\\"; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'scripts\\ensure-import-report-loop.ps1')\"" \
     >"$log" 2>&1; then
     echo "[deploy-worker] OK $host"
     return 0

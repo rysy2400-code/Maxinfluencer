@@ -3,7 +3,11 @@
 import { reportPendingImportCompletions } from "../lib/influencer/report-import-completions.js";
 
 const intervalMs = Math.max(15000, Number(process.env.IMPORT_REPORT_INTERVAL_MS || 60000));
-console.log(`[import-report-loop] start interval=${intervalMs}ms`);
+const maxAgeHours = Number(process.env.IMPORT_REPORT_MAX_AGE_HOURS || 48) || 48;
+const maxPerTick = Number(process.env.IMPORT_REPORT_MAX_PER_TICK || 20) || 20;
+console.log(
+  `[import-report-loop] start interval=${intervalMs}ms maxAgeHours=${maxAgeHours} maxPerTick=${maxPerTick}`
+);
 
 async function tick() {
   try {

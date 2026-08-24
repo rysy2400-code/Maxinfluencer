@@ -18,7 +18,6 @@ import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
 import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
 import { fetchSearchTaskWorkNoteMetrics } from "../lib/db/campaign-candidates-dao.js";
 import { consumeKeywordSignalForSearch } from "../lib/db/campaign-keyword-signals-dao.js";
-import { notifyImportBatchOrSession } from "../lib/influencer/import-batch-coordinator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -896,12 +895,6 @@ async function processImportTaskRow(task) {
       "failed",
       String(err?.message || err).slice(0, 500)
     );
-    await notifyImportBatchOrSession({ task, fallbackSummary: null }).catch((e) => {
-      console.warn(
-        `[worker-influencer-search] import task ${task.id} 批次汇报失败:`,
-        e?.message || e
-      );
-    });
   }
 }
 
@@ -935,14 +928,6 @@ async function reclaimStuckProcessingImportTasks() {
   `,
     [errorMessage]
   );
-  for (const r of stuckRows) {
-    await notifyImportBatchOrSession({ task: r, fallbackSummary: null }).catch((e) => {
-      console.warn(
-        `[worker-influencer-search] 回收任务 ${r.id} 批次汇报失败:`,
-        e?.message || e
-      );
-    });
-  }
   return stuckRows.length;
 }
 

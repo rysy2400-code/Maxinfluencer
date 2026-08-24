@@ -88,19 +88,24 @@ async function processPendingImportTask(sessionId) {
         "../lib/influencer/process-import-task.js"
       );
       await processInfluencerImportTask(task);
+      // Worker 不再直发聊天消息，由 web 端汇报循环统一补发完成摘要
+      const { reportPendingImportCompletions } = await import(
+        "../lib/influencer/report-import-completions.js"
+      );
+      await reportPendingImportCompletions();
       return true;
     } catch (workerErr) {
       // 本地无 CDP 9222 时，仍写入第二条完成摘要以验证 session 消息链路
       const summary =
         "红人名单处理完成。\n- enrich 成功: 0\n- 完成分析: 0\n- 推荐联系: 0\n- 新写入候选池: 0\n（E2E：Worker 因无 CDP 跳过 enrich，本条为模拟完成摘要）";
-      const { appendBinMessageToSession } = await import(
-        "../lib/db/campaign-session-dao.js"
-      );
       await queryTikTok(
         `UPDATE tiktok_influencer_import_task SET status='succeeded', result_summary=? WHERE id=?`,
         [summary, taskId]
       );
-      await appendBinMessageToSession(sessionId, summary);
+      const { reportPendingImportCompletions } = await import(
+        "../lib/influencer/report-import-completions.js"
+      );
+      await reportPendingImportCompletions();
       return true;
     }
   } catch (e) {
@@ -218,7 +223,11 @@ async function main() {
     for (let i = 0; i < 30; i++) {
       await page.waitForTimeout(2000);
       const msgs = binMessages(await fetchSessionMessages(context.request, SESSION_ID));
-      const hit = msgs.find((m) => String(m.content).includes("红人名单处理完成"));
+      const hit = msgs.find(
+        (m) =>
+          String(m.content).includes("红人名单已处理完成") ||
+          String(m.content).includes("红人名单处理完成")
+      );
       if (hit) {
         secondReply = true;
         log("第二条 Bin（处理完成）", true, hit.content.split("\n")[0].slice(0, 80));
