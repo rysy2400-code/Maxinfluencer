@@ -23,7 +23,18 @@ Write-Host "[ensure-import-report-loop] pm2 delete $name (best-effort, ensure si
 try { & pm2 delete $name | Out-Null } catch {}
 
 Write-Host "[ensure-import-report-loop] pm2 start $name via node (ESM flags as args)..."
-& pm2 start node --name $name --cwd $Root -- --experimental-default-type=module $script
+$pm2Args = @(
+  "start",
+  "node",
+  "--name",
+  $name,
+  "--cwd",
+  $Root,
+  "--",
+  "--experimental-default-type=module",
+  $script
+)
+& pm2 @pm2Args
 & pm2 save
 
 Write-Host "[ensure-import-report-loop] pm2 list:"
