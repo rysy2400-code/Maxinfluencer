@@ -1082,10 +1082,12 @@ ${influencerAgentBasePrompt}
   - pending_quote → quote_submitted：红人同意品牌报价或给出 counter 报价
   - quote_rejected → quote_submitted：红人拒绝后再给出新报价
   - pending_shipping_address → pending_sample：红人已确认本次寄样地址，或提供了完整寄样地址
-  - pending_draft → draft_submitted：红人提交素材草稿（需广告主已同意价格）
-  - draft_submitted → draft_submitted：红人根据修改建议重新提交草稿
+  - pending_script → script_review：红人提交脚本（需广告主已同意价格）
+  - pending_video → video_review：红人提交视频草稿（需脚本已通过）
+  - script_review → script_review：红人根据修改建议重新提交脚本
+  - video_review → video_review：红人根据修改建议重新提交视频草稿
   - published → published：广告主已通过草稿后，红人提交最终发布视频链接（仅更新 videoLink，不改变 stage 语义）
-- **禁止**将 newStage 设为 pending_shipping_address、pending_draft、published（从非 published 进入）、quote_rejected。
+- **禁止**将 newStage 设为 pending_shipping_address、pending_script、pending_video、published（从非 published 进入）、quote_rejected。
 - 只有当当前 activeExecution.stage 为 pending_shipping_address，且你能填出完整 shippingInfo（Full Name、Country、City、Address Line、Post/Zip Code、Telephone；State/Province 可选）时，才允许 newStage=pending_sample。
 - 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
 - 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
@@ -1111,7 +1113,7 @@ ${influencerAgentBasePrompt}
   - **禁止**在此阶段填写 shippingInfo 或向红人索取寄样地址（寄样地址仅在品牌同意报价后、由系统 followup 另行处理）。
 - 当 lastEvent.quoteApprovedAt **不存在**时，无论 stage 为何，**禁止**在 outboundEmails 中确认合作、催促交稿/拍摄、或索取寄样信息。
 - 当 lastEvent.quoteApprovedAt 不存在但红人主动提供了寄样信息：可以在同一 campaign 的 updates 中填写 shippingInfo 用于系统记忆，但 newStage 仍必须遵守报价阶段规则（通常是 quote_submitted）；回复中不要确认合作已定。
-- 讨论素材草稿、提交 draftLink 的前提是 lastEvent.quoteApprovedAt 存在（pending_draft / pending_sample / draft_submitted 均可收到草稿，见下方草稿阶段纪律）。
+- 讨论素材草稿、提交 draftLink 的前提是 lastEvent.quoteApprovedAt 存在（pending_script / pending_video / pending_sample / script_review / video_review 均可收到草稿，见下方草稿阶段纪律）。
 ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
 
 【脚本 / 创意要求 · 合作确认后】
@@ -1134,15 +1136,18 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   - **必须**同时返回 outboundEmails；
   - 正文须说明：已收到草稿、已转品牌方审核、请等待反馈；**必须**提醒在收到明确通过通知前 **请勿发布**；
   - **禁止**：draft approved / ready to publish / you can post / looks perfect / go live 等暗示草稿已通过或可以发布的表述。
-- stage 为 pending_draft：newStage 设为 draft_submitted，并填 draftLink。
-- stage 为 draft_submitted（改稿再交）：newStage 保持 draft_submitted，更新 draftLink。
-- stage 为 pending_sample：仍可填 newStage 为 draft_submitted + draftLink；**系统会只保存链接、不改变 stage**；outboundEmails 与正常交稿相同（已转品牌审核、请等待、勿发布），**不要**向红人解释「样品还在路上」等内部流程细节。
+- stage 为 pending_script：红人提交脚本时 newStage 设为 script_review，并填 draftLink/deliverable。
+- stage 为 pending_video：红人提交视频草稿时 newStage 设为 video_review，并填 draftLink/deliverable。
+- stage 为 script_review（改脚本再交）：newStage 保持 script_review，更新 draftLink/deliverable。
+- stage 为 video_review（改视频草稿再交）：newStage 保持 video_review，更新 draftLink/deliverable。
+- stage 为 pending_sample：仍可填 newStage 为 script_review 或 video_review + draftLink；**系统会只保存链接、不改变 stage**；outboundEmails 与正常交稿相同（已转品牌审核、请等待、勿发布），**不要**向红人解释「样品还在路上」等内部流程细节。
 - 只有 stage 为 published 且 lastEvent.draftApprovedAt 存在时，才用 videoLink 表示最终发布视频（不是草稿）。
 
 - newStage 必须是下列之一（不要使用 failed、sample_sent 等已废弃取值）：
   - "pending_quote"
   - "quote_submitted"
-  - "draft_submitted"
+  - "script_review"
+  - "video_review"
   - "published"（仅当 activeExecutions 中该 campaign 已是 published、且需更新 videoLink 时）
 - 如果你认为当前邮件不需要修改任何 Campaign 的 stage，请返回：{"updates": []}，但你仍然可以返回 outboundEmails 或 agentEvents。
 - 对于 creator_replied_special_request：当红人明确同意/接受品牌方的特殊请求（如改价、改时间、加条数等）时，specialRequestStatus 必须为 "resolved"；仅当红人拒绝或提出新条件需品牌再决定时，才用 "pending_brand"。

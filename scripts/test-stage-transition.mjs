@@ -21,6 +21,10 @@ function assert(cond, msg) {
 }
 
 const quoteApproved = { quoteApprovedAt: "2026-01-01T00:00:00.000Z" };
+const scriptApproved = {
+  ...quoteApproved,
+  scriptApprovedAt: "2026-03-01T00:00:00.000Z",
+};
 const draftApproved = {
   ...quoteApproved,
   draftApprovedAt: "2026-06-01T00:00:00.000Z",
@@ -38,11 +42,20 @@ assert(
 
 assert(
   resolveInfluencerAgentUpdate({
-    currentStage: EXECUTION_STAGES.PENDING_DRAFT,
-    requestedStage: EXECUTION_STAGES.DRAFT_SUBMITTED,
+    currentStage: EXECUTION_STAGES.PENDING_SCRIPT,
+    requestedStage: EXECUTION_STAGES.SCRIPT_REVIEW,
     lastEventRaw: quoteApproved,
-  }).effectiveStage === EXECUTION_STAGES.DRAFT_SUBMITTED,
-  "pending_draft → draft_submitted"
+  }).effectiveStage === EXECUTION_STAGES.SCRIPT_REVIEW,
+  "pending_script → script_review"
+);
+
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.PENDING_VIDEO,
+    requestedStage: EXECUTION_STAGES.VIDEO_REVIEW,
+    lastEventRaw: scriptApproved,
+  }).effectiveStage === EXECUTION_STAGES.VIDEO_REVIEW,
+  "pending_video → video_review"
 );
 
 assert(
@@ -57,7 +70,7 @@ assert(
 // 越权拦截
 for (const to of [
   EXECUTION_STAGES.PENDING_SAMPLE,
-  EXECUTION_STAGES.PENDING_DRAFT,
+  EXECUTION_STAGES.PENDING_SCRIPT,
   EXECUTION_STAGES.PUBLISHED,
 ]) {
   const r = resolveInfluencerAgentUpdate({
@@ -92,13 +105,13 @@ const pubCase = resolveInfluencerAgentUpdate({
 assert(pubCase.allowVideoLinkUpdate, "published 可更新 videoLink");
 
 const pubBlocked = resolveInfluencerAgentUpdate({
-  currentStage: EXECUTION_STAGES.DRAFT_SUBMITTED,
+  currentStage: EXECUTION_STAGES.SCRIPT_REVIEW,
   requestedStage: EXECUTION_STAGES.PUBLISHED,
   lastEventRaw: quoteApproved,
 });
 assert(
-  pubBlocked.effectiveStage === EXECUTION_STAGES.DRAFT_SUBMITTED,
-  "draft_submitted 不可直接 published"
+  pubBlocked.effectiveStage === EXECUTION_STAGES.SCRIPT_REVIEW,
+  "script_review 不可直接 published"
 );
 
 // needSample 兜底

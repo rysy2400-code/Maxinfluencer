@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   content_script JSON COMMENT '内容脚本快照',
   status ENUM('running', 'paused', 'completed') NOT NULL DEFAULT 'running',
   influencers_per_day INT NOT NULL DEFAULT 5 COMMENT '每天联系红人数量',
-  execution_state JSON COMMENT '红人执行状态：{ "influencerId": "pending_quote|quote_submitted|pending_sample|draft_submitted|published", ... } 或按需扩展',
+  execution_state JSON COMMENT '红人执行状态：{ "influencerId": "pending_quote|quote_submitted|pending_sample|pending_script|script_review|video_review|pending_video|published", ... } 或按需扩展',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_session_id (session_id),

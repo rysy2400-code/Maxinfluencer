@@ -218,7 +218,8 @@ async function seed() {
   const stages = [
     { stage: "pending_quote", indices: [0, 1] },
     { stage: "pending_sample", indices: [2, 3], lastEvent: { shippingAddress: { fullName: "Carol Test", country: "US" } } },
-    { stage: "draft_submitted", indices: [4, 5], lastEvent: { draftLink: "https://www.tiktok.com/@emma_fit/video/1234567890" } },
+    { stage: "script_review", indices: [4], lastEvent: { draftLink: "https://docs.google.com/document/d/mock-script" } },
+    { stage: "video_review", indices: [5], lastEvent: { draftLink: "https://www.tiktok.com/@emma_fit/video/1234567890" } },
     { stage: "published", indices: [6, 7], lastEvent: { videoLink: "https://www.tiktok.com/@grace_travel/video/111", promoCode: "GRACE20", views: "125K", likes: "8.2K", comments: "320" } },
   ];
 

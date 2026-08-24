@@ -4,6 +4,7 @@ import { getCampaignExecutionStatus } from "../../../../../lib/db/campaign-dao.j
 /**
  * GET /api/campaigns/[id]/execution-status
  * 返回红人执行进度：已联系、待审核价格、待寄样品、待审核草稿、已发布视频
+ * 待审核草稿支持 subTab=script|video 子 Tab 过滤与独立分页。
  */
 export async function GET(req, { params }) {
   try {
@@ -19,6 +20,7 @@ export async function GET(req, { params }) {
     const { searchParams } = new URL(req.url);
     const data = await getCampaignExecutionStatus(campaignId, {
       stage: searchParams.get("stage"),
+      subTab: searchParams.get("subTab"),
       limit: searchParams.get("limit"),
       cursor: searchParams.get("cursor"),
       username: searchParams.get("username"),

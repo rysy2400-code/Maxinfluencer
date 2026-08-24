@@ -1,9 +1,11 @@
 /**
- * 向「法国 RELX prime」campaign 已联系的 28 位红人补发产品链接更正邮件。
+ * 向已联系的 campaign 红人补发产品链接更正邮件（挂原邮件线程，Re: 原主题）。
  *
  * 用法：
- *   node scripts/send-product-link-correction-emails.mjs --dry-run   # 预览，不发送
- *   node scripts/send-product-link-correction-emails.mjs             # 真实发送
+ *   node scripts/send-product-link-correction-emails.mjs \
+ *     --campaign CAMP-... --brand RELX --product "RELX Prime" [--link https://relxnow.fr/] [--dry-run]
+ *
+ * 不带参数时默认使用「法国 RELX prime」campaign（历史默认值）。
  */
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
@@ -11,9 +13,26 @@ import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 
-const CAMPAIGN_ID = "CAMP-1786935898068-SNXGL7C8K";
-const NEW_LINK = "https://relxnow.fr/";
-const DRY_RUN = process.argv.includes("--dry-run");
+const args = process.argv.slice(2);
+
+function argValue(flag) {
+  const i = args.indexOf(flag);
+  return i >= 0 && args[i + 1] ? args[i + 1] : null;
+}
+
+const CAMPAIGN_ID =
+  argValue("--campaign") || "CAMP-1786935898068-SNXGL7C8K";
+const BRAND = argValue("--brand") || "RELX";
+const PRODUCT = argValue("--product") || "RELX Prime";
+const NEW_LINK = argValue("--link") || "https://relxnow.fr/";
+const DRY_RUN = args.includes("--dry-run");
+
+// 产品名已含品牌名时避免重复（如「NOCLOUD 电子烟…」）
+const collaborationLabel = String(PRODUCT)
+  .toLowerCase()
+  .startsWith(String(BRAND).toLowerCase())
+  ? PRODUCT
+  : `${BRAND} ${PRODUCT}`;
 
 const rows = await queryTikTok(
   `SELECT influencer_id, to_email, message_id, subject
@@ -47,11 +66,11 @@ for (const r of recipients) {
     "Creator";
   const body = `Hi ${name},
 
-Quick correction to my previous email about the RELX Prime collaboration: the product link I shared earlier was incorrect.
+Quick correction to my previous email about the ${collaborationLabel} collaboration: the product link I shared earlier was incorrect.
 
 The correct link is: ${NEW_LINK}
 
-The collaboration is for RELX Prime by RELX, and everything else from my previous message remains the same. Please use the new link above, and apologies for any confusion.
+The collaboration is for ${PRODUCT} by ${BRAND}, and everything else from my previous message remains the same. Please use the new link above, and apologies for any confusion.
 
 Best,
 Bin`;
@@ -134,6 +153,8 @@ Bin`;
         kind: "product_link_correction",
         status: "succeeded",
         correctLink: NEW_LINK,
+        brand: BRAND,
+        product: PRODUCT,
         email: { to: r.to_email, subject, messageId: result?.messageId || null },
       },
     });

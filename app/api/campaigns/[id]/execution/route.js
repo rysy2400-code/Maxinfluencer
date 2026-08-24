@@ -221,7 +221,7 @@ export async function PATCH(req, { params }) {
         break;
       }
       case "confirmShip":
-        stage = "pending_draft";
+        stage = "pending_script";
         lastEvent = {
           shippingAddress: payload.shippingAddress || payload,
           sampleSentAt: new Date().toISOString(),
@@ -242,6 +242,12 @@ export async function PATCH(req, { params }) {
               (e) => e?.kind === "script" && e?.type === "approved"
             )
         );
+        const hasDraftApproved = Boolean(
+          prevLastEvent.draftApprovedAt ||
+            prevTimeline.some(
+              (e) => e?.kind === "video_draft" && e?.type === "approved"
+            )
+        );
         const kind =
           payload.kind === "script" || payload.kind === "video_draft"
             ? payload.kind
@@ -250,6 +256,17 @@ export async function PATCH(req, { params }) {
             : hasScriptApproved
             ? "video_draft"
             : lastSubmitted?.kind || "video_draft";
+        // 幂等保护：同一种交付物已通过时直接返回，避免重复点击产生重复时间线/跟进事件
+        if (
+          (kind === "script" && hasScriptApproved) ||
+          (kind === "video_draft" && hasDraftApproved)
+        ) {
+          return NextResponse.json({
+            success: true,
+            stage: kind === "script" ? "pending_video" : "published",
+            message: "已通过，无需重复操作",
+          });
+        }
         const now = new Date().toISOString();
         const draftLink =
           payload.draftLink || prevLastEvent.draftLink || null;
@@ -262,8 +279,8 @@ export async function PATCH(req, { params }) {
           source: "advertiser_portal",
         };
         if (kind === "script") {
-          // 脚本通过：保持 pending_draft 语义（等待红人提交视频草稿），不新增状态
-          stage = "pending_draft";
+          // 脚本通过：进入 pending_video（等待红人提交视频草稿）
+          stage = "pending_video";
           lastEvent = {
             scriptApprovedAt: now,
             scriptApprovedLink: draftLink,
@@ -290,7 +307,6 @@ export async function PATCH(req, { params }) {
             { status: 400 }
           );
         }
-        stage = "draft_submitted";
         const existing = await getExecutionRow(campaignId, influencerId);
         const prevHistory = existing?.lastEvent?.revisionHistory || [];
         const prevTimeline = Array.isArray(
@@ -308,6 +324,7 @@ export async function PATCH(req, { params }) {
             : payload.kind === "video_draft"
             ? "video_draft"
             : lastSubmitted?.kind || "video_draft";
+        stage = kind === "script" ? "script_review" : "video_review";
         const now = new Date().toISOString();
         lastEvent = {
           draftFeedback: feedback.slice(0, 2000),

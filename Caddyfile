@@ -22,6 +22,12 @@ maxinai.xyz, www.maxinai.xyz {
 	reverse_proxy 127.0.0.1:3000
 }
 
+# binfluencer.xyz：Binfluencer AI 独立应用（3100 端口；Caddy 自动申请/续期 HTTPS 证书）
+binfluencer.xyz, www.binfluencer.xyz {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3100
+}
+
 # 旧 IP 访问自动跳转到域名（兼容历史书签/外链）
 # HTTPS 用 Caddy 内置 CA 的临时证书（Let's Encrypt 不签发纯 IP 证书），
 # 浏览器会提示一次证书不受信，确认后即跳转到 https://maxinai.xyz

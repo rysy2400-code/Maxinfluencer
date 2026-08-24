@@ -54,8 +54,10 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
     'pending_creator_confirmation',
     'pending_shipping_address',
     'pending_sample',
-    'pending_draft',
-    'draft_submitted',
+    'pending_script',
+    'script_review',
+    'video_review',
+    'pending_video',
     'published',
     'quote_rejected'
   ) NOT NULL DEFAULT 'pending_quote' COMMENT '执行阶段',

@@ -59,8 +59,10 @@ const ALLOWED_EXECUTION_STAGES = new Set([
   "quote_submitted",
   "pending_shipping_address",
   "pending_sample",
-  "pending_draft",
-  "draft_submitted",
+  "pending_script",
+  "script_review",
+  "video_review",
+  "pending_video",
   "published",
   "quote_rejected",
 ]);

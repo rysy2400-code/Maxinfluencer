@@ -1542,7 +1542,6 @@ function ExecutionProgressRow({
   executionUsernameSet,
   highlightUsername,
 }) {
-  const [draftExpanded, setDraftExpanded] = React.useState(false);
   const [scriptContentExpanded, setScriptContentExpanded] = React.useState(false);
   const [deliverablesExpanded, setDeliverablesExpanded] = React.useState(false);
   const [negExpanded, setNegExpanded] = React.useState(false);
@@ -1629,6 +1628,8 @@ function ExecutionProgressRow({
             ? "3px solid #1D9BF0"
             : "3px solid #111827",
     boxShadow: isHighlighted ? "0 0 0 3px rgba(79, 70, 229, 0.2)" : "none",
+    opacity:
+      item.stage === "pending_script" || item.stage === "pending_video" ? 0.72 : 1,
     fontSize: 12,
     color: "#374151",
     display: "flex",
@@ -1803,10 +1804,6 @@ function ExecutionProgressRow({
     draftLink = vd.draftLink || vd.link || vd.url;
   }
 
-  const revisionHistory = Array.isArray(item.revisionHistory)
-    ? item.revisionHistory
-    : [];
-
   const publishedLink =
     item.videoLink || item.executionVideoLink || item.video_link;
 
@@ -1816,38 +1813,97 @@ function ExecutionProgressRow({
   const lastSubmittedEntry = [...deliverablesTimeline]
     .reverse()
     .find((e) => e?.role === "influencer" && e?.type === "submitted");
-  const currentReviewKind = lastSubmittedEntry?.kind || null;
-  const hasScriptApproved = Boolean(
-    item.scriptApprovedAt ||
-      deliverablesTimeline.some(
-        (e) => e?.kind === "script" && e?.type === "approved"
-      )
-  );
-  const hasDraftApproved = Boolean(
-    item.draftApprovedAt ||
-      deliverablesTimeline.some(
-        (e) => e?.kind === "video_draft" && e?.type === "approved"
-      )
-  );
-  const legacyPendingDraft =
-    deliverablesTimeline.length === 0 && Boolean(draftLink);
-  const lastSubmittedReviewed =
-    lastSubmittedEntry &&
-    ((lastSubmittedEntry.kind === "script" && hasScriptApproved) ||
-      (lastSubmittedEntry.kind === "video_draft" && hasDraftApproved));
-  const canReviewSubmission =
-    legacyPendingDraft || (lastSubmittedEntry && !lastSubmittedReviewed);
-  let draftPhaseStatus = null;
-  if (lastSubmittedEntry && !lastSubmittedReviewed) {
-    draftPhaseStatus =
-      lastSubmittedEntry.kind === "script"
-        ? "已提交脚本，待品牌审核"
-        : "已提交视频草稿，待品牌审核";
-  } else if (hasScriptApproved && !hasDraftApproved) {
-    draftPhaseStatus = "脚本已通过，等待红人提交视频草稿";
-  } else if (hasDraftApproved) {
-    draftPhaseStatus = "视频草稿已通过";
-  }
+  const latestScriptEntry = [...deliverablesTimeline]
+    .reverse()
+    .find(
+      (e) =>
+        e?.kind === "script" &&
+        e?.role === "influencer" &&
+        e?.type === "submitted"
+    );
+  const latestVideoEntry = [...deliverablesTimeline]
+    .reverse()
+    .find(
+      (e) =>
+        e?.kind === "video_draft" &&
+        e?.role === "influencer" &&
+        e?.type === "submitted"
+    );
+  const latestFeedbackEntry = [...deliverablesTimeline]
+    .reverse()
+    .find((e) => e?.role === "advertiser" && e?.type === "feedback");
+  const isScriptBucket =
+    item.stage === "pending_script" || item.stage === "script_review";
+  const isVideoBucket =
+    item.stage === "video_review" || item.stage === "pending_video";
+  const draftReviewable =
+    item.stage === "script_review" || item.stage === "video_review";
+  const draftWaiting =
+    item.stage === "pending_script" || item.stage === "pending_video";
+  const rejectedPendingDraft =
+    draftReviewable &&
+    latestFeedbackEntry &&
+    (!lastSubmittedEntry ||
+      String(latestFeedbackEntry.at || "") >= String(lastSubmittedEntry.at || ""));
+  const latestScript =
+    latestScriptEntry ||
+    (draftLink ? { link: draftLink, attachment: null, content: null } : null);
+
+  const renderDeliverableRef = (entry) => {
+    if (!entry) return "—";
+    const previewHref = entry.attachment?.inboundAttachmentId
+      ? inboundAttachmentPreviewUrl(entry.attachment.inboundAttachmentId)
+      : null;
+    const downloadHref = entry.attachment?.inboundAttachmentId
+      ? inboundAttachmentDownloadUrl(entry.attachment.inboundAttachmentId)
+      : null;
+    if (entry.link) {
+      return (
+        <a
+          href={entry.link}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "#4F46E5", wordBreak: "break-all" }}
+        >
+          {entry.link}
+        </a>
+      );
+    }
+    if (entry.attachment) {
+      return (
+        <span>
+          {entry.attachment.filename || "附件"}
+          {previewHref ? (
+            <>
+              {" "}
+              <a
+                href={previewHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: "#4F46E5" }}
+              >
+                预览
+              </a>
+            </>
+          ) : null}
+          {downloadHref ? (
+            <>
+              {" "}
+              <a
+                href={downloadHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: "#4F46E5" }}
+              >
+                下载
+              </a>
+            </>
+          ) : null}
+        </span>
+      );
+    }
+    return "—";
+  };
 
   const labelRow = (k, v) => (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -2313,83 +2369,34 @@ function ExecutionProgressRow({
 
       {stageKey === "pendingDraft" && (
         <>
-          {draftPhaseStatus ? (
-            <div
+          {rejectedPendingDraft ? (
+            <span
               style={{
+                alignSelf: "flex-start",
                 fontSize: 11,
-                fontWeight: 600,
-                color: "#3730A3",
-                backgroundColor: "#EEF2FF",
-                borderRadius: 6,
-                padding: "4px 8px",
+                padding: "2px 8px",
+                borderRadius: 999,
+                backgroundColor: "#FEF3C7",
+                color: "#92400E",
+                whiteSpace: "nowrap",
               }}
             >
-              {draftPhaseStatus}
-            </div>
+              已反馈，待修改后重新提交
+            </span>
           ) : null}
-          {labelRow(
-            "草稿链接",
-            draftLink ? (
-              <a href={draftLink} target="_blank" rel="noreferrer" style={{ color: "#4F46E5" }}>
-                打开链接
-              </a>
-            ) : (
-              "—"
-            )
-          )}
-          {currentReviewKind === "script" && lastSubmittedEntry?.content ? (
+          {labelRow("最新脚本", renderDeliverableRef(latestScript))}
+          {latestScript?.content ? (
             <ExecutionProgressCollapsibleRow
               label="脚本正文"
-              text={lastSubmittedEntry.content}
+              text={latestScript.content}
               expanded={scriptContentExpanded}
               onToggle={setScriptContentExpanded}
               useMarkdown={false}
             />
           ) : null}
-          {labelRow("修改建议", item.draftFeedback || item.feedback || "—")}
-          {revisionHistory.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setDraftExpanded(!draftExpanded)}
-                style={{
-                  alignSelf: "flex-start",
-                  fontSize: 11,
-                  color: "#4F46E5",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              >
-                {draftExpanded ? "收起修订记录" : `展开修订记录 (${revisionHistory.length})`}
-              </button>
-              {draftExpanded &&
-                revisionHistory.map((rev, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      borderLeft: "2px solid #E5E7EB",
-                      paddingLeft: 8,
-                      fontSize: 11,
-                      color: "#4B5563",
-                    }}
-                  >
-                    {labelRow(
-                      "链接",
-                      rev.draftLink ? (
-                        <a href={rev.draftLink} target="_blank" rel="noreferrer">
-                          {rev.draftLink}
-                        </a>
-                      ) : (
-                        "—"
-                      )
-                    )}
-                    {labelRow("建议", rev.feedback || "—")}
-                  </div>
-                ))}
-            </>
-          )}
+          {isVideoBucket ? (
+            <>{labelRow("最新视频", renderDeliverableRef(latestVideoEntry))}</>
+          ) : null}
           {deliverablesTimeline.length > 0 && (
             <div style={{ marginTop: 4 }}>
               <button
@@ -2520,7 +2527,7 @@ function ExecutionProgressRow({
               )}
             </div>
           )}
-          {canReviewSubmission && (
+          {draftReviewable && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -2528,7 +2535,7 @@ function ExecutionProgressRow({
                 onClick={() =>
                   patchExecution("approveDraft", username, {
                     draftLink,
-                    kind: currentReviewKind || undefined,
+                    kind: isScriptBucket ? "script" : "video_draft",
                   })
                 }
                 style={{
@@ -2542,7 +2549,7 @@ function ExecutionProgressRow({
               >
                 {busy
                   ? "处理中…"
-                  : currentReviewKind === "script"
+                  : isScriptBucket
                   ? "通过脚本"
                   : "同意草稿"}
               </button>
@@ -2559,7 +2566,7 @@ function ExecutionProgressRow({
                   patchExecution("rejectDraft", username, {
                     draftLink,
                     feedback: trimmed.slice(0, 2000),
-                    kind: currentReviewKind || undefined,
+                    kind: isScriptBucket ? "script" : "video_draft",
                   });
                 }}
                 style={{
@@ -2685,6 +2692,7 @@ export default function HomePage() {
   const [activeAnalyzedSubTab, setActiveAnalyzedSubTab] = useState("recommended"); // 已分析子 Tab
   const [activePendingPriceSubTab, setActivePendingPriceSubTab] = useState("pending"); // 待审核价格子 Tab
   const [activePendingSampleSubTab, setActivePendingSampleSubTab] = useState("confirmInfo"); // 待寄样品子 Tab
+  const [activePendingDraftSubTab, setActivePendingDraftSubTab] = useState("script"); // 待审核草稿子 Tab：script=待审核脚本 / video=待审核视频
   const [highlightExecutionUsername, setHighlightExecutionUsername] = useState(null);
   const [pendingPriceSearchOpen, setPendingPriceSearchOpen] = useState(false);
   const [pendingPriceSearchQuery, setPendingPriceSearchQuery] = useState("");
@@ -3024,8 +3032,17 @@ export default function HomePage() {
     }
   }, [isExecutionPhaseGlobal]);
 
-  const mergeExecutionStatusPage = React.useCallback((prev, data, stageKey, append = false) => {
+  const mergeExecutionStatusPage = React.useCallback(
+    (prev, data, stageKey, append = false, subTab = null) => {
     if (!data) return prev;
+    const colKey =
+      stageKey === "pendingDraft" && subTab
+        ? subTab === "script"
+          ? "pendingDraftScript"
+          : "pendingDraftVideo"
+        : stageKey;
+    const pageKey =
+      subTab && stageKey === "pendingDraft" ? `${stageKey}:${subTab}` : stageKey;
     const base =
       prev && prev.campaignId === data.campaignId
         ? prev
@@ -3037,6 +3054,8 @@ export default function HomePage() {
               pendingShippingAddress: [],
               pendingSample: [],
               pendingDraft: [],
+              pendingDraftScript: [],
+              pendingDraftVideo: [],
               published: [],
             },
           };
@@ -3047,6 +3066,8 @@ export default function HomePage() {
       pendingShippingAddress: base.columns?.pendingShippingAddress || [],
       pendingSample: base.columns?.pendingSample || [],
       pendingDraft: base.columns?.pendingDraft || [],
+      pendingDraftScript: base.columns?.pendingDraftScript || [],
+      pendingDraftVideo: base.columns?.pendingDraftVideo || [],
       published: base.columns?.published || [],
     };
 
@@ -3061,19 +3082,21 @@ export default function HomePage() {
             )
           : incoming;
       }
-    } else if (stageKey && nextColumns[stageKey]) {
-      const incoming = Array.isArray(incomingColumns[stageKey])
+    } else if (colKey && nextColumns[colKey]) {
+      const incoming = Array.isArray(incomingColumns[colKey])
+        ? incomingColumns[colKey]
+        : Array.isArray(incomingColumns[stageKey])
         ? incomingColumns[stageKey]
         : [];
-      nextColumns[stageKey] = append
+      nextColumns[colKey] = append
         ? Array.from(
             new Map(
-              [...nextColumns[stageKey], ...incoming].map((item) => [item?.id, item])
+              [...nextColumns[colKey], ...incoming].map((item) => [item?.id, item])
             ).values()
           )
         : incoming;
     } else {
-      for (const key of ["contacted", "pendingPrice", "pendingShippingAddress", "pendingSample", "pendingDraft", "published"]) {
+      for (const key of ["contacted", "pendingPrice", "pendingShippingAddress", "pendingSample", "pendingDraft", "pendingDraftScript", "pendingDraftVideo", "published"]) {
         nextColumns[key] = Array.isArray(incomingColumns[key]) ? incomingColumns[key] : [];
       }
     }
@@ -3089,12 +3112,13 @@ export default function HomePage() {
         nextCursorByStage: {
           ...(base.page?.nextCursorByStage || {}),
           ...(stageKey
-            ? { [stageKey]: data.page?.nextCursorByStage?.[stageKey] ?? data.page?.nextCursor ?? null }
+            ? { [pageKey]: data.page?.nextCursorByStage?.[stageKey] ?? data.page?.nextCursor ?? null }
             : data.page?.nextCursorByStage || {}),
         },
       },
     };
-  }, []);
+  },
+  []);
 
   /** 定位已分析列表：按游标逐页加载，直到目标红人进入已加载 items（不依赖滚动触发翻页） */
   const loadAnalyzedUntilFound = React.useCallback(
@@ -3175,20 +3199,24 @@ export default function HomePage() {
 
   /** 定位执行阶段列表：按游标逐页加载，直到目标红人进入该阶段已加载列表 */
   const loadExecutionStageUntilFound = React.useCallback(
-    async (handle, stage, cid, signal) => {
+    async (handle, stage, cid, signal, subTab = null) => {
       executionLocateStageRef.current = stage;
       setExecutionLocateState({ status: "loading", handle });
       setActiveExecutionStage(stage);
       const columnKeys =
         stage === "pendingSample"
           ? ["pendingShippingAddress", "pendingSample"]
+          : stage === "pendingDraft" && subTab
+          ? [subTab === "script" ? "pendingDraftScript" : "pendingDraftVideo"]
           : [stage];
+      const pageKey = subTab && stage === "pendingDraft" ? `${stage}:${subTab}` : stage;
       const MAX_PAGES = 40;
       try {
         let cursor = null;
         for (let page = 1; page <= MAX_PAGES; page += 1) {
           if (signal?.aborted) return;
           const q = new URLSearchParams({ stage, limit: "40" });
+          if (subTab && stage === "pendingDraft") q.set("subTab", subTab);
           if (cursor) q.set("cursor", cursor);
           const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`, {
             signal,
@@ -3198,13 +3226,13 @@ export default function HomePage() {
           if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
           if (!res.ok || !data.success) throw new Error(data.error || "加载执行进度失败");
           setExecutionStatus((prev) => {
-            const next = mergeExecutionStatusPage(prev, data, stage, true);
+            const next = mergeExecutionStatusPage(prev, data, stage, true, subTab);
             const prevCache = executionCacheRef.current.get(cid);
             executionCacheRef.current.set(cid, {
               data: next,
               fetchedAtByStage: {
                 ...(prevCache?.fetchedAtByStage || {}),
-                [stage]: Date.now(),
+                [pageKey]: Date.now(),
               },
             });
             return next;
@@ -3270,6 +3298,7 @@ export default function HomePage() {
         if (execColumn) {
           const stage =
             execColumn === "pendingShippingAddress" ? "pendingSample" : execColumn;
+          let draftSubTab = null;
           if (execColumn === "pendingShippingAddress") {
             executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "confirmInfo" };
             setActivePendingSampleSubTab("confirmInfo");
@@ -3281,8 +3310,16 @@ export default function HomePage() {
             const subtab = row?.stage === "quote_rejected" ? "rejected" : "pending";
             executionLocateSubtabRef.current = { stage: "pendingPrice", subtab };
             setActivePendingPriceSubTab(subtab);
+          } else if (execColumn === "pendingDraft") {
+            const row = (d1.columns.pendingDraft || []).find((r) => r?.id === handle);
+            draftSubTab =
+              row?.stage === "video_review" || row?.stage === "pending_video"
+                ? "video"
+                : "script";
+            executionLocateSubtabRef.current = { stage: "pendingDraft", subtab: draftSubTab };
+            setActivePendingDraftSubTab(draftSubTab);
           }
-          await loadExecutionStageUntilFound(handle, stage, cid, controller.signal);
+          await loadExecutionStageUntilFound(handle, stage, cid, controller.signal, draftSubTab);
           return;
         }
 
@@ -3351,9 +3388,19 @@ export default function HomePage() {
       // 快路径：已加载数据中直接命中
       const cols = executionStatus?.columns || {};
       let targetStage = null;
-      for (const key of EXECUTION_STAGE_COLUMN_KEYS) {
+      const locateColumnKeys = [
+        ...EXECUTION_STAGE_COLUMN_KEYS,
+        "pendingDraftScript",
+        "pendingDraftVideo",
+      ];
+      for (const key of locateColumnKeys) {
         if ((cols[key] || []).some((row) => row?.id === handle)) {
-          targetStage = key === "pendingShippingAddress" ? "pendingSample" : key;
+          targetStage =
+            key === "pendingShippingAddress"
+              ? "pendingSample"
+              : key === "pendingDraftScript" || key === "pendingDraftVideo"
+              ? "pendingDraft"
+              : key;
           if (key === "pendingShippingAddress") {
             executionLocateSubtabRef.current = { stage: "pendingSample", subtab: "confirmInfo" };
             setActivePendingSampleSubTab("confirmInfo");
@@ -3365,6 +3412,20 @@ export default function HomePage() {
             const subtab = row?.stage === "quote_rejected" ? "rejected" : "pending";
             executionLocateSubtabRef.current = { stage: "pendingPrice", subtab };
             setActivePendingPriceSubTab(subtab);
+          } else if (key === "pendingDraft" || key === "pendingDraftScript" || key === "pendingDraftVideo") {
+            const row =
+              (key === "pendingDraft"
+                ? cols.pendingDraft
+                : key === "pendingDraftScript"
+                ? cols.pendingDraftScript
+                : cols.pendingDraftVideo || []
+              ).find((r) => r?.id === handle);
+            const subtab =
+              row?.stage === "video_review" || row?.stage === "pending_video"
+                ? "video"
+                : "script";
+            executionLocateSubtabRef.current = { stage: "pendingDraft", subtab };
+            setActivePendingDraftSubTab(subtab);
           }
           break;
         }
@@ -3486,11 +3547,21 @@ export default function HomePage() {
   }, [activeExecutionStage, activePendingPriceSubTab]);
 
   const loadExecutionStatusPage = useCallback(
-    async (stageKey, { append = false, campaignId = resolvedCampaignId, quiet = false } = {}) => {
+    async (
+      stageKey,
+      {
+        append = false,
+        campaignId = resolvedCampaignId,
+        quiet = false,
+        subTab = null,
+      } = {}
+    ) => {
       const cid = campaignId;
       if (!cid || stageKey === "analyzed") return;
       if (append && executionPagingInFlightRef.current) return;
-      const requestKey = `${cid}:${stageKey}`;
+      const pageKey =
+        subTab && stageKey === "pendingDraft" ? `${stageKey}:${subTab}` : stageKey;
+      const requestKey = `${cid}:${pageKey}`;
       const boundSessionId = executionCampaignSessionRef.current;
       if (!append) executionRequestRef.current.get(requestKey)?.controller.abort();
       const controller = new AbortController();
@@ -3499,7 +3570,7 @@ export default function HomePage() {
       const cachedStatus = executionCacheRef.current.get(cid)?.data;
       const currentStatus = executionStatus?.campaignId === cid ? executionStatus : cachedStatus;
       const cursor = append
-        ? currentStatus?.page?.nextCursorByStage?.[stageKey] || null
+        ? currentStatus?.page?.nextCursorByStage?.[pageKey] || null
         : null;
       if (append && !cursor) return;
       if (append) executionPagingInFlightRef.current = true;
@@ -3511,6 +3582,7 @@ export default function HomePage() {
           stage: stageKey,
           limit: "40",
         });
+        if (subTab && stageKey === "pendingDraft") q.set("subTab", subTab);
         if (cursor) q.set("cursor", cursor);
         const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`, {
           signal: controller.signal,
@@ -3526,13 +3598,13 @@ export default function HomePage() {
           String(data.campaignId) !== String(cid)
         ) return;
         setExecutionStatus((prev) => {
-          const next = mergeExecutionStatusPage(prev, data, stageKey, append);
+          const next = mergeExecutionStatusPage(prev, data, stageKey, append, subTab);
           const previousCache = executionCacheRef.current.get(cid);
           executionCacheRef.current.set(cid, {
             data: next,
             fetchedAtByStage: {
               ...(previousCache?.fetchedAtByStage || {}),
-              [stageKey]: Date.now(),
+              [pageKey]: Date.now(),
             },
           });
           return next;
@@ -3642,6 +3714,12 @@ export default function HomePage() {
       } else {
         setActivePendingSampleSubTab("confirmInfo");
       }
+    } else if (activeExecutionStage === "pendingDraft") {
+      if (locate?.stage === "pendingDraft") {
+        executionLocateSubtabRef.current = null;
+      } else {
+        setActivePendingDraftSubTab("script");
+      }
     }
   }, [activeExecutionStage]);
 
@@ -3655,8 +3733,18 @@ export default function HomePage() {
         ? (executionStatus?.columns?.pendingShippingAddress?.length ?? 0) +
           (executionStatus?.columns?.pendingSample?.length ?? 0)
         : executionStatus?.columns?.[activeExecutionStage]?.length ?? 0;
-    if (loaded === 0 && total > 0 && !executionLoading) {
+    if (activeExecutionStage !== "pendingDraft" && loaded === 0 && total > 0 && !executionLoading) {
       void loadExecutionStatusPage(activeExecutionStage);
+    }
+    if (activeExecutionStage === "pendingDraft" && !executionLoading) {
+      for (const subTab of ["script", "video"]) {
+        const colKey = subTab === "script" ? "pendingDraftScript" : "pendingDraftVideo";
+        const subTotal = executionStatus?.totalByStage?.[subTab === "script" ? "pendingDraftScript" : "pendingDraftVideo"] ?? 0;
+        const subLoaded = executionStatus?.columns?.[colKey]?.length ?? 0;
+        if (subLoaded === 0 && subTotal > 0) {
+          void loadExecutionStatusPage("pendingDraft", { subTab });
+        }
+      }
     }
   }, [
     activeExecutionStage,
@@ -3675,29 +3763,43 @@ export default function HomePage() {
     if (!cid || !isExecutionPhaseGlobal || executionLoading) return undefined;
     const cachedStatus = executionCacheRef.current.get(cid)?.data;
     const pendingStages = [
-      "pendingPrice",
-      "pendingSample",
-      "pendingDraft",
-      "published",
-      "contacted",
-    ].filter((stage) => {
+      { stage: "pendingPrice" },
+      { stage: "pendingSample" },
+      { stage: "pendingDraft", subTab: "script" },
+      { stage: "pendingDraft", subTab: "video" },
+      { stage: "published" },
+      { stage: "contacted" },
+    ].filter(({ stage, subTab }) => {
+      const colKey =
+        stage === "pendingDraft" && subTab
+          ? subTab === "script"
+            ? "pendingDraftScript"
+            : "pendingDraftVideo"
+          : stage;
+      const totalKey =
+        stage === "pendingDraft" && subTab
+          ? subTab === "script"
+            ? "pendingDraftScript"
+            : "pendingDraftVideo"
+          : stage;
+      const pageKey = subTab ? `${stage}:${subTab}` : stage;
       const loaded =
         stage === "pendingSample"
           ? (cachedStatus?.columns?.pendingShippingAddress?.length || 0) +
             (cachedStatus?.columns?.pendingSample?.length || 0)
-          : cachedStatus?.columns?.[stage]?.length || 0;
+          : cachedStatus?.columns?.[colKey]?.length || 0;
       return (
         stage !== activeExecutionStage &&
         loaded === 0 &&
-        (cachedStatus?.totalByStage?.[stage] || 0) > 0 &&
+        (cachedStatus?.totalByStage?.[totalKey] || 0) > 0 &&
         // 已在该 stage 的请求在途时不重复发起（并行预取下会同时有多个在途请求）
-        !executionRequestRef.current.has(`${cid}:${stage}`)
+        !executionRequestRef.current.has(`${cid}:${pageKey}`)
       );
     });
     if (pendingStages.length === 0) return undefined;
     const timer = window.setTimeout(() => {
-      for (const stage of pendingStages) {
-        void loadExecutionStatusPage(stage, { campaignId: cid, quiet: true });
+      for (const { stage, subTab } of pendingStages) {
+        void loadExecutionStatusPage(stage, { campaignId: cid, quiet: true, subTab });
       }
     }, 180);
     return () => window.clearTimeout(timer);
@@ -3931,8 +4033,22 @@ export default function HomePage() {
     if (activeExecutionStage === "analyzed") return;
     if (executionLocateStageRef.current === activeExecutionStage) return;
     if (!executionStatus?.campaignId) return;
-    const loaded = executionStatus?.columns?.[activeExecutionStage]?.length || 0;
-    const total = executionStatus?.totalByStage?.[activeExecutionStage] || 0;
+    const pendingDraftSubTab =
+      activeExecutionStage === "pendingDraft" ? activePendingDraftSubTab : null;
+    const colKey =
+      pendingDraftSubTab
+        ? pendingDraftSubTab === "script"
+          ? "pendingDraftScript"
+          : "pendingDraftVideo"
+        : activeExecutionStage;
+    const totalKey =
+      pendingDraftSubTab
+        ? pendingDraftSubTab === "script"
+          ? "pendingDraftScript"
+          : "pendingDraftVideo"
+        : activeExecutionStage;
+    const loaded = executionStatus?.columns?.[colKey]?.length || 0;
+    const total = executionStatus?.totalByStage?.[totalKey] || 0;
     if (loaded <= 0 || loaded >= total) return;
     const root = executionProgressListRef.current;
     const target = executionInfiniteSentinelRef.current;
@@ -3943,7 +4059,10 @@ export default function HomePage() {
         const hit = entries.some((en) => en.isIntersecting);
         if (!hit) return;
         if (executionPagingInFlightRef.current) return;
-        void loadExecutionStatusPage(activeExecutionStage, { append: true });
+        void loadExecutionStatusPage(activeExecutionStage, {
+          append: true,
+          subTab: pendingDraftSubTab,
+        });
       },
       { root, rootMargin: "160px 0px 0px 0px", threshold: 0 }
     );
@@ -3951,6 +4070,7 @@ export default function HomePage() {
     return () => io.disconnect();
   }, [
     activeExecutionStage,
+    activePendingDraftSubTab,
     executionStatus,
     loadExecutionStatusPage,
   ]);
@@ -4925,7 +5045,10 @@ export default function HomePage() {
               ? "pendingSample"
               : nextStage === "pending_shipping_address"
               ? "pendingShippingAddress"
-              : nextStage === "pending_draft" || nextStage === "draft_submitted"
+              : nextStage === "pending_script" ||
+                nextStage === "script_review" ||
+                nextStage === "video_review" ||
+                nextStage === "pending_video"
                 ? "pendingDraft"
                 : nextStage === "published"
                   ? "published"
@@ -8417,6 +8540,8 @@ export default function HomePage() {
                       "pendingShippingAddress",
                       "pendingSample",
                       "pendingDraft",
+                      "pendingDraftScript",
+                      "pendingDraftVideo",
                       "published",
                     ]) {
                       for (const row of executionStatus.columns[colKey] || []) {
@@ -8467,6 +8592,17 @@ export default function HomePage() {
                     currentStage.key === "pendingSample"
                       ? cols.pendingSample || []
                       : [];
+                  const pendingDraftScriptItems = cols.pendingDraftScript || [];
+                  const pendingDraftVideoItems = cols.pendingDraftVideo || [];
+                  const sortPendingDraftItems = (items, reviewStages) => {
+                    const arr = [...items];
+                    arr.sort((a, b) => {
+                      const ar = reviewStages.has(a?.stage) ? 0 : 1;
+                      const br = reviewStages.has(b?.stage) ? 0 : 1;
+                      return ar - br;
+                    });
+                    return arr;
+                  };
                   const activeExecutionItems =
                     currentStage.key === "pendingPrice"
                       ? activePendingPriceSubTab === "pending"
@@ -8476,6 +8612,10 @@ export default function HomePage() {
                         ? activePendingSampleSubTab === "confirmInfo"
                           ? pendingShippingAddressItems
                           : pendingSampleReadyItems
+                      : currentStage.key === "pendingDraft"
+                        ? activePendingDraftSubTab === "video"
+                          ? sortPendingDraftItems(pendingDraftVideoItems, new Set(["video_review"]))
+                          : sortPendingDraftItems(pendingDraftScriptItems, new Set(["script_review"]))
                       : currentItems;
                   const currentStageTotal =
                     currentStage.key === "analyzed"
@@ -8526,10 +8666,27 @@ export default function HomePage() {
                           : "…",
                     },
                   ];
+                  const pendingDraftSubTabs = [
+                    {
+                      key: "script",
+                      label: "待审核脚本",
+                      count:
+                        executionStatus?.totalByStage?.pendingDraftScript ??
+                        pendingDraftScriptItems.length,
+                    },
+                    {
+                      key: "video",
+                      label: "待审核视频",
+                      count:
+                        executionStatus?.totalByStage?.pendingDraftVideo ??
+                        pendingDraftVideoItems.length,
+                    },
+                  ];
                   const showExecutionSubTabs =
                     currentStage.key === "analyzed" ||
                     currentStage.key === "pendingPrice" ||
-                    currentStage.key === "pendingSample";
+                    currentStage.key === "pendingSample" ||
+                    currentStage.key === "pendingDraft";
 
                   return (
                     <div style={{
@@ -8711,6 +8868,8 @@ export default function HomePage() {
                                       ? analyzedSubTabs
                                       : currentStage.key === "pendingSample"
                                       ? pendingSampleSubTabs
+                                      : currentStage.key === "pendingDraft"
+                                      ? pendingDraftSubTabs
                                       : pendingPriceSubTabs
                                   }
                                   activeKey={
@@ -8718,6 +8877,8 @@ export default function HomePage() {
                                       ? activeAnalyzedSubTab
                                       : currentStage.key === "pendingSample"
                                       ? activePendingSampleSubTab
+                                      : currentStage.key === "pendingDraft"
+                                      ? activePendingDraftSubTab
                                       : activePendingPriceSubTab
                                   }
                                   onChange={
@@ -8725,6 +8886,8 @@ export default function HomePage() {
                                       ? setActiveAnalyzedSubTab
                                       : currentStage.key === "pendingSample"
                                       ? setActivePendingSampleSubTab
+                                      : currentStage.key === "pendingDraft"
+                                      ? setActivePendingDraftSubTab
                                       : setActivePendingPriceSubTab
                                   }
                                 />
@@ -8868,7 +9031,9 @@ export default function HomePage() {
                                   gap: 8,
                                 }}
                               >
-                                {currentItems.length === 0 ? (
+                                {(currentStage.key === "pendingDraft"
+                                  ? visibleExecutionItems.length === 0
+                                  : currentItems.length === 0) ? (
                                   <div
                                     style={{
                                       fontSize: 12,
@@ -9042,6 +9207,25 @@ export default function HomePage() {
                                       />
                                     ))
                                   )
+                                ) : currentStage.key === "pendingDraft" ? (
+                                  visibleExecutionItems.length === 0 ? (
+                                    <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                      暂无
+                                    </div>
+                                  ) : (
+                                    visibleExecutionItems.map((item) => (
+                                      <ExecutionProgressRow
+                                        key={item.id}
+                                        stageKey="pendingDraft"
+                                        item={item}
+                                        needSample={needSampleFlag}
+                                        execPatchingId={execPatchingId}
+                                        patchExecution={patchExecution}
+                                        executionUsernameSet={executionUsernameSet}
+                                        highlightUsername={highlightExecutionUsername}
+                                      />
+                                    ))
+                                  )
                                 ) : (
                                   visibleExecutionItems.map((item) => (
                                     <ExecutionProgressRow
@@ -9057,7 +9241,14 @@ export default function HomePage() {
                                   ))
                                 )}
                                 {currentStage.key !== "analyzed" &&
-                                currentItems.length < currentStageTotal ? (
+                                (currentStage.key === "pendingDraft"
+                                  ? visibleExecutionItems.length <
+                                    (executionStatus?.totalByStage?.[
+                                      activePendingDraftSubTab === "video"
+                                        ? "pendingDraftVideo"
+                                        : "pendingDraftScript"
+                                    ] ?? visibleExecutionItems.length)
+                                  : currentItems.length < currentStageTotal) ? (
                                   <div
                                     ref={executionInfiniteSentinelRef}
                                     style={{ height: 1, flexShrink: 0, width: "100%" }}

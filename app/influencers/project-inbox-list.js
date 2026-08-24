@@ -11,8 +11,10 @@ const EXECUTION_STAGE_ORDER = [
   "pending_creator_confirmation",
   "quote_rejected",
   "pending_sample",
-  "pending_draft",
-  "draft_submitted",
+  "pending_script",
+  "script_review",
+  "video_review",
+  "pending_video",
   "published",
 ];
 
@@ -22,8 +24,10 @@ const STAGE_LABEL = {
   pending_creator_confirmation: "待红人确认",
   quote_rejected: "报价被拒",
   pending_sample: "待寄样",
-  pending_draft: "待交稿",
-  draft_submitted: "已交稿",
+  pending_script: "待脚本",
+  script_review: "脚本待审",
+  video_review: "视频待审",
+  pending_video: "待视频",
   published: "已发布",
 };
 
