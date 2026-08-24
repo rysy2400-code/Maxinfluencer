@@ -58,6 +58,9 @@ const AUTO_REPLY_PATTERNS = [
   /away from (my|the) (desk|office)/i,
 ];
 
+/** LLM 决策失败最多重试次数（含首次），避免瞬时故障直接丢事件 */
+const MAX_EMAIL_EVENT_ATTEMPTS = 3;
+
 function isLikelyAutoReply(subject, bodyText) {
   const combined = `${subject || ""}\n${bodyText || ""}`.trim();
   if (!combined) return false;
@@ -270,6 +273,35 @@ async function markEventStatus(id, status, errorMessage = null) {
     WHERE id = ?
   `,
     [status, errorMessage, id]
+  );
+}
+
+/**
+ * LLM 决策失败处理：未达重试上限时重新入队（status=pending），
+ * 否则标记 failed。attempt_count 用于记录已尝试次数。
+ */
+async function requeueOrFailEmailEvent(event, errorMessage) {
+  const attempts = Number(event?.attempt_count || 0) + 1;
+  if (attempts < MAX_EMAIL_EVENT_ATTEMPTS) {
+    await queryTikTok(
+      `
+      UPDATE tiktok_influencer_email_events
+      SET status = 'pending',
+          attempt_count = ?,
+          error_message = ?,
+          updated_at = NOW()
+      WHERE id = ?
+    `,
+      [attempts, String(errorMessage || "").slice(0, 2000), event.id]
+    );
+    console.warn(
+      `[ProcessInfluencerEmailEvents] 事件 ${event.id} 第 ${attempts} 次处理失败，已重新入队等待重试: ${errorMessage}`
+    );
+    return;
+  }
+  await markEventStatus(event.id, "failed", errorMessage);
+  console.error(
+    `[ProcessInfluencerEmailEvents] 事件 ${event.id} 重试 ${MAX_EMAIL_EVENT_ATTEMPTS} 次仍失败，标记 failed: ${errorMessage}`
   );
 }
 
@@ -1173,9 +1205,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
       systemPrompt
     );
   } catch (err) {
-    await markEventStatus(
-      event.id,
-      "failed",
+    await requeueOrFailEmailEvent(
+      event,
       `LLM 调用失败: ${err?.message || String(err)}`
     );
     return;
@@ -1187,9 +1218,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
     const jsonText = match ? match[0] : raw;
     decision = JSON.parse(jsonText);
   } catch (err) {
-    await markEventStatus(
-      event.id,
-      "failed",
+    await requeueOrFailEmailEvent(
+      event,
       `LLM 返回解析失败: ${err?.message || String(err)}; raw=${raw.slice(
         0,
         500
@@ -1232,9 +1262,8 @@ async function main() {
         "[ProcessInfluencerEmailEvents] 处理事件时出现未捕获错误:",
         err
       );
-      await markEventStatus(
-        ev.id,
-        "failed",
+      await requeueOrFailEmailEvent(
+        ev,
         `未捕获错误: ${err?.message || String(err)}`
       );
     }

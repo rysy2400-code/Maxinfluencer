@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_email_events (
   -- 事件处理状态
   status ENUM('pending','processing','succeeded','failed','skipped') NOT NULL DEFAULT 'pending' COMMENT '事件处理状态',
   error_message TEXT NULL COMMENT '最近一次失败原因',
+  attempt_count INT NOT NULL DEFAULT 0 COMMENT '处理尝试次数（LLM 失败重试用）',
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -157,4 +158,3 @@ CREATE TABLE IF NOT EXISTS tiktok_influencer_outbound_attachments (
   UNIQUE KEY uk_dedupe_key (dedupe_key),
   INDEX idx_conversation_message_id (conversation_message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='红人发件附件表（outbound）';
-

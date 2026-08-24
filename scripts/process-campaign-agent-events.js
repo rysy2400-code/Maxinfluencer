@@ -48,6 +48,15 @@ function parseJsonOrObject(value) {
   }
 }
 
+/** 业务时间解析：合法 ISO 则规范化输出，否则用当前时间 */
+function validIsoOrNow(value) {
+  if (typeof value === "string" && value.trim()) {
+    const t = new Date(value).getTime();
+    if (Number.isFinite(t)) return new Date(t).toISOString();
+  }
+  return new Date().toISOString();
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
@@ -207,7 +216,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
             : typeof payload.note === "string" && payload.note.trim()
               ? payload.note.trim()
               : null,
-        at: new Date().toISOString(),
+        at: validIsoOrNow(payload.quoteAt),
         source: "advertiser_agent_event",
         sourceEventId: eventRow.id,
       },
