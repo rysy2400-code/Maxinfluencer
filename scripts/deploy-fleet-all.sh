@@ -44,13 +44,25 @@ deploy_worker() {
   local log="/tmp/deploy-worker-${host}.log"
   echo "[deploy-worker] $host sha=$TARGET_SHA"
   if ssh_cmd "${USER}@${host}" \
-    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"${git_sync_ps1}; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'deploy-worker.ps1'); powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Set-Location C:\\\\maxinfluencer; node --experimental-default-type=module scripts/create-campaign-keyword-signals-table.js\\\"; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'scripts\\ensure-import-report-loop.ps1')\"" \
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"${git_sync_ps1}; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$root 'deploy-worker.ps1'); powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Set-Location C:\\\\maxinfluencer; node --experimental-default-type=module scripts/create-campaign-keyword-signals-table.js\\\"\"" \
     >"$log" 2>&1; then
     echo "[deploy-worker] OK $host"
+  else
+    echo "[deploy-worker] FAIL $host" >&2
+    tail -20 "$log" >&2 || true
+    return 1
+  fi
+
+  # 控制面（WORKER_HOST）单独启动唯一的导入完成汇报循环（独立 SSH，避免嵌套引号问题）
+  echo "[deploy-worker] ensure-import-report-loop $host"
+  if ssh_cmd "${USER}@${host}" \
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\maxinfluencer\\scripts\\ensure-import-report-loop.ps1" \
+    >>"$log" 2>&1; then
+    echo "[deploy-worker] import-report-loop OK $host"
     return 0
   fi
-  echo "[deploy-worker] FAIL $host" >&2
-  tail -20 "$log" >&2 || true
+  echo "[deploy-worker] import-report-loop FAIL $host" >&2
+  tail -10 "$log" >&2 || true
   return 1
 }
 
