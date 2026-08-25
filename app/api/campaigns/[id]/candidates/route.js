@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { queryTikTok } from "../../../../../lib/db/mysql-tiktok.js";
-import { loadAnalyzedBreakdown } from "../../../../../lib/db/execution-counts-cache.js";
+import {
+  loadAnalyzedBreakdown,
+  loadExcludedCount,
+} from "../../../../../lib/db/execution-counts-cache.js";
 
 function parseJson(value) {
   if (value == null) return null;
@@ -46,6 +49,8 @@ function decodeAnalyzedCursor(raw) {
  *
  * 查询参数 analyzed=1：仅返回 match_analysis IS NOT NULL 的「已分析」行（执行面板 Tab），
  * 含 match_analysis、分页；与 candidate-analysis-feed 判定一致。
+ * 查询参数 excluded=1：仅返回 do_not_contact=1 的「禁止联系」行（执行面板 Tab），
+ * 按 id 倒序分页；countOnly=1 返回 excludedCount。
  *
  * - limit：默认 30，最大 50
  * - beforeId：上一页最后一条的键集游标（base64url，含 analyzedAt + id）
@@ -67,6 +72,8 @@ export async function GET(req, { params }) {
     const { searchParams } = new URL(req.url);
     const analyzedMode =
       searchParams.get("analyzed") === "1" || searchParams.get("analyzed") === "true";
+    const excludedMode =
+      searchParams.get("excluded") === "1" || searchParams.get("excluded") === "true";
     const countOnly =
       searchParams.get("countOnly") === "1" || searchParams.get("countOnly") === "true";
     const usernameRaw = searchParams.get("username");
@@ -93,6 +100,75 @@ export async function GET(req, { params }) {
       });
     }
 
+    if (excludedMode && countOnly) {
+      const excludedCount = await loadExcludedCount(campaignId);
+      return NextResponse.json({
+        success: true,
+        excludedCount,
+      });
+    }
+
+    if (excludedMode) {
+      const limitRaw = Number(searchParams.get("limit") || 30);
+      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 30, 1), 50);
+      const beforeIdRaw = Number(searchParams.get("beforeId"));
+      const beforeId =
+        Number.isInteger(beforeIdRaw) && beforeIdRaw > 0 ? beforeIdRaw : null;
+
+      const rows = await queryTikTok(
+        `
+        SELECT
+          id,
+          tiktok_username,
+          influencer_id AS platform_influencer_id,
+          influencer_snapshot,
+          source,
+          should_contact,
+          do_not_contact,
+          analysis_summary,
+          created_at
+        FROM tiktok_campaign_influencer_candidates
+        WHERE campaign_id = ? AND do_not_contact = 1
+          ${beforeId ? "AND id < ?" : ""}
+        ORDER BY id DESC
+        LIMIT ${limit}
+      `,
+        beforeId ? [campaignId, beforeId] : [campaignId]
+      );
+
+      const candidates = (rows || []).map((r) => {
+        const snapshot =
+          parseJson(r.influencer_snapshot) ||
+          (typeof r.influencer_snapshot === "object" && r.influencer_snapshot) ||
+          {};
+        return {
+          ...snapshot,
+          id: r.tiktok_username,
+          candidateRowId: r.id,
+          platformInfluencerId: r.platform_influencer_id || null,
+          shouldContact: !!r.should_contact,
+          analysisSummary: r.analysis_summary || "",
+          createdAt: r.created_at,
+          source: r.source || "web_search",
+          excluded: true,
+          matchAnalysis: null,
+        };
+      });
+
+      const last = (rows || []).length > 0 ? rows[rows.length - 1] : null;
+      const nextBeforeId = last ? String(last.id) : null;
+      const excludedCount =
+        beforeId == null ? await loadExcludedCount(campaignId) : null;
+
+      const payload = {
+        success: true,
+        data: candidates,
+        nextBeforeId,
+      };
+      if (excludedCount != null) payload.excludedCount = excludedCount;
+      return NextResponse.json(payload);
+    }
+
     if (!analyzedMode) {
       const rows = await queryTikTok(
         `
@@ -102,6 +178,7 @@ export async function GET(req, { params }) {
         influencer_snapshot,
         match_score,
         should_contact,
+        do_not_contact,
         analysis_summary,
         analyzed_at,
         picked_at,

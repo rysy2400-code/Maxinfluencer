@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
 
   match_score INT NULL COMMENT '匹配度评分（0-100 或自定义）',
   should_contact TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否建议联系（1=建议联系）',
+  do_not_contact TINYINT(1) NOT NULL DEFAULT 0 COMMENT '用户导入不联系名单标记（1=硬性不联系，不随分析结果翻回）',
   email VARCHAR(255) NULL COMMENT '候选红人的主联系邮箱（标准化）',
   has_email TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否有邮箱（1=有）',
   analysis_summary TEXT NULL COMMENT '匹配结论摘要（给前端展示）',
@@ -70,3 +71,19 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
   INDEX idx_campaign_score (campaign_id, match_score DESC),
   INDEX idx_campaign_analyzed_cursor (campaign_id, analyzed_at DESC, id DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Campaign 候选红人池 + 分析结果';
+
+
+-- 3) tiktok_influencer_contact_exclusion：全局红人触达排除名单（所有 campaign 生效）
+CREATE TABLE IF NOT EXISTS tiktok_influencer_contact_exclusion (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  platform VARCHAR(32) NOT NULL COMMENT '平台 slug：youtube/instagram/tiktok',
+  handle VARCHAR(128) NOT NULL COMMENT '小写 handle（无 @）',
+  profile_url VARCHAR(1024) NULL COMMENT '规范化主页链接',
+  display_name VARCHAR(256) NULL COMMENT '展示名（如有）',
+  source_file VARCHAR(255) NULL COMMENT '来源文件名',
+  source_batch_id VARCHAR(64) NULL COMMENT '来源导入批次',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_platform_handle (platform, handle),
+  INDEX idx_handle (handle)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='全局红人触达排除名单（用户导入，不联系）';

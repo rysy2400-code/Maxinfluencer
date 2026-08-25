@@ -1132,7 +1132,7 @@ const EXECUTION_STAGE_COLUMN_KEYS = [
 
 const EXECUTION_CACHE_TTL_MS = 20_000;
 
-/** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
+  /** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
 function partitionAnalyzedCandidates(items) {
   const recommendedItems = [];
   const notRecommendedItems = [];
@@ -1689,6 +1689,20 @@ function ExecutionProgressRow({
                 }}
               >
                 不建议联系
+              </span>
+            ) : null}
+            {item.excluded ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  backgroundColor: "#FEE2E2",
+                  color: "#B91C1C",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                禁止联系
               </span>
             ) : null}
             {rec === true ? (
@@ -2717,7 +2731,16 @@ export default function HomePage() {
   /** 与 partitionAnalyzedCandidates 规则一致的全库统计（来自 candidates 聚合接口） */
   const [analyzedDbRecommendedCount, setAnalyzedDbRecommendedCount] = useState(null);
   const [analyzedDbNotRecommendedCount, setAnalyzedDbNotRecommendedCount] = useState(null);
+  /** 「禁止联系」子 Tab：do_not_contact=1 的候选（id 倒序分页） */
+  const [analyzedExcludedItems, setAnalyzedExcludedItems] = useState([]);
+  const [analyzedExcludedNextId, setAnalyzedExcludedNextId] = useState(null);
+  const [analyzedExcludedTotal, setAnalyzedExcludedTotal] = useState(null);
+  const [analyzedExcludedLoading, setAnalyzedExcludedLoading] = useState(false);
+  const [analyzedExcludedLoadingMore, setAnalyzedExcludedLoadingMore] = useState(false);
+  const [analyzedExcludedError, setAnalyzedExcludedError] = useState(null);
+  const [analyzedExcludedReadyCampaignId, setAnalyzedExcludedReadyCampaignId] = useState(null);
   const analyzedPagingInFlightRef = useRef(false);
+  const analyzedExcludedPagingInFlightRef = useRef(false);
   const executionPagingInFlightRef = useRef(false);
   const executionCacheRef = useRef(new Map());
   const analyzedCacheRef = useRef(new Map());
@@ -2729,6 +2752,7 @@ export default function HomePage() {
   const executionProgressListRef = useRef(null);
   const executionInfiniteSentinelRef = useRef(null);
   const analyzedInfiniteSentinelRef = useRef(null);
+  const analyzedExcludedInfiniteSentinelRef = useRef(null);
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作笔记 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
@@ -3028,6 +3052,13 @@ export default function HomePage() {
       setAnalyzedDbNotRecommendedCount(null);
       setAnalyzedCandidatesLoading(false);
       setAnalyzedCandidatesLoadingMore(false);
+      setAnalyzedExcludedItems([]);
+      setAnalyzedExcludedNextId(null);
+      setAnalyzedExcludedTotal(null);
+      setAnalyzedExcludedLoading(false);
+      setAnalyzedExcludedLoadingMore(false);
+      setAnalyzedExcludedError(null);
+      setAnalyzedExcludedReadyCampaignId(null);
       setActiveExecutionStage("contacted");
     }
   }, [isExecutionPhaseGlobal]);
@@ -3832,6 +3863,13 @@ export default function HomePage() {
     setAnalyzedDbNotRecommendedCount(null);
     setAnalyzedCandidatesLoading(false);
     setAnalyzedCandidatesLoadingMore(false);
+    setAnalyzedExcludedItems([]);
+    setAnalyzedExcludedNextId(null);
+    setAnalyzedExcludedTotal(null);
+    setAnalyzedExcludedLoading(false);
+    setAnalyzedExcludedLoadingMore(false);
+    setAnalyzedExcludedError(null);
+    setAnalyzedExcludedReadyCampaignId(null);
   }, [resolvedCampaignId]);
 
   useEffect(() => {
@@ -3858,18 +3896,33 @@ export default function HomePage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/campaigns/${cid}/candidates?analyzed=1&countOnly=1`);
-        const data = await res.json().catch(() => ({}));
-        if (cancelled || !data.success) return;
-        if (data.totalMatchAnalysisCount != null) {
-          setAnalyzedCandidatesTotal(Number(data.totalMatchAnalysisCount));
+        const [analyzedRes, excludedRes] = await Promise.all([
+          fetch(`/api/campaigns/${cid}/candidates?analyzed=1&countOnly=1`),
+          fetch(`/api/campaigns/${cid}/candidates?excluded=1&countOnly=1`),
+        ]);
+        const [analyzedData, excludedData] = await Promise.all([
+          analyzedRes.json().catch(() => ({})),
+          excludedRes.json().catch(() => ({})),
+        ]);
+        if (cancelled) return;
+        if (analyzedData.success) {
+          if (analyzedData.totalMatchAnalysisCount != null) {
+            setAnalyzedCandidatesTotal(Number(analyzedData.totalMatchAnalysisCount));
+          }
+          if (
+            analyzedData.analyzedRecommendedDbCount != null &&
+            analyzedData.analyzedNotRecommendedDbCount != null
+          ) {
+            setAnalyzedDbRecommendedCount(
+              Number(analyzedData.analyzedRecommendedDbCount)
+            );
+            setAnalyzedDbNotRecommendedCount(
+              Number(analyzedData.analyzedNotRecommendedDbCount)
+            );
+          }
         }
-        if (
-          data.analyzedRecommendedDbCount != null &&
-          data.analyzedNotRecommendedDbCount != null
-        ) {
-          setAnalyzedDbRecommendedCount(Number(data.analyzedRecommendedDbCount));
-          setAnalyzedDbNotRecommendedCount(Number(data.analyzedNotRecommendedDbCount));
+        if (excludedData.success && excludedData.excludedCount != null) {
+          setAnalyzedExcludedTotal(Number(excludedData.excludedCount));
         }
       } catch {
         /* 静默失败，进入已分析 Tab 后由列表首屏再带 total */
@@ -4026,6 +4079,125 @@ export default function HomePage() {
     analyzedCandidatesNextBeforeId,
     loadMoreAnalyzedCandidates,
     analyzedCandidatesItems.length,
+  ]);
+
+  // 「禁止联系」子 Tab 首屏
+  useEffect(() => {
+    const cid = resolvedCampaignId;
+    if (!cid || !isExecutionPhaseGlobal || activeExecutionStage !== "analyzed") return;
+    if (activeAnalyzedSubTab !== "excluded") return;
+    if (analyzedExcludedReadyCampaignId === cid) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setAnalyzedExcludedLoading(true);
+        setAnalyzedExcludedError(null);
+        const res = await fetch(`/api/campaigns/${cid}/candidates?excluded=1&limit=30`, {
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (resolvedCampaignIdRef.current !== cid) return;
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.success) throw new Error(data.error || "获取禁止联系候选失败");
+        if (cancelled) return;
+        const items = Array.isArray(data.data) ? data.data : [];
+        const nextBeforeId =
+          data.nextBeforeId != null && data.nextBeforeId !== ""
+            ? String(data.nextBeforeId)
+            : null;
+        setAnalyzedExcludedItems(items);
+        setAnalyzedExcludedNextId(nextBeforeId);
+        if (data.excludedCount != null) {
+          setAnalyzedExcludedTotal(Number(data.excludedCount));
+        }
+        setAnalyzedExcludedReadyCampaignId(cid);
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[HomePage] 获取禁止联系候选失败:", e);
+          setAnalyzedExcludedError(e.message || "获取禁止联系候选失败");
+          setAnalyzedExcludedReadyCampaignId(cid);
+        }
+      } finally {
+        if (!cancelled) setAnalyzedExcludedLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resolvedCampaignId,
+    isExecutionPhaseGlobal,
+    activeExecutionStage,
+    activeAnalyzedSubTab,
+    analyzedExcludedReadyCampaignId,
+  ]);
+
+  const loadMoreAnalyzedExcluded = useCallback(async () => {
+    const cid = resolvedCampaignId;
+    if (!cid || !analyzedExcludedNextId) return;
+    if (analyzedExcludedPagingInFlightRef.current) return;
+    analyzedExcludedPagingInFlightRef.current = true;
+    try {
+      setAnalyzedExcludedLoadingMore(true);
+      setAnalyzedExcludedError(null);
+      const q = new URLSearchParams({
+        excluded: "1",
+        limit: "30",
+        beforeId: String(analyzedExcludedNextId),
+      });
+      const res = await fetch(`/api/campaigns/${cid}/candidates?${q.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.success) throw new Error(data.error || "加载更多失败");
+      if (resolvedCampaignIdRef.current !== cid) return;
+      const next = Array.isArray(data.data) ? data.data : [];
+      const nextBeforeId =
+        data.nextBeforeId != null && data.nextBeforeId !== ""
+          ? String(data.nextBeforeId)
+          : null;
+      setAnalyzedExcludedItems((prev) => {
+        const items = Array.from(
+          new Map([...prev, ...next].map((item) => [item?.id, item])).values()
+        );
+        return items;
+      });
+      setAnalyzedExcludedNextId(nextBeforeId);
+    } catch (e) {
+      console.error("[HomePage] 加载更多禁止联系候选失败:", e);
+      setAnalyzedExcludedError(e.message || "加载更多失败");
+    } finally {
+      setAnalyzedExcludedLoadingMore(false);
+      analyzedExcludedPagingInFlightRef.current = false;
+    }
+  }, [resolvedCampaignId, analyzedExcludedNextId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
+    if (activeExecutionStage !== "analyzed" || activeAnalyzedSubTab !== "excluded") return;
+    if (!analyzedExcludedNextId) return;
+    const root = executionProgressListRef.current;
+    const target = analyzedExcludedInfiniteSentinelRef.current;
+    if (!root || !target) return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.some((en) => en.isIntersecting);
+        if (!hit) return;
+        if (analyzedExcludedPagingInFlightRef.current) return;
+        void loadMoreAnalyzedExcluded();
+      },
+      { root, rootMargin: "160px 0px 0px 0px", threshold: 0 }
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [
+    activeExecutionStage,
+    activeAnalyzedSubTab,
+    analyzedExcludedNextId,
+    loadMoreAnalyzedExcluded,
+    analyzedExcludedItems.length,
   ]);
 
   useEffect(() => {
@@ -8665,6 +8837,15 @@ export default function HomePage() {
                           ? analyzedDbNotRecommendedCount
                           : "…",
                     },
+                    ...(analyzedExcludedTotal != null && analyzedExcludedTotal > 0
+                      ? [
+                          {
+                            key: "excluded",
+                            label: "禁止联系",
+                            count: analyzedExcludedTotal,
+                          },
+                        ]
+                      : []),
                   ];
                   const pendingDraftSubTabs = [
                     {
@@ -9101,7 +9282,8 @@ export default function HomePage() {
                                           />
                                         ))
                                       )
-                                    ) : notRecommendedItems.length === 0 ? (
+                                    ) : activeAnalyzedSubTab === "notRecommended" ? (
+                                      notRecommendedItems.length === 0 ? (
                                       <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
                                         暂无
                                       </div>
@@ -9122,15 +9304,67 @@ export default function HomePage() {
                                           highlightUsername={highlightExecutionUsername}
                                         />
                                       ))
+                                    )
+                                    ) : analyzedExcludedLoading ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        加载中…
+                                      </div>
+                                    ) : analyzedExcludedError ? (
+                                      <div style={{ fontSize: 12, color: "#DC2626", paddingLeft: 2 }}>
+                                        加载失败：{analyzedExcludedError}
+                                      </div>
+                                    ) : analyzedExcludedItems.length === 0 ? (
+                                      <div style={{ fontSize: 12, color: "#9CA3AF", paddingLeft: 2 }}>
+                                        暂无
+                                      </div>
+                                    ) : (
+                                      analyzedExcludedItems.map((item) => (
+                                        <ExecutionProgressRow
+                                          key={
+                                            item.candidateRowId != null
+                                              ? `excluded-${item.candidateRowId}`
+                                              : `excluded-${item.id}`
+                                          }
+                                          stageKey="analyzed"
+                                          item={item}
+                                          needSample={needSampleFlag}
+                                          execPatchingId={execPatchingId}
+                                          patchExecution={patchExecution}
+                                          precheckApproveQuote={precheckApproveQuote}
+                                          executionUsernameSet={executionUsernameSet}
+                                          highlightUsername={highlightExecutionUsername}
+                                        />
+                                      ))
                                     )}
-                                    {analyzedCandidatesNextBeforeId ? (
+                                    {activeAnalyzedSubTab === "excluded" ? (
+                                      analyzedExcludedNextId ? (
+                                        <div
+                                          ref={analyzedExcludedInfiniteSentinelRef}
+                                          style={{ height: 1, flexShrink: 0, width: "100%" }}
+                                          aria-hidden
+                                        />
+                                      ) : null
+                                    ) : analyzedCandidatesNextBeforeId ? (
                                       <div
                                         ref={analyzedInfiniteSentinelRef}
                                         style={{ height: 1, flexShrink: 0, width: "100%" }}
                                         aria-hidden
                                       />
                                     ) : null}
-                                    {analyzedCandidatesLoadingMore ? (
+                                    {activeAnalyzedSubTab === "excluded" ? (
+                                      analyzedExcludedLoadingMore ? (
+                                        <div
+                                          style={{
+                                            textAlign: "center",
+                                            fontSize: 11,
+                                            color: "#9CA3AF",
+                                            padding: "6px 0 4px",
+                                          }}
+                                        >
+                                          加载更多中…
+                                        </div>
+                                      ) : null
+                                    ) : analyzedCandidatesLoadingMore ? (
                                       <div
                                         style={{
                                           textAlign: "center",
