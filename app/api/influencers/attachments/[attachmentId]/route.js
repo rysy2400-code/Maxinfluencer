@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOutboundAttachmentById } from "../../../../../lib/db/influencer-outbound-attachments-dao.js";
 import { requireInboxAdmin } from "../../../../../lib/auth/influencer-inbox-auth-http.js";
-
-function buildContentDisposition(filename, download) {
-  const safe = (filename || "attachment").replace(/"/g, "");
-  const type = download ? "attachment" : "inline";
-  return `${type}; filename="${safe}"`;
-}
+import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
 
 export async function GET(req, { params }) {
   try {
@@ -55,4 +50,3 @@ export async function GET(req, { params }) {
     );
   }
 }
-

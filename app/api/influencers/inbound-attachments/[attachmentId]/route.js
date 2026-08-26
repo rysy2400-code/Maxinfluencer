@@ -3,12 +3,7 @@ import { getInboundAttachmentById } from "../../../../../lib/db/influencer-inbou
 import { requireInboxAdmin } from "../../../../../lib/auth/influencer-inbox-auth-http.js";
 import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertiser-auth-http.js";
 import { canAccessInboundAttachment } from "../../../../../lib/auth/inbound-attachment-access.js";
-
-function buildContentDisposition(filename, download) {
-  const safe = (filename || "attachment").replace(/"/g, "");
-  const type = download ? "attachment" : "inline";
-  return `${type}; filename="${safe}"`;
-}
+import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
 
 export async function GET(req, { params }) {
   try {

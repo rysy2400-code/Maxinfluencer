@@ -7,6 +7,7 @@ import {
   saveSessionImportFile,
   storageKeyBelongsToSession,
 } from "../../../../../lib/influencer/session-import-storage.js";
+import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
 
 export const dynamic = "force-dynamic";
 
@@ -43,11 +44,6 @@ function contentTypeForFileName(fileName) {
   if (lower.endsWith(".csv")) return "text/csv; charset=utf-8";
   if (lower.endsWith(".pdf")) return "application/pdf";
   return "application/octet-stream";
-}
-
-function buildContentDisposition(fileName) {
-  const safe = (fileName || "attachment").replace(/"/g, "");
-  return `attachment; filename="${safe}"`;
 }
 
 function sanitizeDownloadFileName(name, fallback) {
@@ -99,7 +95,7 @@ export async function GET(req, { params }) {
       headers: {
         "Content-Type": contentTypeForFileName(fileName),
         "Content-Length": String(buffer.length),
-        "Content-Disposition": buildContentDisposition(fileName),
+        "Content-Disposition": buildContentDisposition(fileName, true),
         "Cache-Control": "private, max-age=60",
       },
     });
