@@ -56,14 +56,13 @@ function resolveWorkerPlatforms() {
 }
 
 /**
- * 导入任务认领平台：worker 平台 + 遗留 mixed 兜底（仅 tiktok 角色认领 mixed）
+ * 导入任务认领平台：严格按 worker 平台消费，禁止跨平台认领。
+ * （平台拆分上线后不再产生 mixed 任务，tiktok 机器不再兼容遗留 mixed。）
  * @param {string[]} [platforms]
  */
 function importClaimPlatforms(platforms) {
   const base = Array.isArray(platforms) ? platforms : resolveWorkerPlatforms();
-  const set = new Set(base);
-  if (set.has("tiktok")) set.add("mixed");
-  return [...set];
+  return [...new Set(base)];
 }
 
 /**
