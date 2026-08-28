@@ -108,6 +108,7 @@ async function main() {
       importBatchId: platformSubtaskBatchId(importBatchId, slug),
       batchGroupId: importBatchId,
       platform: slug,
+      contactMode: source.contact_mode || "recommended_only",
       priority: 200,
       payload,
       totalRows: bucketRows.length,
