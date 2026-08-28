@@ -98,6 +98,7 @@ async function main() {
       importBatchId,
       batchType: "split_platform",
       platform: slug,
+      contactMode: source.contact_mode || "recommended_only",
       rows: bucketRows,
       sources: [`retry from task #${args.sourceTask}`],
       retryUsernames: bucketRows.map((r) => normalizeHandle(r.username)),

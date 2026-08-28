@@ -821,7 +821,7 @@ async function claimOnePendingImportTask(platforms) {
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, import_batch_id,
-           batch_group_id, skipped_duplicate_count, parse_error_count
+           batch_group_id, contact_mode, skipped_duplicate_count, parse_error_count
     FROM tiktok_influencer_import_task
     WHERE status = 'pending' AND ${sql}
     ORDER BY priority DESC, id ASC
