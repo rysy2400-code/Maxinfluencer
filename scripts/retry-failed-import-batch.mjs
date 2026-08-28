@@ -226,8 +226,9 @@ async function main() {
     if (!r.ok) allOk = false;
   }
 
-  const ok =
-    Number(last.progress_enriched_count) > 0 || Number(last.progress_analyzed_count) > 0;
+  const ok = lastRows.some(
+    (t) => Number(t.progress_enriched_count) > 0 || Number(t.progress_analyzed_count) > 0
+  );
   if (!ok) {
     console.error("[retry-import] 任务 succeeded 但 enriched/analyzed 仍为 0，可能再次被跳过");
     process.exit(4);
