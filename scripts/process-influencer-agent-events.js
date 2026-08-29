@@ -35,6 +35,11 @@ import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
 import { generateAdvertiserExecutionFollowupEmailBody } from "../lib/agents/advertiser-execution-followup-email.js";
 import {
+  SHIPPING_MENTION_ACTIONS,
+  containsForbiddenAddressConfirm,
+  containsForbiddenShippingConfirm,
+} from "../lib/execution/followup-shipping-guard.js";
+import {
   buildTraceIdFromInboundMessageId,
   buildTraceIdFromSourceKey,
 } from "../lib/utils/timeline-ids.js";
@@ -48,6 +53,46 @@ function parseJsonOrObject(value) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 生成跟进邮件正文；发送前兜底：
+ * - 非寄样动作（approveDraft 等）：误含“确认地址/样品即将寄出”内容 → 追加禁令重写一次；
+ * - confirmShip：只通知已寄出，误含“确认地址”内容 → 追加禁令重写一次；
+ * 仍违规则抛错拦截发送。
+ */
+async function generateAdvertiserFollowupBody({ action, ...generatorArgs }) {
+  let bodyText = await generateAdvertiserExecutionFollowupEmailBody(generatorArgs);
+  const shippingMentionAllowed = SHIPPING_MENTION_ACTIONS.has(action);
+  let violation = false;
+  let extraInstruction = "";
+  if (!shippingMentionAllowed) {
+    violation = containsForbiddenShippingConfirm(bodyText);
+    extraInstruction =
+      "上一版误加入了寄样/地址确认内容。本次动作与寄样无关（样品可能已寄出），请重写并完全删除任何关于寄样、发货、收件地址或地址确认的内容，不要出现 shipping address / confirm address / shipment / about to go out 等表述。";
+  } else if (action === "confirmShip") {
+    violation = containsForbiddenAddressConfirm(bodyText);
+    extraInstruction =
+      "上一版误让红人确认寄样地址。本次动作只通知样品已寄出，请重写并删除任何收件地址展示或地址确认内容，不要出现 shipping address / confirm address / 收件地址等表述。";
+  }
+  if (violation) {
+    console.warn(
+      `[ProcessInfluencerAgentEvents] ${action} 的跟进邮件误含寄样/地址确认内容，追加禁令重新生成…`
+    );
+    bodyText = await generateAdvertiserExecutionFollowupEmailBody({
+      ...generatorArgs,
+      extraInstruction,
+    });
+    const stillViolation = shippingMentionAllowed
+      ? containsForbiddenAddressConfirm(bodyText)
+      : containsForbiddenShippingConfirm(bodyText);
+    if (stillViolation) {
+      throw new Error(
+        `跟进邮件（action=${action}）重写后仍包含禁止的寄样地址确认内容，已拦截发送以防误发。`
+      );
+    }
+  }
+  return bodyText;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -746,11 +791,16 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     platformInfluencerId,
     20
   );
+  const askShippingConfirmation = payload.askShippingConfirmation === true;
+  const sampleSentAt = payload.sampleSentAt || null;
 
-  const bodyText = await generateAdvertiserExecutionFollowupEmailBody({
+  const bodyText = await generateAdvertiserFollowupBody({
     action,
     needSample: payload.needSample === true,
     hasShippingInfo: payload.hasShippingInfo === true,
+    askShippingConfirmation,
+    sampleSentAt,
+    shippingConfirmedAt: payload.shippingConfirmedAt || null,
     campaignId,
     flatFee: payload.flatFee,
     currency: payload.currency || "USD",
@@ -760,7 +810,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     counterReason: payload.counterReason || null,
     contentBrief: payload.contentBrief || null,
     campaignContext,
-    shippingInfo: payload.shippingInfo || null,
+    shippingInfo: askShippingConfirmation ? payload.shippingInfo || null : null,
     conversationHistory,
     influencer,
   });
@@ -806,6 +856,8 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
         action,
         needSample: payload.needSample === true,
         hasShippingInfo: payload.hasShippingInfo === true,
+        askShippingConfirmation,
+        sampleSentAt,
         shippingInfo: payload.shippingInfo || null,
       },
     },
@@ -842,6 +894,8 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
           action,
           needSample: payload.needSample === true,
           hasShippingInfo: payload.hasShippingInfo === true,
+          askShippingConfirmation,
+          sampleSentAt,
           shippingInfo: payload.shippingInfo || null,
         },
         email: {
