@@ -1,8 +1,8 @@
 /**
  * 一次性导入「仅排重/不联系」名单：
  * 1. 解析 xlsx（支持达人链接表头、多语言 handle、>10k 行）；
- * 2. 写入全局排除表 tiktok_influencer_contact_exclusion（所有 campaign 生效）；
- * 3. 本 campaign 候选表仅插入新行（do_not_contact=1），已有行不做修改。
+ * 2. 本 campaign 候选表仅插入新行（do_not_contact=1），已有行不做修改；
+ *    不写入全局排除表（Campaign 专属名单，只影响本 campaign）。
  *
  * 用法：
  *   node scripts/import-contact-exclusion-xlsx.mjs [xlsx路径] [campaignId] [来源文件名]

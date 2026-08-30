@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_influencer_candidates (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Campaign 候选红人池 + 分析结果';
 
 
--- 3) tiktok_influencer_contact_exclusion：全局红人触达排除名单（所有 campaign 生效）
+-- 3) tiktok_influencer_contact_exclusion：历史全局红人触达排除名单；
+--    新的「仅排重/不联系」导入不再写入该表，仅标记本 campaign 候选表
 CREATE TABLE IF NOT EXISTS tiktok_influencer_contact_exclusion (
   id INT AUTO_INCREMENT PRIMARY KEY,
   platform VARCHAR(32) NOT NULL COMMENT '平台 slug：youtube/instagram/tiktok',
