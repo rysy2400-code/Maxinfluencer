@@ -233,6 +233,7 @@ export default function InfluencersLayout({ children }) {
     accountNextCursor: null,
     hasMoreAccounts: false,
   });
+  const [campaignInfluencers, setCampaignInfluencers] = useState({});
   const [listLoadingProject, setListLoadingProject] = useState(false);
   const [listErrorProject, setListErrorProject] = useState(null);
   const [expandTouched, setExpandTouched] = useState({});
@@ -316,6 +317,7 @@ export default function InfluencersLayout({ children }) {
         const data = await res.json();
         if (reqId !== projectListReqId.current) return;
         if (!data?.success) throw new Error(data?.error || "加载失败");
+        if (reset) setCampaignInfluencers({});
         const accounts = data.accounts || [];
         const orphans = data.orphans || [];
         setProjectData((prev) => {
@@ -353,6 +355,39 @@ export default function InfluencersLayout({ children }) {
     [debouncedQ]
   );
 
+  const loadCampaignInfluencers = useCallback(
+    async (campaignId, advertiserUserId) => {
+      setCampaignInfluencers((prev) => {
+        const cur = prev[campaignId];
+        if (cur && (cur.loading || (cur.items && cur.q === debouncedQ))) return prev;
+        return { ...prev, [campaignId]: { loading: true, q: debouncedQ } };
+      });
+      try {
+        const qs = new URLSearchParams();
+        qs.set("advertiserUserId", advertiserUserId);
+        qs.set("campaignId", campaignId);
+        if (debouncedQ) qs.set("q", debouncedQ);
+        const res = await fetch(
+          `/api/influencers/conversations/by-project/campaign?` + qs.toString(),
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        if (!data?.success) throw new Error(data?.error || "加载失败");
+        setCampaignInfluencers((prev) => ({
+          ...prev,
+          [campaignId]: { items: data.influencers || [], loading: false, q: debouncedQ },
+        }));
+      } catch (e) {
+        console.error("[Campaign Influencers] 加载失败:", e?.message || e);
+        setCampaignInfluencers((prev) => ({
+          ...prev,
+          [campaignId]: { items: [], loading: false, q: debouncedQ, error: e?.message || String(e) },
+        }));
+      }
+    },
+    [debouncedQ]
+  );
+
   useEffect(() => {
     if (listView !== "time") return;
     loadConversations({ cursor: null, reset: true });
@@ -367,6 +402,38 @@ export default function InfluencersLayout({ children }) {
     if (listView !== "project") return;
     loadProjectTree({ accountCursor: null, reset: true });
   }, [debouncedQ, listView, loadProjectTree]);
+
+  /** 展开状态默认打开（或当前红人所在）的 campaign，自动懒加载其红人列表 */
+  useEffect(() => {
+    if (listView !== "project") return;
+    for (const acc of projectData.accounts || []) {
+      for (const st of ["running", "paused", "completed"]) {
+        for (const camp of acc[st]?.campaigns || []) {
+          const k = `camp:${camp.campaignId}`;
+          const onPath =
+            selectionPath &&
+            selectionPath.type === "campaign" &&
+            selectionPath.campaignId === camp.campaignId;
+          const open =
+            Object.prototype.hasOwnProperty.call(expandTouched, k)
+              ? expandTouched[k] === true
+              : !!onPath;
+          if (!open) continue;
+          const cur = campaignInfluencers[camp.campaignId];
+          if (cur && (cur.loading || (cur.items && cur.q === debouncedQ))) continue;
+          loadCampaignInfluencers(camp.campaignId, acc.advertiserUserId);
+        }
+      }
+    }
+  }, [
+    listView,
+    projectData.accounts,
+    selectionPath,
+    expandTouched,
+    campaignInfluencers,
+    loadCampaignInfluencers,
+    debouncedQ,
+  ]);
 
   useLayoutEffect(() => {
     if (listView !== "time") return;
@@ -386,7 +453,14 @@ export default function InfluencersLayout({ children }) {
     if (!root) return;
     const anchor = root.querySelector('[data-send-scroll="1"]');
     anchor?.scrollIntoView({ block: "start", behavior: "auto" });
-  }, [listView, listLoadingProject, projectData.accounts, projectData.orphans, influencerId]);
+  }, [
+    listView,
+    listLoadingProject,
+    projectData.accounts,
+    projectData.orphans,
+    campaignInfluencers,
+    influencerId,
+  ]);
 
   const refreshConversations = useCallback(
     async (opts = {}) => {
@@ -437,8 +511,14 @@ export default function InfluencersLayout({ children }) {
   const inboxValue = useMemo(() => ({ refreshConversations }), [refreshConversations]);
 
   const selectionPath = useMemo(
-    () => findSelectionPath(projectData.accounts, projectData.orphans, influencerId),
-    [projectData.accounts, projectData.orphans, influencerId]
+    () =>
+      findSelectionPath(
+        projectData.accounts,
+        projectData.orphans,
+        influencerId,
+        campaignInfluencers
+      ),
+    [projectData.accounts, projectData.orphans, influencerId, campaignInfluencers]
   );
 
   const accountPref = useMemo(() => {
@@ -487,10 +567,13 @@ export default function InfluencersLayout({ children }) {
   );
 
   const onToggleCampaign = useCallback(
-    (campaignId, nextOpen) => {
+    (campaignId, nextOpen, advertiserUserId) => {
       patchExpandTouched(`camp:${campaignId}`, nextOpen);
+      if (nextOpen && advertiserUserId != null) {
+        loadCampaignInfluencers(campaignId, advertiserUserId);
+      }
     },
-    [patchExpandTouched]
+    [patchExpandTouched, loadCampaignInfluencers]
   );
 
   const shellStyle = {
@@ -954,6 +1037,7 @@ export default function InfluencersLayout({ children }) {
                   accounts={projectData.accounts}
                   orphans={projectData.orphans}
                   influencerId={influencerId}
+                  campaignInfluencers={campaignInfluencers}
                   listScrollRef={listScrollRef}
                   accountPref={accountPref}
                   campPref={campPref}

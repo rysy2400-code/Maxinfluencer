@@ -42,13 +42,14 @@ function stageLabel(stage) {
   return STAGE_LABEL[stage] || stage || "—";
 }
 
-export function findSelectionPath(accounts, orphans, influencerId) {
+export function findSelectionPath(accounts, orphans, influencerId, campaignInfluencers) {
   if (!influencerId) return null;
   for (const acc of accounts || []) {
     const aid = acc.advertiserUserId;
     for (const st of ["running", "paused", "completed"]) {
       for (const camp of acc[st]?.campaigns || []) {
-        if ((camp.influencers || []).some((x) => x.influencerId === influencerId)) {
+        const infs = campaignInfluencers?.[camp.campaignId]?.items || [];
+        if (infs.some((x) => x.influencerId === influencerId)) {
           return { type: "campaign", advertiserUserId: aid, status: st, campaignId: camp.campaignId };
         }
       }
@@ -81,6 +82,7 @@ export function ProjectInboxList({
   accounts,
   orphans,
   influencerId,
+  campaignInfluencers,
   listScrollRef,
   accountPref,
   campPref,
@@ -88,8 +90,8 @@ export function ProjectInboxList({
   onToggleCampaign,
 }) {
   const path = useMemo(
-    () => findSelectionPath(accounts, orphans, influencerId),
-    [accounts, orphans, influencerId]
+    () => findSelectionPath(accounts, orphans, influencerId, campaignInfluencers),
+    [accounts, orphans, influencerId, campaignInfluencers]
   );
 
   const renderInfluencerRow = (inf) => {
@@ -161,6 +163,8 @@ export function ProjectInboxList({
       path.campaignId === camp.campaignId;
     const open = isCampaignOpen(camp.campaignId, onPath, campPref);
     const statusTag = STATUS_LABEL[camp.campaignStatus] || camp.campaignStatus;
+    const loaded = campaignInfluencers?.[camp.campaignId] || null;
+    const campInfluencers = loaded?.items || [];
 
     const assistRows = [];
     const byStage = new Map();
@@ -168,7 +172,7 @@ export function ProjectInboxList({
       byStage.set(s, []);
     }
     const other = [];
-    for (const inf of camp.influencers || []) {
+    for (const inf of campInfluencers) {
       if (inf.handoverMode === "assist") {
         assistRows.push(inf);
         continue;
@@ -188,7 +192,7 @@ export function ProjectInboxList({
       >
         <button
           type="button"
-          onClick={() => onToggleCampaign(camp.campaignId, !open)}
+          onClick={() => onToggleCampaign(camp.campaignId, !open, acc.advertiserUserId)}
           style={{
             width: "100%",
             textAlign: "left",
@@ -206,10 +210,17 @@ export function ProjectInboxList({
         >
           <span>{open ? "▼" : "▶"}</span>
           <span style={{ flex: 1, minWidth: 0 }}>{camp.brandProduct}</span>
+          {Number(camp.influencerCount) > 0 ? (
+            <span style={{ fontSize: 11, color: "#777" }}>{camp.influencerCount}</span>
+          ) : null}
           <Pill tone="blue">{statusTag}</Pill>
         </button>
         {open ? (
           <div style={{ paddingBottom: 4 }}>
+            {loaded && loaded.loading ? (
+              <div style={{ padding: "8px 14px", fontSize: 12, color: "#888" }}>加载中…</div>
+            ) : (
+            <>
             {assistRows.length ? (
               <div>
                 <div
@@ -276,9 +287,11 @@ export function ProjectInboxList({
                 {other.map((inf) => renderInfluencerRow(inf))}
               </div>
             ) : null}
-            {!(camp.influencers || []).length ? (
+            {!campInfluencers.length ? (
               <div style={{ padding: "8px 14px", fontSize: 12, color: "#888" }}>（暂无红人）</div>
             ) : null}
+            </>
+            )}
           </div>
         ) : null}
       </div>
