@@ -403,38 +403,6 @@ export default function InfluencersLayout({ children }) {
     loadProjectTree({ accountCursor: null, reset: true });
   }, [debouncedQ, listView, loadProjectTree]);
 
-  /** 展开状态默认打开（或当前红人所在）的 campaign，自动懒加载其红人列表 */
-  useEffect(() => {
-    if (listView !== "project") return;
-    for (const acc of projectData.accounts || []) {
-      for (const st of ["running", "paused", "completed"]) {
-        for (const camp of acc[st]?.campaigns || []) {
-          const k = `camp:${camp.campaignId}`;
-          const onPath =
-            selectionPath &&
-            selectionPath.type === "campaign" &&
-            selectionPath.campaignId === camp.campaignId;
-          const open =
-            Object.prototype.hasOwnProperty.call(expandTouched, k)
-              ? expandTouched[k] === true
-              : !!onPath;
-          if (!open) continue;
-          const cur = campaignInfluencers[camp.campaignId];
-          if (cur && (cur.loading || (cur.items && cur.q === debouncedQ))) continue;
-          loadCampaignInfluencers(camp.campaignId, acc.advertiserUserId);
-        }
-      }
-    }
-  }, [
-    listView,
-    projectData.accounts,
-    selectionPath,
-    expandTouched,
-    campaignInfluencers,
-    loadCampaignInfluencers,
-    debouncedQ,
-  ]);
-
   useLayoutEffect(() => {
     if (listView !== "time") return;
     if (listLoading) return;
@@ -520,6 +488,38 @@ export default function InfluencersLayout({ children }) {
       ),
     [projectData.accounts, projectData.orphans, influencerId, campaignInfluencers]
   );
+
+  /** 展开状态默认打开（或当前红人所在）的 campaign，自动懒加载其红人列表 */
+  useEffect(() => {
+    if (listView !== "project") return;
+    for (const acc of projectData.accounts || []) {
+      for (const st of ["running", "paused", "completed"]) {
+        for (const camp of acc[st]?.campaigns || []) {
+          const k = `camp:${camp.campaignId}`;
+          const onPath =
+            selectionPath &&
+            selectionPath.type === "campaign" &&
+            selectionPath.campaignId === camp.campaignId;
+          const open =
+            Object.prototype.hasOwnProperty.call(expandTouched, k)
+              ? expandTouched[k] === true
+              : !!onPath;
+          if (!open) continue;
+          const cur = campaignInfluencers[camp.campaignId];
+          if (cur && (cur.loading || (cur.items && cur.q === debouncedQ))) continue;
+          loadCampaignInfluencers(camp.campaignId, acc.advertiserUserId);
+        }
+      }
+    }
+  }, [
+    listView,
+    projectData.accounts,
+    selectionPath,
+    expandTouched,
+    campaignInfluencers,
+    loadCampaignInfluencers,
+    debouncedQ,
+  ]);
 
   const accountPref = useMemo(() => {
     const out = {};
