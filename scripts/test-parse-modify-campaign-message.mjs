@@ -43,5 +43,15 @@ const p6 = parsePricingChangesFromUserMessage("报价策略：ecpm 5，上限 2,
 assert(p6?.pricingEcpmUsd === 5, "ecpm 5");
 assert(p6?.pricingMaxFlatFeeUsd === 2500, "上限 2,500");
 
+const p7 = parseModifyCampaignChangesFromUserMessage(
+  "改为纯产品置换：无固定费用、佣金 0%"
+);
+assert(p7?.pricingMode === "commission_only", "纯产品置换 → commission_only");
+assert(p7?.commission === 0, "纯产品置换佣金 0%");
+
+const p8 = parseModifyCampaignChangesFromUserMessage("改成纯产品置换合作");
+assert(p8?.pricingMode === "commission_only", "只说纯产品置换 → commission_only");
+assert(p8?.commission === 0, "只说纯产品置换 → 佣金默认 0%");
+
 console.log(`\n${ok} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

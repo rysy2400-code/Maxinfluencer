@@ -9,6 +9,7 @@ import {
   PRICING_MODE_ECPM_WITH_CAP,
   computeQuotedFlatFeeUsd,
   getDefaultInfluencerPricing,
+  formatInfluencerPricingLabel,
   isCampaignInfoComplete,
   mergeInfluencerPricingExtracted,
   normalizeInfluencerPricing,
@@ -55,12 +56,19 @@ assert(
   "commission_only + 15% 有效"
 );
 assert(
-  !validateInfluencerPricing({ mode: PRICING_MODE_COMMISSION_ONLY }, 0).isValid,
-  "commission_only + 0% 无效"
+  validateInfluencerPricing({ mode: PRICING_MODE_COMMISSION_ONLY }, 0).isValid,
+  "commission_only + 0% 有效（纯产品置换）"
 );
 assert(
   validateInfluencerPricing(def, 0).isValid,
   "ecpm_with_cap + 0% 佣金有效"
+);
+assert(
+  formatInfluencerPricingLabel(
+    { mode: PRICING_MODE_COMMISSION_ONLY },
+    0
+  ).includes("纯产品置换"),
+  "0% commission_only 显示为纯产品置换"
 );
 
 console.log("\nisCampaignInfoComplete");
@@ -75,7 +83,7 @@ assert(
   "完整 campaign（含默认 pricing）"
 );
 assert(
-  !isCampaignInfoComplete({
+  isCampaignInfoComplete({
     platform: "TikTok",
     region: "美国",
     publishTimeRange: "2024-03",
@@ -83,7 +91,7 @@ assert(
     commission: 0,
     influencerPricing: { mode: PRICING_MODE_COMMISSION_ONLY },
   }),
-  "0% + commission_only 不完整"
+  "0% + commission_only 完整（纯产品置换）"
 );
 
 console.log("\nmergeInfluencerPricingExtracted");
