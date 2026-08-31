@@ -3,6 +3,7 @@
  */
 
 import dotenv from "dotenv";
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
@@ -16,8 +17,12 @@ import {
 } from "../lib/influencer/resolve-campaign-platforms.js";
 import { runInCdpLoop } from "../lib/cdp/cdp-loop-context.js";
 import { isCdp9222Parallel, resolveCdp9222Mode } from "../lib/cdp/connect-cdp-9222.js";
-import { fetchSearchTaskWorkNoteMetrics } from "../lib/db/campaign-candidates-dao.js";
+import {
+  fetchSearchTaskWorkNoteMetrics,
+  setSearchTaskFinalMetrics,
+} from "../lib/db/campaign-candidates-dao.js";
 import { consumeKeywordSignalForSearch } from "../lib/db/campaign-keyword-signals-dao.js";
+import { notifyImportBatchOrSession } from "../lib/influencer/import-batch-coordinator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -25,6 +30,129 @@ const projectRoot = path.resolve(__dirname, "..");
 // 加载环境变量（.env 再 .env.local）
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
+// Affiliate GMV 依赖 9222 登录 partner 后台，当前未登录必然失败；
+// 在进程启动即关闭，覆盖搜索 worker 与导入 worker（import 路径不经过 applyTiktokLiteProductionDefaults）。
+setDefaultEnv("AFFILIATE_GMV_ENRICH", "0");
+
+function setDefaultEnv(key, value) {
+  if (process.env[key] == null || String(process.env[key]).trim() === "") {
+    process.env[key] = String(value);
+  }
+}
+
+function applyTiktokLiteProductionDefaults() {
+  setDefaultEnv("SCRAPER_MODE", "lite");
+  setDefaultEnv("CDP_ENDPOINT", "http://127.0.0.1:9222");
+  setDefaultEnv("CDP_ENDPOINT_ENRICH", "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_ENRICH_CDP", process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_COUNTRY_CDP", process.env.CDP_ENDPOINT_ENRICH || "http://127.0.0.1:9223");
+  setDefaultEnv("TT_LITE_STRICT_API_ONLY_NO_GOTO", "1");
+  setDefaultEnv("TT_LITE_TAB_POOL_SIZE", "1");
+  setDefaultEnv("TT_LITE_COUNTRY_CONCURRENCY", "10");
+  // TikTok /api/post/item_list 会在 1tab/10 连续请求后短时返回 200 空列表；
+  // 生产默认先保守串行，后续用压测数据再提高到 2/3/5。
+  setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY", "1");
+  setDefaultEnv("LITE_TT_ENRICH_CONCURRENCY_MAX", "1");
+  // item_list 同 tab 只试 1 次 + 20s 求值超时：失败快速交给“新 tab / 换 IP + 新 tab”恢复，
+  // 避免卡死 tab 上的队列把单红人 120s 预算吃光（预算不足时中途换 IP 永远无法触发）。
+  setDefaultEnv("TT_LITE_POST_ITEM_RETRIES", "1");
+  setDefaultEnv("TT_LITE_API_EVAL_TIMEOUT_MS", "20000");
+  setDefaultEnv("TT_LITE_HOMEPAGE_TIMEOUT_MS", "20000");
+  setDefaultEnv("TT_LITE_EMPTY_ITEMS_COOLDOWN_MS", "0");
+  setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MIN_MS", "3000");
+  setDefaultEnv("TT_LITE_PROFILE_BETWEEN_MAX_MS", "5000");
+  setDefaultEnv("TT_LITE_COUNTRY_SEARCH_ALT_VIDEOS", "1");
+  setDefaultEnv("TT_SEARCH_MAX_INFLUENCERS", "500");
+  setDefaultEnv("SEARCH_MAX_POOL_SIZE", "500");
+  setDefaultEnv("TT_LITE_SEARCH_MAX_PAGES", "80");
+  setDefaultEnv("TT_LITE_MAX_VIDEOS", "50");
+  setDefaultEnv("LITE_DISABLE_SCREENSHOTS", "true");
+  setDefaultEnv("LITE_ENRICH_SCREENSHOTS", "false");
+}
+
+/** 任务失败冷却：只对“搜索经换 IP 重试仍失败”生效，30min，持久化到 config（worker 重启后仍生效） */
+function workerPortSuffix() {
+  return String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+}
+function workerCooldownFile() {
+  const suffix = workerPortSuffix();
+  return suffix ? path.join(projectRoot, "config", `tt-worker-cooldown-${suffix}.json`) : null;
+}
+function readWorkerCooldown() {
+  const fp = workerCooldownFile();
+  if (!fp) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function workerCooldownRemainingMs() {
+  const cd = readWorkerCooldown();
+  return cd && Number.isFinite(cd.untilEpochMs) ? Math.max(0, cd.untilEpochMs - Date.now()) : 0;
+}
+function setWorkerCooldown(reason, taskId, minutes = 30) {
+  const fp = workerCooldownFile();
+  if (!fp) return;
+  try {
+    const cd = {
+      untilEpochMs: Date.now() + minutes * 60 * 1000,
+      reason,
+      taskId,
+      setAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(fp, JSON.stringify(cd, null, 2), "utf8");
+    console.warn(
+      `[worker-influencer-search] 写入失败冷却 ${minutes}min（${fp}）reason=${reason} task=${taskId}`
+    );
+  } catch (e) {
+    console.warn(`[worker-influencer-search] 写入冷却失败: ${e?.message || e}`);
+  }
+}
+function clearWorkerCooldown() {
+  const fp = workerCooldownFile();
+  if (!fp) return;
+  try {
+    if (fs.existsSync(fp)) {
+      fs.unlinkSync(fp);
+      console.log("[worker-influencer-search] 任务成功，清除失败冷却");
+    }
+  } catch (e) {
+    console.warn(`[worker-influencer-search] 清除冷却失败: ${e?.message || e}`);
+  }
+}
+
+/** 搜索阶段失败时轮换 tk-ip IP（0 数据流量），并标记会话需重新准入探测 */
+async function rotateTkIpForSearchRetry(label) {
+  try {
+    const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState } = await import(
+      "../lib/ops/tiktok-session-manager.js"
+    );
+    const rot = await rotateTkIpSession(resolveTkIpProxyPort());
+    if (rot?.ok) {
+      const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
+      st.healthy = false;
+      st.checkedAt = 0;
+      st.forceFresh = true;
+      console.warn(
+        `[worker-influencer-search] ${label} 轮换 IP ok sid=${rot.sid || "-"} ip=${rot.ip || "-"}`
+      );
+      return true;
+    }
+    console.warn(`[worker-influencer-search] ${label} 轮换未生效: ${rot?.error || "skipped"}`);
+    return false;
+  } catch (e) {
+    console.warn(`[worker-influencer-search] ${label} 轮换异常: ${e?.message || e}`);
+    return false;
+  }
+}
+
+/** 判断异常是否属于搜索阶段（避免 enrich/国家环节的异常也触发换 IP 重试） */
+function isSearchStageFailureMsg(msg) {
+  return /未获取到数据|general search|search\/general\/full|EMPTY|CDP timeout|Runtime\.evaluate|Failed to fetch|tiktok_api_session_unavailable|无结果/i.test(
+    String(msg || "")
+  );
+}
 
 function detectWorkerIp() {
   return detectPrimaryIpv4({ preferEnvKey: "SEARCH_WORKER_IP" });
@@ -40,11 +168,51 @@ function workerIpToken() {
 
 /** @param {'tiktok'|'instagram'|'youtube'} platformSlug */
 function workerIdForPlatform(platformSlug) {
-  return `search-worker-${workerIpToken()}-${platformSlug}`;
+  const suffix = String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+  return `search-worker-${workerIpToken()}${suffix ? `-${suffix}` : ""}-${platformSlug}`;
 }
 
 function resolveSearchWorkerSlots() {
-  return Math.min(3, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+  // 每端口同一时刻只执行 1 个任务（搜索/导入互斥，见 portTaskLock），
+  // 机器上限 = 端口数 4。
+  return Math.min(4, Math.max(1, Number(process.env.SEARCH_WORKER_SLOTS) || 1));
+}
+
+/**
+ * 每端口任务锁：同一 worker 进程内，搜索循环与导入循环互斥使用该端口浏览器。
+ * 保证单个浏览器端口同一时期只执行 1 个任务（搜索或导入）。
+ */
+const portTaskLock = { busy: false, owner: null };
+async function acquirePortTaskLock(owner) {
+  while (portTaskLock.busy) {
+    await sleep(1000);
+  }
+  portTaskLock.busy = true;
+  portTaskLock.owner = owner;
+}
+function releasePortTaskLock() {
+  portTaskLock.busy = false;
+  portTaskLock.owner = null;
+}
+
+function withTaskTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} timeout ${ms}ms`)),
+        ms
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function resolveSearchTaskTimeoutMs() {
+  return Math.max(
+    60_000,
+    Number(process.env.SEARCH_TASK_TIMEOUT_MS || 20 * 60 * 1000)
+  );
 }
 
 function resolveWorkerPlatforms() {
@@ -56,13 +224,14 @@ function resolveWorkerPlatforms() {
 }
 
 /**
- * 导入任务认领平台：严格按 worker 平台消费，禁止跨平台认领。
- * （平台拆分上线后不再产生 mixed 任务，tiktok 机器不再兼容遗留 mixed。）
+ * 导入任务认领平台：worker 平台 + 遗留 mixed 兜底（仅 tiktok 角色认领 mixed）
  * @param {string[]} [platforms]
  */
 function importClaimPlatforms(platforms) {
   const base = Array.isArray(platforms) ? platforms : resolveWorkerPlatforms();
-  return [...new Set(base)];
+  const set = new Set(base);
+  if (set.has("tiktok")) set.add("mixed");
+  return [...set];
 }
 
 /**
@@ -136,6 +305,78 @@ function calcKeywordScore(metrics = {}) {
   const failCount = Number(metrics.failCount || 0);
   const matchRate = enrichSuccessCount > 0 ? analyzeRecommendedCount / enrichSuccessCount : 0;
   return matchRate * 10 + enrichSuccessCount * 0.05 - failCount * 0.2;
+}
+
+function safeCount(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function countInfluencers(influencers, predicate) {
+  return (Array.isArray(influencers) ? influencers : []).filter(predicate).length;
+}
+
+function deriveSearchTaskMetricsFromResult(result = {}) {
+  const influencers = Array.isArray(result.influencers) ? result.influencers : [];
+  const stats = result.stats || {};
+  const country = result.countryFilter || stats.countryFilter || {};
+  const searchFoundCount = Math.max(
+    safeCount(stats.searchChannelCount),
+    safeCount(stats.influencerCount),
+    safeCount(result.savedCount),
+    influencers.length
+  );
+  const profileBrowsedCount = Math.max(
+    safeCount(stats.enrichedCount),
+    countInfluencers(
+      influencers,
+      (inf) => !!(inf?.profileDataReady || inf?.profile_data || inf?.viewsData || inf?.engagement)
+    )
+  );
+  const analyzedCount = Math.max(
+    safeCount(stats.analyzedCount),
+    countInfluencers(
+      influencers,
+      (inf) => typeof inf?.isRecommended === "boolean" || !!inf?.analysisReady
+    )
+  );
+  const recommendedCount = Math.max(
+    safeCount(stats.recommendedCount),
+    countInfluencers(influencers, (inf) => inf?.isRecommended === true)
+  );
+  const contactableCount = countInfluencers(
+    influencers,
+    (inf) => inf?.isRecommended === true && !!(inf?.email || inf?.hasEmail)
+  );
+  return {
+    searchFoundCount,
+    profileBrowsedCount,
+    analyzedCount,
+    recommendedCount,
+    contactableCount,
+    skipCountryUnknownCount: safeCount(country.unknown),
+    skipCountryMismatchCount: safeCount(country.mismatch),
+  };
+}
+
+function mergeSearchTaskMetrics(...items) {
+  const out = {
+    searchFoundCount: 0,
+    profileBrowsedCount: 0,
+    analyzedCount: 0,
+    recommendedCount: 0,
+    contactableCount: 0,
+    skipCountryUnknownCount: 0,
+    skipCountryMismatchCount: 0,
+    newRecommendedInsertCount: 0,
+  };
+  for (const item of items) {
+    if (!item) continue;
+    for (const key of Object.keys(out)) {
+      out[key] = Math.max(out[key], safeCount(item[key]));
+    }
+  }
+  return out;
 }
 
 async function upsertKeywordRunResult({
@@ -338,6 +579,7 @@ async function claimOnePendingTaskForPlatform(platformSlug, platformWorkerId) {
 }
 
 async function markTaskStatus(id, status, errorMessage = null) {
+  stopTaskHeartbeat(id);
   await queryTikTok(
     `
     UPDATE tiktok_influencer_search_task
@@ -349,6 +591,38 @@ async function markTaskStatus(id, status, errorMessage = null) {
   `,
     [status, errorMessage, id]
   );
+}
+
+/** 搜索阶段心跳：任务在搜索/轮换 IP 重试时也定期推进 last_progress_at，避免被 stuck 回收误杀 */
+async function touchTaskProgress(taskId) {
+  try {
+    await queryTikTok(
+      `UPDATE tiktok_influencer_search_task
+       SET last_progress_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND status = 'processing'`,
+      [taskId]
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 任务级心跳定时器：认领后每 60s touch，覆盖搜索/预过滤/国家/enrich 全程；markTaskStatus 时自动停止 */
+const taskHeartbeats = new Map();
+function startTaskHeartbeat(taskId) {
+  stopTaskHeartbeat(taskId);
+  const t = setInterval(() => {
+    touchTaskProgress(taskId).catch(() => {});
+  }, 60_000);
+  if (typeof t.unref === "function") t.unref();
+  taskHeartbeats.set(taskId, t);
+}
+function stopTaskHeartbeat(taskId) {
+  const t = taskHeartbeats.get(taskId);
+  if (t) {
+    clearInterval(t);
+    taskHeartbeats.delete(taskId);
+  }
 }
 
 async function loadTaskWorkNoteMetrics(taskId) {
@@ -411,6 +685,7 @@ async function processTask(task, platformSlug) {
   const runId = task.run_id || payload.runId || null;
   const keywordReason = String(payload.keywordReason || "").trim();
   const taskStartMs = Date.now();
+  startTaskHeartbeat(task.id);
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
@@ -440,6 +715,12 @@ async function processTask(task, platformSlug) {
       `platform mismatch: payload=${taskPlatformSlug} loop=${platformSlug}`
     );
     return;
+  }
+  if (taskPlatformSlug === "tiktok") {
+    applyTiktokLiteProductionDefaults();
+    console.log(
+      `[worker-influencer-search] TikTok Lite defaults: search=${process.env.CDP_ENDPOINT} country/enrich=${process.env.CDP_ENDPOINT_ENRICH} tab=${process.env.TT_LITE_TAB_POOL_SIZE} country_c=${process.env.TT_LITE_COUNTRY_CONCURRENCY} enrich_c=${process.env.LITE_TT_ENRICH_CONCURRENCY} pool=${process.env.SEARCH_MAX_POOL_SIZE} api_only=true`
+    );
   }
 
   const publishKeywordNote = async ({
@@ -523,13 +804,9 @@ async function processTask(task, platformSlug) {
     };
   }
 
-  const { searchAndExtractInfluencers } = await import(
-    "../lib/tools/influencer-functions/search-and-extract-influencers.js"
-  );
-
-  // 关键词由执行心跳/Controller 集中生成并随任务下发；worker 不再生成关键词。
   if (!taskKeyword) {
-    await markTaskStatus(task.id, "failed", "missing_task_keyword");
+    const error = "missing_task_keyword";
+    await markTaskStatus(task.id, "failed", error);
     await upsertKeywordRunResult({
       campaignId,
       sessionId,
@@ -541,14 +818,19 @@ async function processTask(task, platformSlug) {
       workerId: platformWorkerId,
       workerHost: CURRENT_WORKER_HOST,
       workerIp: CURRENT_WORKER_IP,
-      metrics: { failCount: 1, failReason: "missing_task_keyword", elapsedMs: Date.now() - taskStartMs },
+      metrics: { failCount: 1, failReason: error, elapsedMs: Date.now() - taskStartMs },
     });
     await publishKeywordNote({
       status: "failed",
-      error: "missing_task_keyword",
+      error,
     });
     return;
   }
+
+  const { searchAndExtractInfluencers } = await import(
+    "../lib/tools/influencer-functions/search-and-extract-influencers.js"
+  );
+  const kwResult = { success: true, search_queries: [taskKeyword] };
 
   const defaultTarget = Math.max(influencersPerDay * 2, 10);
   const target = requestedBatch > 0 ? requestedBatch : defaultTarget;
@@ -557,6 +839,7 @@ async function processTask(task, platformSlug) {
     Number(process.env.SEARCH_MAX_POOL_SIZE || 500)
   );
   let result = null;
+  let searchIpRetriesExhausted = false;
   try {
     if (taskPlatformSlug === "tiktok") {
       try {
@@ -567,35 +850,89 @@ async function processTask(task, platformSlug) {
       } catch {
         /* ignore */
       }
-    }
-    const primaryKeyword = taskKeyword || null;
-
-    result = await searchAndExtractInfluencers(
-      {
-        keywords: { search_queries: [taskKeyword] },
-        platform: taskPlatformSlug,
-        platforms: campaignPlatforms,
-        countries: resolveAllowedCountriesFromCampaign(campaignInfo),
-        productInfo,
-        campaignInfo,
-        influencerProfile,
-        campaignId,
-      },
-      {
-        maxResults: searchPoolMax,
-        maxEnrichCount: searchPoolMax,
-        enrichProfileData: true,
-        platform: taskPlatformSlug,
-        taskId: task.id,
-        runId: runId || null,
-        searchKeyword: primaryKeyword,
-        platform: taskPlatformSlug,
-        workerIp: CURRENT_WORKER_IP,
-        workerHost: CURRENT_WORKER_HOST,
-        onStepUpdate,
-        onTaskProgress: scheduleKeywordProgressPublish,
+      // 任务前端点预检：探测 9222 base + 9223/9224/9225 enrich 代理，
+      // 发现死节点自动触发重建（重建逻辑带冷却），然后继续执行任务。
+      if (String(process.env.TT_ENDPOINT_PREFLIGHT ?? "1").trim() !== "0") {
+        try {
+          const { preflightTikTokEndpoints } = await import(
+            "../lib/ops/tiktok-endpoint-pool.js"
+          );
+          const pf = await preflightTikTokEndpoints({ timeoutMs: 25000 });
+          console.log(
+            `[worker-influencer-search] tiktok endpoint preflight ok=${pf.ok} ` +
+              JSON.stringify(pf.results)
+          );
+        } catch (e) {
+          console.warn(
+            `[worker-influencer-search] tiktok endpoint preflight error: ${e.message}`
+          );
+        }
       }
+    }
+    const primaryKeyword =
+      taskKeyword ||
+      (Array.isArray(kwResult.search_queries) ? kwResult.search_queries[0] : null) ||
+      null;
+
+    // 搜索失败 → 轮换 IP 重试（最多 TT_SEARCH_IP_RETRIES 次，默认 2），
+    // 换 IP 本身 0 数据流量；仍失败才判任务失败并进入 30min 冷却。
+    const maxSearchIpRetries = Math.max(
+      0,
+      Number(process.env.TT_SEARCH_IP_RETRIES ?? 2) || 0
     );
+    for (let attempt = 0; ; attempt += 1) {
+      await touchTaskProgress(task.id);
+      try {
+        result = await searchAndExtractInfluencers(
+          {
+            keywords: { search_queries: kwResult.search_queries },
+            platform: taskPlatformSlug,
+            platforms: campaignPlatforms,
+            countries: resolveAllowedCountriesFromCampaign(campaignInfo),
+            productInfo,
+            campaignInfo,
+            influencerProfile,
+            campaignId,
+          },
+          {
+            maxResults: searchPoolMax,
+            maxEnrichCount: searchPoolMax,
+            enrichProfileData: true,
+            platform: taskPlatformSlug,
+            taskId: task.id,
+            runId: runId || null,
+            searchKeyword: primaryKeyword,
+            platform: taskPlatformSlug,
+            workerIp: CURRENT_WORKER_IP,
+            workerHost: CURRENT_WORKER_HOST,
+            onStepUpdate,
+            onTaskProgress: scheduleKeywordProgressPublish,
+          }
+        );
+        await touchTaskProgress(task.id);
+      } catch (searchErr) {
+        if (attempt >= maxSearchIpRetries || !isSearchStageFailureMsg(searchErr?.message || searchErr)) {
+          if (attempt >= maxSearchIpRetries) searchIpRetriesExhausted = true;
+          throw searchErr;
+        }
+        console.warn(
+          `[worker-influencer-search] 搜索异常（${String(searchErr?.message || searchErr).slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
+        );
+        await rotateTkIpForSearchRetry("搜索异常重试");
+        await sleep(3000);
+        continue;
+      }
+      if (result?.success) break;
+      if (attempt >= maxSearchIpRetries) {
+        searchIpRetriesExhausted = true;
+        break;
+      }
+      console.warn(
+        `[worker-influencer-search] 搜索未成功（${String(result?.error || "no_data").slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
+      );
+      await rotateTkIpForSearchRetry("搜索空结果重试");
+      await sleep(3000);
+    }
   } catch (err) {
     clearKeywordProgressPublish();
     const failMsg = `searchAndExtractInfluencers throw: ${String(err?.message || err).slice(0, 300)}`;
@@ -604,7 +941,7 @@ async function processTask(task, platformSlug) {
       {
         taskId: task.id,
         campaignId,
-        keyword: taskKeyword || null,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
         errorMessage: err?.message || String(err),
         errorStack: err?.stack || null,
       }
@@ -615,7 +952,7 @@ async function processTask(task, platformSlug) {
       sessionId,
       runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
       taskId: task.id,
-      keyword: taskKeyword || "(auto)",
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
       platform: taskPlatformSlug,
       workerId: platformWorkerId,
@@ -631,10 +968,17 @@ async function processTask(task, platformSlug) {
       status: "failed",
       error: String(err?.message || "search_throw"),
     });
+    if (searchIpRetriesExhausted) {
+      setWorkerCooldown(
+        "search_ip_retries_exhausted",
+        task.id,
+        Number(process.env.TT_WORKER_FAIL_COOLDOWN_MIN ?? 10)
+      );
+    }
     await consumeSignalForCompletedTask({
       campaignId,
       platform: taskPlatformSlug,
-      keyword: taskKeyword || null,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || null,
       taskId: task.id,
     });
     return;
@@ -654,16 +998,14 @@ async function processTask(task, platformSlug) {
       console.log(
         `[worker-influencer-search] 任务完成（搜索无结果）id=${task.id}, campaign=${campaignId}`
       );
-      if (taskPlatformSlug === "instagram") {
-        await noteIgSearchResult(true);
-      }
-      await markTaskStatus(task.id, "succeeded", null);
-      await upsertKeywordRunResult({
+    await markTaskStatus(task.id, "succeeded", null);
+    clearWorkerCooldown();
+    await upsertKeywordRunResult({
         campaignId,
         sessionId,
         runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
         taskId: task.id,
-        keyword: taskKeyword || "(auto)",
+        keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
         keywordType: taskKeywordType,
         platform: taskPlatformSlug,
         workerId: platformWorkerId,
@@ -694,7 +1036,7 @@ async function processTask(task, platformSlug) {
       await consumeSignalForCompletedTask({
         campaignId,
         platform: taskPlatformSlug,
-        keyword: taskKeyword || null,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
         taskId: task.id,
       });
       return;
@@ -703,9 +1045,6 @@ async function processTask(task, platformSlug) {
     console.log(
       `[worker-influencer-search] 任务完成 id=${task.id}, campaign=${campaignId}`
     );
-    if (taskPlatformSlug === "instagram") {
-      await noteIgSearchResult(false);
-    }
     try {
       const { getLitePageNavStats } = await import(
         "../lib/tools/influencer-functions/tiktok/lite-page-nav.js"
@@ -717,9 +1056,13 @@ async function processTask(task, platformSlug) {
     } catch {
       /* ignore */
     }
+    const taskMetrics = mergeSearchTaskMetrics(
+      await loadTaskWorkNoteMetrics(task.id),
+      deriveSearchTaskMetricsFromResult(result)
+    );
+    await setSearchTaskFinalMetrics(task.id, taskMetrics);
     await markTaskStatus(task.id, "succeeded", null);
-
-    const taskMetrics = await loadTaskWorkNoteMetrics(task.id);
+    clearWorkerCooldown();
     console.log(
       `[worker-influencer-search] 任务指标 id=${task.id}:`,
       JSON.stringify(taskMetrics)
@@ -729,7 +1072,7 @@ async function processTask(task, platformSlug) {
       sessionId,
       runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
       taskId: task.id,
-      keyword: taskKeyword || "(auto)",
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
       platform: taskPlatformSlug,
       workerId: platformWorkerId,
@@ -748,7 +1091,7 @@ async function processTask(task, platformSlug) {
     await consumeSignalForCompletedTask({
       campaignId,
       platform: taskPlatformSlug,
-      keyword: taskKeyword || null,
+      keyword: taskKeyword || kwResult.search_queries?.[0] || null,
       taskId: task.id,
     });
     return;
@@ -767,7 +1110,7 @@ async function processTask(task, platformSlug) {
       {
         taskId: task.id,
         campaignId,
-        keyword: taskKeyword || null,
+        keyword: taskKeyword || kwResult.search_queries?.[0] || null,
         result,
       },
       null,
@@ -781,7 +1124,7 @@ async function processTask(task, platformSlug) {
     sessionId,
     runId: runId || `${campaignId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
     taskId: task.id,
-      keyword: taskKeyword || "(auto)",
+      keyword: taskKeyword || kwResult.search_queries?.[0] || "(auto)",
       keywordType: taskKeywordType,
       platform: taskPlatformSlug,
       workerId: platformWorkerId,
@@ -802,10 +1145,17 @@ async function processTask(task, platformSlug) {
     metrics: taskMetricsFail,
     error: String(result?.error || "search_failed"),
   });
+  if (searchIpRetriesExhausted) {
+    setWorkerCooldown(
+      "search_ip_retries_exhausted",
+      task.id,
+      Number(process.env.TT_WORKER_FAIL_COOLDOWN_MIN ?? 10)
+    );
+  }
   await consumeSignalForCompletedTask({
     campaignId,
     platform: taskPlatformSlug,
-    keyword: taskKeyword || null,
+    keyword: taskKeyword || kwResult.search_queries?.[0] || null,
     taskId: task.id,
   });
 }
@@ -821,7 +1171,7 @@ async function claimOnePendingImportTask(platforms) {
   const rows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, import_batch_id,
-           batch_group_id, contact_mode, skipped_duplicate_count, parse_error_count
+           batch_group_id, skipped_duplicate_count, parse_error_count
     FROM tiktok_influencer_import_task
     WHERE status = 'pending' AND ${sql}
     ORDER BY priority DESC, id ASC
@@ -894,13 +1244,19 @@ async function processImportTaskRow(task) {
       "failed",
       String(err?.message || err).slice(0, 500)
     );
+    await notifyImportBatchOrSession({ task, fallbackSummary: null }).catch((e) => {
+      console.warn(
+        `[worker-influencer-search] import task ${task.id} 批次汇报失败:`,
+        e?.message || e
+      );
+    });
   }
 }
 
 async function reclaimStuckProcessingImportTasks() {
   const stuckMinutes = Math.min(
     24 * 60,
-    Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 7)
+    Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 12)
   );
   const stuckRows = await queryTikTok(
     `
@@ -927,6 +1283,14 @@ async function reclaimStuckProcessingImportTasks() {
   `,
     [errorMessage]
   );
+  for (const r of stuckRows) {
+    await notifyImportBatchOrSession({ task: r, fallbackSummary: null }).catch((e) => {
+      console.warn(
+        `[worker-influencer-search] 回收任务 ${r.id} 批次汇报失败:`,
+        e?.message || e
+      );
+    });
+  }
   return stuckRows.length;
 }
 
@@ -943,6 +1307,9 @@ async function importTaskLoop() {
 
   for (;;) {
     try {
+      // 注意：搜索失败冷却只作用于搜索循环（platformLoop），
+      // 不阻塞导入循环——导入走 item_list/user_detail，且自带换 IP 恢复链，
+      // 搜索 API 被风控时导入仍可正常消费。
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingImportTasks();
@@ -951,26 +1318,34 @@ async function importTaskLoop() {
         }
       }
 
-      const task = await claimOnePendingImportTask(importClaimPlatforms());
+      // 每端口任务锁：与搜索循环互斥，同一端口同一时刻只执行 1 个任务。
+      await acquirePortTaskLock("import");
+      let task = null;
+      try {
+        task = await claimOnePendingImportTask(importClaimPlatforms());
+        if (task) {
+          console.log(
+            `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
+          );
+          await runInCdpLoop(
+            {
+              platform: "mixed",
+              persistentPlatforms: ["instagram", "youtube"],
+              taskId: task.id,
+              workerId: IMPORT_WORKER_ID,
+              kind: "import",
+            },
+            () => processImportTaskRow(task)
+          );
+        }
+      } finally {
+        releasePortTaskLock();
+      }
       if (!task) {
         await sleep(idleSleepMs);
         continue;
       }
 
-      console.log(
-        `[worker-influencer-search][import] 开始 task=${task.id} campaign=${task.campaign_id} batch=${task.import_batch_id}`
-      );
-
-      await runInCdpLoop(
-        {
-          platform: "mixed",
-          persistentPlatforms: ["instagram", "youtube"],
-          taskId: task.id,
-          workerId: IMPORT_WORKER_ID,
-          kind: "import",
-        },
-        () => processImportTaskRow(task)
-      );
     } catch (err) {
       console.error(
         `[worker-influencer-search][import] loop error:`,
@@ -1007,58 +1382,6 @@ async function reclaimStuckProcessingTasks() {
   return Number(rows?.affectedRows || 0);
 }
 
-/**
- * 清理 IG 端口上残留的 about:blank 标签（任务标签页以 about:blank 创建，
- * 任务异常中止时会遗留；任务开始前清理最安全，不影响正在使用的常驻页）。
- * @param {string} endpoint
- */
-async function cleanupIgBlankTabs(endpoint) {
-  try {
-    const base = String(endpoint || "").replace(/\/+$/, "");
-    const res = await fetch(`${base}/json/list`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return;
-    const tabs = await res.json();
-    for (const t of tabs || []) {
-      if (t.type === "page" && String(t.url || "") === "about:blank") {
-        await fetch(`${base}/json/close/${encodeURIComponent(t.id)}`, {
-          signal: AbortSignal.timeout(5000),
-        }).catch(() => {});
-        console.log(
-          `[worker-influencer-search][instagram] 已清理多余 about:blank 标签 ${t.id}（${base}）`
-        );
-      }
-    }
-  } catch (e) {
-    console.warn(
-      `[worker-influencer-search][instagram] 清理 blank 标签失败: ${e?.message || e}`
-    );
-  }
-}
-
-/**
- * 记录本次 IG 搜索是否空结果：连续空结果达到阈值后由 ig-account-rotation
- * 自动把当前账户标记冷却，下一任务切换到其他端口。
- * @param {boolean} empty
- */
-async function noteIgSearchResult(empty) {
-  try {
-    const {
-      noteIgAccountSearchResult,
-      resolveIgAccountEndpoints,
-    } = await import("../lib/ig-account-rotation.js");
-    const endpoint =
-      process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
-      process.env.CDP_ENDPOINT ||
-      resolveIgAccountEndpoints()[0] ||
-      null;
-    if (endpoint) noteIgAccountSearchResult(endpoint, empty);
-  } catch {
-    /* ignore */
-  }
-}
-
 async function platformLoop(platformSlug) {
   const platformWorkerId = workerIdForPlatform(platformSlug);
   const idleSleepMs = Math.max(
@@ -1071,8 +1394,39 @@ async function platformLoop(platformSlug) {
     `[worker-influencer-search][${platformSlug}] loop workerId=${platformWorkerId} ip=${CURRENT_WORKER_IP || "unknown"}`
   );
 
+  // 重启后清理本 worker 名下残留的 processing 任务（上次进程中断的孤儿任务），
+  // 避免 hasInflightForPlatform 阻塞新任务认领、任务永久卡 processing。
+  try {
+    const released = await queryTikTok(
+      `UPDATE tiktok_influencer_search_task
+       SET status='pending', worker_id=NULL, worker_ip=NULL, worker_host=NULL, started_at=NULL
+       WHERE status='processing' AND worker_id=? AND worker_ip=? AND last_progress_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)`,
+      [platformWorkerId, CURRENT_WORKER_IP]
+    );
+    if (Number(released?.affectedRows || 0) > 0) {
+      console.warn(
+        `[worker-influencer-search] 启动清理本 worker 孤儿 processing 任务: ${released.affectedRows}`
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[worker-influencer-search] 启动孤儿任务清理失败: ${e?.message || e}`
+    );
+  }
+
   for (;;) {
     try {
+      // 搜索失败冷却：仅“搜索经换 IP 重试仍失败”触发（30min，持久化），
+      // 冷却期间搜索/导入均不认领任务，避免坏状态端口持续消耗任务。
+      const cdRemain = workerCooldownRemainingMs();
+      if (cdRemain > 0) {
+        console.warn(
+          `[worker-influencer-search] 搜索失败冷却中，剩余 ${Math.round(cdRemain / 1000)}s，暂不认领任务`
+        );
+        await sleep(Math.min(30000, cdRemain));
+        continue;
+      }
+
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingTasks();
@@ -1083,127 +1437,117 @@ async function platformLoop(platformSlug) {
         }
       }
 
-      // IG 多账户轮换：每任务选一个非冷却账户（遇限流已标记冷却的账户会被跳过）
-      let igAccountEndpoint = null;
-      if (platformSlug === "instagram") {
-        try {
-          const {
-            pickNextIgAccount,
-            getIgAccountCooldownPollMs,
-          } = await import(
-            "../lib/ig-account-rotation.js"
-          );
-          igAccountEndpoint = pickNextIgAccount(
-            process.env.IG_LITE_ENRICH_CDP_ENDPOINTS ||
-              process.env.CDP_ENDPOINT ||
-              null
-          );
-          if (!igAccountEndpoint) {
-            // 全部 IG 账户都在限流冷却：休息轮询，不认领任务
-            console.warn(
-              `[worker-influencer-search][instagram] 全部 IG 账户限流冷却中，休息 ${Math.round(
-                getIgAccountCooldownPollMs() / 1000
-              )}s 后重试`
-            );
-            await sleep(getIgAccountCooldownPollMs());
-            continue;
-          }
-      } catch (err) {
-        console.warn(
-          "[worker-influencer-search][instagram] 账户轮换选择失败，沿用当前端点:",
-          err?.message || err
-        );
-      }
-
-      // 登录态校验：选中的 IG 账户必须先通过探测（只读 cookies/URL，不导航），
-      // 掉登录/封号/验证码/CDP 不可达的账户直接标记冷却并换下一个端口，
-      // 避免“搜索无结果”空转在坏账户上。
-      if (platformSlug === "instagram" && igAccountEndpoint) {
-        try {
-          const {
-            checkIgAccountLoginState,
-            markIgAccountLoginBroken,
-            markIgAccountUnreachable,
-          } = await import("../lib/ig-account-rotation.js");
-          const health = await checkIgAccountLoginState(igAccountEndpoint);
-          if (!health.ok) {
-            console.warn(
-              `[worker-influencer-search][instagram] 账户 ${igAccountEndpoint} 登录态异常（${health.reason}），标记后跳过本任务`
-            );
-            if (String(health.reason || "").startsWith("cdp_connect_failed")) {
-              await markIgAccountUnreachable(igAccountEndpoint);
-            } else {
-              await markIgAccountLoginBroken(igAccountEndpoint, health.reason);
-            }
-            await sleep(1000);
-            continue;
-          }
-        } catch (err) {
-          console.warn(
-            "[worker-influencer-search][instagram] 登录态探测失败，按 CDP 不可达处理:",
-            err?.message || err
-          );
+      // 每端口任务锁：搜索循环与导入循环互斥，同一端口同一时刻只执行 1 个任务。
+      await acquirePortTaskLock("search");
+      let task = null;
+      let portReady = true;
+      try {
+        // tk-ip 会话准入：任务认领前确保出口 IP 能出数据（综合搜索探测），
+        // 不合格自动轮换；全失败则冷却后重试，不认领任务避免浪费。
+        if (
+          platformSlug === "tiktok" &&
+          String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+        ) {
           try {
-            const { markIgAccountUnreachable } = await import(
-              "../lib/ig-account-rotation.js"
+            const { ensureTkIpSessionHealthy, resolveTkIpProxyPort } = await import(
+              "../lib/ops/tiktok-session-manager.js"
             );
-            await markIgAccountUnreachable(igAccountEndpoint);
-          } catch {
-            /* ignore */
+            const cdp = process.env.CDP_ENDPOINT || "http://127.0.0.1:9222";
+            const health = await withTaskTimeout(
+              ensureTkIpSessionHealthy(cdp, { proxyPort: resolveTkIpProxyPort() }),
+              150000,
+              "tkip-session-health"
+            );
+            if (health?.ok === false) {
+              console.warn(
+                `[worker-influencer-search] tiktok 会话准入失败（${health.reason || "no-clean-ip"}），冷却 30s 后重试`
+              );
+              await sleep(30000);
+              portReady = false;
+            }
+          } catch (e) {
+            console.warn(
+              `[worker-influencer-search] tiktok 会话准入异常（跳过本轮）: ${e?.message || e}`
+            );
           }
-          await sleep(1000);
-          continue;
         }
-      }
-    }
 
-      const task = await claimOnePendingTaskForPlatform(
-        platformSlug,
-        platformWorkerId
-      );
+        if (portReady) {
+          task = await claimOnePendingTaskForPlatform(
+            platformSlug,
+            platformWorkerId
+          );
+        }
+        if (task) {
+          try {
+            await runInCdpLoop(
+              { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
+              () =>
+                withTaskTimeout(
+                  processTask(task, platformSlug),
+                  resolveSearchTaskTimeoutMs(),
+                  `task:${task.id}`
+                )
+            );
+          } catch (err) {
+            console.error(
+              `[worker-influencer-search][${platformSlug}] 任务 ${task.id} 处理失败：`,
+              err?.message || err
+            );
+            await markTaskStatus(
+              task.id,
+              "failed",
+              `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
+            ).catch(() => {});
+          }
+
+          // 任务边界轮换 tk-ip 会话（换 sid = 换 IP，0 流量），下一个任务用新 IP。
+          if (
+            platformSlug === "tiktok" &&
+            String(process.env.TT_TKIP_SESSION_MANAGER ?? "1").trim() !== "0"
+          ) {
+            try {
+              const { rotateTkIpSession, resolveTkIpProxyPort, getTkIpSessionState, cleanupTkIpTabs } = await import(
+                "../lib/ops/tiktok-session-manager.js"
+              );
+              const rot = await withTaskTimeout(
+                rotateTkIpSession(resolveTkIpProxyPort()),
+                45000,
+                "tkip-session-rotate"
+              );
+              if (rot?.skipped) {
+                /* 非 tk-ip 配置，跳过 */
+              } else {
+                console.log(
+                  `[worker-influencer-search] tiktok 会话轮换 ok=${rot?.ok} sid=${rot?.sid || "-"} ip=${rot?.ip || "-"}`
+                );
+                // 轮换后强制下一次认领前重新准入探测（新 IP 未验证）
+                const st = getTkIpSessionState(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222");
+                st.healthy = false;
+                st.checkedAt = 0;
+                st.forceFresh = true;
+              }
+              // 任务边界清理多余 tab（每个端口只保留 1 个 tiktok tab，防 renderer 累积）
+              try {
+                await cleanupTkIpTabs(process.env.CDP_ENDPOINT || "http://127.0.0.1:9222", { keep: 1 });
+              } catch (e) {
+                console.warn(`[worker-influencer-search] tiktok tab cleanup 异常: ${e?.message || e}`);
+              }
+            } catch (e) {
+              console.warn(
+                `[worker-influencer-search] tiktok 会话轮换异常: ${e?.message || e}`
+              );
+            }
+          }
+        }
+      } finally {
+        releasePortTaskLock();
+      }
       if (!task) {
         await sleep(idleSleepMs);
         continue;
       }
 
-      if (platformSlug === "instagram" && igAccountEndpoint) {
-        try {
-          const {
-            resetIgAccountThrottleFlag,
-          } = await import("../lib/ig-account-rotation.js");
-          // 只在成功认领任务后推进轮换指针（设置环境变量），
-          // 避免空队列时 idle 轮次导致账户连用/漂移。
-          process.env.IG_LITE_ENRICH_CDP_ENDPOINTS = igAccountEndpoint;
-          process.env.CDP_ENDPOINT = igAccountEndpoint;
-          process.env.IG_LITE_TAB_POOL_SIZE = "1";
-          // 按账户端口设置 Chrome 重启信号文件，连接失败时对应端口的 guard 才能真正重启
-          const sigMatch = String(igAccountEndpoint || "").match(/:(\d+)$/);
-          const sigPort = sigMatch ? sigMatch[1] : "9222";
-          const sigDir =
-            process.env.CDP_RESTART_SIGNAL_DIR ||
-            (process.platform === "win32"
-              ? "C:\\maxinfluencer\\signals"
-              : path.join(projectRoot, "signals"));
-          process.env.CDP_RESTART_SIGNAL_FILE =
-            path.join(sigDir, `restart-chrome-${sigPort}.flag`);
-          // 任务开始前清理该账户端口上遗留的 about:blank 标签
-          await cleanupIgBlankTabs(igAccountEndpoint);
-          resetIgAccountThrottleFlag();
-          console.log(
-            `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
-          );
-        } catch (err) {
-          console.warn(
-            "[worker-influencer-search][instagram] 重置限流标记失败:",
-            err?.message || err
-          );
-        }
-      }
-
-      await runInCdpLoop(
-        { platform: platformSlug, taskId: task.id, workerId: platformWorkerId },
-        () => processTask(task, platformSlug)
-      );
     } catch (err) {
       console.error(
         `[worker-influencer-search][${platformSlug}] 处理任务时出错：`,
