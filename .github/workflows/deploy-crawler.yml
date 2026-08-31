@@ -11,7 +11,7 @@ on:
       - "lib/cdp/**"
       - "lib/tools/influencer-functions/**"
       - "lib/influencer/**"
-      - "lib/agents/**"
+      # lib/agents/** 只影响 web / worker（邮件与 Campaign Agent），不部署 crawler 集群
       - "lib/db/**"
       - "lib/utils/work-live-step-bridge.js"
       - "package.json"
