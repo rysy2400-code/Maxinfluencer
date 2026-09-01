@@ -383,6 +383,8 @@ $guard9222Content = @"
 `$env:CHROME_9222_URL = "$launchUrl9222"
 $guard9222ProxyEnv
 $(if ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker -or $isXDedicatedWorker) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
+$(if ($isXDedicatedWorker) { '$env:CHROME_GUARD_RPC_PROBE_SEC = "0"
+$env:CHROME_GUARD_SKIP_TAB_ENSURE = "1"' } else { '' })
 . "$($guard9222Source.Replace("\", "\\"))"
 "@
 
