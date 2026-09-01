@@ -338,6 +338,10 @@ $isVisible = $true
 if ($env:CHROME_VISIBLE) {
   $v = "$($env:CHROME_VISIBLE)".ToLowerInvariant()
   $isVisible = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes" -or $v -eq "y")
+} elseif ($isXDedicatedWorker) {
+  # X 专属机默认 headless：可见窗口在该机型会话下约 2 分钟被系统关闭（退出码 0），
+  # headless 稳定可长期存活；人工登录可临时设 CHROME_VISIBLE=1。
+  $isVisible = $false
 }
 $chromeModeArgs = if ($isVisible) { "--disable-gpu" } else { "--headless=new --disable-gpu" }
 $launchUrl9222 = if ($isYoutubeDedicatedWorker) {
@@ -379,7 +383,7 @@ $guard9222Content = @"
 `$env:CHROME_EXE = "$($chromeExe.Replace("\", "\\"))"
 `$env:CHROME_9222_USER_DATA_DIR = "$($chromeDir9222.Replace("\", "\\"))"
 `$env:CDP_RESTART_SIGNAL_FILE = "$($chromeRestartSignalFile.Replace("\", "\\"))"
-`$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } else { "1" })"
+`$env:CHROME_VISIBLE = "$(if ($env:CHROME_VISIBLE) { "$($env:CHROME_VISIBLE)" } elseif ($isXDedicatedWorker) { "0" } else { "1" })"
 `$env:CHROME_9222_URL = "$launchUrl9222"
 $guard9222ProxyEnv
 $(if ($isYoutubeDedicatedWorker -or $isInstagramDedicatedWorker -or $isXDedicatedWorker) { '$env:CDP_9222_SKIP_TIKTOK_PURGE = "1"' } else { '' })
