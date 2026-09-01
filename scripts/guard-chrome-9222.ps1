@@ -16,7 +16,12 @@ $nodeExe = if (Test-Path "C:\Program Files\nodejs\node.exe") {
 $cdpRpcProbeScript = Join-Path $PSScriptRoot "probe-cdp-rpc.mjs"
 $rpcFailStreak = 0
 $lastRpcProbeAt = $null
-$rpcProbeIntervalSec = 30
+$rpcProbeIntervalSec = if ($env:CHROME_GUARD_RPC_PROBE_SEC) { [int]$env:CHROME_GUARD_RPC_PROBE_SEC } else { 30 }
+$skipTabEnsure = $false
+if ($env:CHROME_GUARD_SKIP_TAB_ENSURE) {
+  $v = "$($env:CHROME_GUARD_SKIP_TAB_ENSURE)".ToLowerInvariant()
+  $skipTabEnsure = ($v -eq "1" -or $v -eq "true" -or $v -eq "yes")
+}
 $chromeDir = if ($env:CHROME_9222_USER_DATA_DIR) { $env:CHROME_9222_USER_DATA_DIR } else { "C:\maxinfluencer\.chrome-cdp-9222" }
 $signalFile = if ($env:CDP_RESTART_SIGNAL_FILE) { $env:CDP_RESTART_SIGNAL_FILE } else { "C:\maxinfluencer\signals\restart-chrome-9222.flag" }
 $signalDir = Split-Path $signalFile -Parent
@@ -140,7 +145,7 @@ while ($true) {
     $unhealthySince = $null
     # Aliveness: HTTP /json/version being up does not prove the browser WebSocket works, so
      # probe the real RPC periodically and restart Chrome after 3 consecutive failures.
-    if (-not $lastRpcProbeAt -or (((Get-Date) - $lastRpcProbeAt).TotalSeconds -ge $rpcProbeIntervalSec)) {
+    if ($rpcProbeIntervalSec -gt 0 -and (-not $lastRpcProbeAt -or (((Get-Date) - $lastRpcProbeAt).TotalSeconds -ge $rpcProbeIntervalSec))) {
       $lastRpcProbeAt = Get-Date
       & $nodeExe --experimental-default-type=module $cdpRpcProbeScript "http://127.0.0.1:9222" 5000 | Out-Null
       if ($LASTEXITCODE -eq 0) {
@@ -159,7 +164,7 @@ while ($true) {
         }
       }
     }
-    if (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30)) {
+    if (-not $skipTabEnsure -and (-not $lastTabEnsureAt -or (((Get-Date) - $lastTabEnsureAt).TotalSeconds -ge 30))) {
       Ensure-LaunchUrlTabs
       $lastTabEnsureAt = Get-Date
     }
