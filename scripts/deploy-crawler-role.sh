@@ -183,7 +183,8 @@ if (\$role -eq "youtube") {
     '\$env:LITE_X_ENRICH_CONCURRENCY_MAX = "1"',
     '\$env:X_LITE_EVALUATE_CONCURRENCY = "1"',
     '\$env:X_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"',
-    '\$env:X_LITE_DISABLE_EVALUATE_LOCK = "0"'
+    '\$env:X_LITE_DISABLE_EVALUATE_LOCK = "0"',
+    '\$env:LITE_BLOCK_RESOURCE_TYPES = "image,media,font"'
   )) {
     if (-not \$guardCrawler.Contains(\$needle)) { throw "Missing X guard env: \$needle" }
   }
