@@ -368,10 +368,10 @@ $guard9222ProxyEnv = if ($isXDedicatedWorker) {
     $escapedProxy = "$($env:CHROME_9222_PROXY_SERVER)".Replace('"', '""')
     "`$env:CHROME_9222_PROXY_SERVER = `"$escapedProxy`""
   } else {
-    '`$env:CHROME_9222_PROXY_MODE = "direct"'
+    '$env:CHROME_9222_PROXY_MODE = "direct"'
   }
 } else {
-  '`$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"'
+  '$env:CHROME_9222_PROXY_SERVER = "http://127.0.0.1:7897"'
 }
 
 $guard9222Content = @"
