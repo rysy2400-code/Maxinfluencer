@@ -39,6 +39,10 @@ $launchUrls = @(
     Where-Object { $_ }
 )
 if ($launchUrls.Count -eq 0) { $launchUrls = @("about:blank") }
+# headless 模式不支持多目标 URL（Chrome 直接报错退出），只保留第一个
+if (-not $visible -and $launchUrls.Count -gt 1) {
+  $launchUrls = @($launchUrls[0])
+}
 $proxyMode = if ($env:CHROME_9222_PROXY_MODE) { "$($env:CHROME_9222_PROXY_MODE)".ToLowerInvariant() } else { "" }
 $proxyDirect = ($proxyMode -eq "direct" -or $proxyMode -eq "none" -or $proxyMode -eq "off")
 $proxyServer = if ($proxyDirect) { "" } elseif ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
