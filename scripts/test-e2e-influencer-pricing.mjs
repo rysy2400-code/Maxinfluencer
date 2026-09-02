@@ -12,6 +12,7 @@ import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { upsertInfluencer, getInfluencerById } from "../lib/db/influencer-dao.js";
 import { sendOutreach } from "../lib/agents/influencer-agent.js";
 import {
+  PRICING_MODE_ASK_CREATOR_QUOTE,
   PRICING_MODE_COMMISSION_ONLY,
   PRICING_MODE_ECPM_WITH_CAP,
   computeQuotedFlatFeeUsd,
@@ -34,6 +35,7 @@ const AVG_VIEWS = 100000; // eCPM=3 → $300 flat fee
 const ts = Date.now();
 const CAMPAIGN_ECPM = `E2E-PRICING-ECPM-${ts}`;
 const CAMPAIGN_COMM = `E2E-PRICING-COMM-${ts}`;
+const CAMPAIGN_ASK = `E2E-PRICING-ASK-${ts}`;
 
 let passed = 0;
 let failed = 0;
@@ -227,10 +229,11 @@ async function runScenario({
       "last_event 记录 pricingMode=ecpm_with_cap"
     );
   } else {
-    assert(exec?.flatFee == null, "flat_fee 未写入（commission_only）");
+    assert(exec?.flatFee == null, "flat_fee 未写入（无固定费模式）");
+    const expectedMode = campaignInfo.influencerPricing?.mode;
     assert(
-      exec?.lastEvent?.outreachEmail?.pricingMode === PRICING_MODE_COMMISSION_ONLY,
-      "last_event 记录 pricingMode=commission_only"
+      exec?.lastEvent?.outreachEmail?.pricingMode === expectedMode,
+      `last_event 记录 pricingMode=${expectedMode}`
     );
   }
 
@@ -241,10 +244,17 @@ async function runScenario({
     const body = String(msg.body_text);
     const lower = body.toLowerCase();
     for (const token of emailMustContain) {
-      assert(
-        lower.includes(String(token).toLowerCase()),
-        `邮件正文包含「${token}」`
-      );
+      if (Array.isArray(token)) {
+        assert(
+          token.some((t) => lower.includes(String(t).toLowerCase())),
+          `邮件正文包含任一「${token.join("/")}」`
+        );
+      } else {
+        assert(
+          lower.includes(String(token).toLowerCase()),
+          `邮件正文包含「${token}」`
+        );
+      }
     }
     for (const token of emailMustNotContain) {
       assert(
@@ -257,7 +267,7 @@ async function runScenario({
 }
 
 async function cleanupCampaigns() {
-  for (const id of [CAMPAIGN_ECPM, CAMPAIGN_COMM]) {
+  for (const id of [CAMPAIGN_ECPM, CAMPAIGN_COMM, CAMPAIGN_ASK]) {
     await cleanupConversation(id);
     await queryTikTok(
       `DELETE FROM tiktok_campaign_execution WHERE campaign_id = ?`,
@@ -315,6 +325,26 @@ async function main() {
       expectFlatFee: null,
       emailMustContain: ["20", "commission"],
       emailMustNotContain: ["$300", "300 usd fixed"],
+    });
+
+    await runScenario({
+      label: "策略 C — 不主动报价，询问红人合作价格",
+      campaignId: CAMPAIGN_ASK,
+      campaignInfo: {
+        platform: "TikTok",
+        region: "美国",
+        publishTimeRange: "2026-09-01 至 2026-09-30",
+        budget: 50000,
+        commission: 0,
+        influencerPricing: {
+          mode: PRICING_MODE_ASK_CREATOR_QUOTE,
+          ecpmUsd: null,
+          maxFlatFeeUsd: null,
+        },
+      },
+      expectFlatFee: null,
+      emailMustContain: [["rate", "fee"]],
+      emailMustNotContain: ["$", "usd", "commission"],
     });
   } finally {
     console.log("\n清理测试 campaign…");

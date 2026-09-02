@@ -53,5 +53,21 @@ const p8 = parseModifyCampaignChangesFromUserMessage("改成纯产品置换合�
 assert(p8?.pricingMode === "commission_only", "只说纯产品置换 → commission_only");
 assert(p8?.commission === 0, "只说纯产品置换 → 佣金默认 0%");
 
+const p9 = parseModifyCampaignChangesFromUserMessage(
+  "单位红人报价策略：不主动报价，询问红人合作价格"
+);
+assert(
+  p9?.pricingMode === "ask_creator_quote",
+  "不主动报价、询问红人合作价格 → ask_creator_quote"
+);
+
+const p10 = parseModifyCampaignChangesFromUserMessage(
+  "改成让博主提供报价，不要按 eCPM 报价"
+);
+assert(
+  p10?.pricingMode === "ask_creator_quote",
+  "让博主提供报价、不要按 eCPM → ask_creator_quote"
+);
+
 console.log(`\n${ok} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
