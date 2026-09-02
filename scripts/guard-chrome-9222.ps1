@@ -48,6 +48,7 @@ $proxyDirect = ($proxyMode -eq "direct" -or $proxyMode -eq "none" -or $proxyMode
 $proxyServer = if ($proxyDirect) { "" } elseif ($env:CHROME_9222_PROXY_SERVER) { "$($env:CHROME_9222_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
 $chromeArgList = @(
   "--disable-quic",
+  "--disable-ipv6",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9222",
   "--user-data-dir=$chromeDir",
