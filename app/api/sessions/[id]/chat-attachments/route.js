@@ -7,6 +7,7 @@ import {
   saveSessionImportFile,
   storageKeyBelongsToSession,
 } from "../../../../../lib/influencer/session-import-storage.js";
+import { resolveChatAttachmentBuffer } from "../../../../../lib/influencer/chat-attachment-resolver.js";
 import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
 
 export const dynamic = "force-dynamic";
@@ -82,9 +83,14 @@ export async function GET(req, { params }) {
       return NextResponse.json({ success: false, error: "附件不属于该会话" }, { status: 403 });
     }
 
-    const buffer = readSessionImportFile(storageKey);
-    if (!buffer) {
+    const resolved = await resolveChatAttachmentBuffer(sessionId, storageKey);
+    if (!resolved?.buffer) {
       return NextResponse.json({ success: false, error: "附件不存在" }, { status: 404 });
+    }
+    const buffer = resolved.buffer;
+    const resolvedStorageKey = resolved.storageKey || storageKey;
+    if (!storageKeyBelongsToSession(resolvedStorageKey, sessionId)) {
+      return NextResponse.json({ success: false, error: "附件不属于该会话" }, { status: 403 });
     }
 
     const storageFallback = storageKey.split("/").pop() || "attachment.xlsx";
