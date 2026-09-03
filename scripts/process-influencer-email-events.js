@@ -1202,7 +1202,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   try {
     raw = await callDeepSeekLLM(
       [{ role: "user", content: userContent }],
-      systemPrompt
+      systemPrompt,
+      { maxTokens: 16384 }
     );
   } catch (err) {
     await requeueOrFailEmailEvent(
