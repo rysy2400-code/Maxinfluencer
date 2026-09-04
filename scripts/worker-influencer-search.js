@@ -999,7 +999,8 @@ async function reclaimStuckProcessingTasks() {
         finished_at = NOW(),
         error_message = ?,
         updated_at = NOW()
-    WHERE status = 'processing'
+    WHERE platform = 'instagram'
+      AND status = 'processing'
       AND last_progress_at IS NOT NULL
       AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
@@ -1074,7 +1075,7 @@ async function platformLoop(platformSlug) {
 
   for (;;) {
     try {
-      if (Date.now() - lastReclaimMs > 60_000) {
+      if (platformSlug === "instagram" && Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
         const n = await reclaimStuckProcessingTasks();
         if (n > 0) {
@@ -1193,6 +1194,17 @@ async function platformLoop(platformSlug) {
           console.log(
             `[worker-influencer-search][instagram] 本任务使用 IG 账户 ${igAccountEndpoint}（task=${task.id} keyword=${task.keyword || "?"}）`
           );
+          try {
+            await queryTikTok(
+              `UPDATE tiktok_influencer_search_task SET ig_port = ? WHERE id = ?`,
+              [sigPort, task.id]
+            );
+          } catch (err) {
+            console.warn(
+              "[worker-influencer-search][instagram] 写入 ig_port 失败:",
+              err?.message || err
+            );
+          }
         } catch (err) {
           console.warn(
             "[worker-influencer-search][instagram] 重置限流标记失败:",
