@@ -60,9 +60,17 @@ function parseJsonOrObject(value) {
  * - 非寄样动作（approveDraft 等）：误含“确认地址/样品即将寄出”内容 → 追加禁令重写一次；
  * - confirmShip：只通知已寄出，误含“确认地址”内容 → 追加禁令重写一次；
  * 仍违规则抛错拦截发送。
+ *
+ * @param {{ action: string, [key: string]: unknown }} opts
+ * @param {{ generateBody?: typeof generateAdvertiserExecutionFollowupEmailBody }} deps 测试用依赖注入
  */
-async function generateAdvertiserFollowupBody({ action, ...generatorArgs }) {
-  let bodyText = await generateAdvertiserExecutionFollowupEmailBody(generatorArgs);
+export async function generateAdvertiserFollowupBody(opts, deps = {}) {
+  const { action, ...generatorArgs } = opts;
+  const generateBody =
+    deps.generateBody || generateAdvertiserExecutionFollowupEmailBody;
+  // 关键：action 决定正文的任务语义（approve/reject/counter/寄样等），
+  // 必须原样透传给 generateAdvertiserExecutionFollowupEmailBody。
+  let bodyText = await generateBody({ ...generatorArgs, action });
   const shippingMentionAllowed = SHIPPING_MENTION_ACTIONS.has(action);
   let violation = false;
   let extraInstruction = "";
@@ -79,8 +87,9 @@ async function generateAdvertiserFollowupBody({ action, ...generatorArgs }) {
     console.warn(
       `[ProcessInfluencerAgentEvents] ${action} 的跟进邮件误含寄样/地址确认内容，追加禁令重新生成…`
     );
-    bodyText = await generateAdvertiserExecutionFollowupEmailBody({
+    bodyText = await generateBody({
       ...generatorArgs,
+      action,
       extraInstruction,
     });
     const stillViolation = shippingMentionAllowed
@@ -1012,12 +1021,18 @@ async function main() {
   }
 }
 
-main()
-  .then(() => {
-    console.log("[ProcessInfluencerAgentEvents] 本次处理完成。");
-    process.exit(0);
-  })
-  .catch((err) => {
-    console.error("[ProcessInfluencerAgentEvents] 运行出错:", err);
-    process.exit(1);
-  });
+// 仅直接运行时消费队列；被测试 import 时不触发 main()
+const invokedAsMain =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsMain) {
+  main()
+    .then(() => {
+      console.log("[ProcessInfluencerAgentEvents] 本次处理完成。");
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("[ProcessInfluencerAgentEvents] 运行出错:", err);
+      process.exit(1);
+    });
+}
