@@ -1208,6 +1208,321 @@ function executionDeliverableTypeLabel(entry) {
   }
 }
 
+const COMMUNICATION_REQUEST_TYPE_LABEL = {
+  adjust_price: "价格/条款",
+  delay_publish: "排期",
+  change_content: "内容/脚本",
+  other: "其他",
+};
+
+function communicationRoleLabel(role) {
+  if (role === "advertiser") return "品牌方";
+  if (role === "influencer") return "红人";
+  if (role === "system") return "系统";
+  return "—";
+}
+
+function communicationQuoteTypeLabel(entry) {
+  switch (entry?.type) {
+    case "counter":
+      return "还价";
+    case "quote_rejected":
+      return "拒绝报价";
+    case "reopen":
+      return "撤销拒绝";
+    case "quote_submitted":
+      return "报价";
+    default:
+      return entry?.type || "记录";
+  }
+}
+
+function communicationSpecialStatusLabel(entry) {
+  const status = String(entry?.specialRequestStatus || "").toLowerCase();
+  const eventStatus = String(entry?.eventStatus || "").toLowerCase();
+  if (eventStatus === "failed") return "处理失败";
+  if (eventStatus === "pending" || eventStatus === "processing") return "处理中";
+  if (status === "pending_creator") return "待红人确认";
+  if (status === "pending_brand") return "待品牌方决策";
+  if (status === "resolved") return "已达成一致";
+  if (eventStatus === "succeeded") return "已同步";
+  return status || eventStatus || "";
+}
+
+function communicationEntryHeadline(entry) {
+  const roleLabel = communicationRoleLabel(entry?.role);
+  let typeLabel = "";
+  if (entry?.source === "quote") {
+    typeLabel = communicationQuoteTypeLabel(entry);
+  } else if (entry?.source === "deliverable") {
+    typeLabel = executionDeliverableTypeLabel(entry);
+  } else if (entry?.source === "special_request") {
+    if (entry?.type === "ask") {
+      const requestLabel = COMMUNICATION_REQUEST_TYPE_LABEL[entry?.requestType];
+      typeLabel = requestLabel
+        ? `发起特殊请求（${requestLabel}）`
+        : "发起特殊请求";
+    } else {
+      typeLabel = "特殊请求反馈";
+    }
+  }
+  const parts = [];
+  if (roleLabel && roleLabel !== "—") parts.push(roleLabel);
+  if (typeLabel) parts.push(typeLabel);
+  if (
+    entry?.source === "quote" &&
+    entry?.amount != null &&
+    Number.isFinite(Number(entry.amount))
+  ) {
+    parts.push(`${Number(entry.amount)} ${entry.currency || "USD"}`);
+  }
+  return parts.join(" · ");
+}
+
+function ExecutionProgressCommunicationSection({
+  campaignId,
+  username,
+  count,
+  expanded,
+  onToggle,
+}) {
+  const [items, setItems] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [reloadKey, setReloadKey] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!expanded || items || !campaignId || !username) return undefined;
+    let cancelled = false;
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    const url = `/api/campaigns/${encodeURIComponent(campaignId)}/execution-communication?username=${encodeURIComponent(username)}`;
+    fetch(url, { credentials: "include", signal: controller.signal })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success) {
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        if (!cancelled) setItems(Array.isArray(data.items) ? data.items : []);
+      })
+      .catch((err) => {
+        if (cancelled || err?.name === "AbortError") return;
+        setError(err?.message || "加载失败");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [expanded, items, reloadKey, campaignId, username]);
+
+  const total = Array.isArray(items) ? items.length : count;
+  const headline = expanded
+    ? `收起沟通记录（${total}）`
+    : `展开沟通记录（${total}）`;
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          fontSize: 11,
+          color: "#4F46E5",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: 0,
+        }}
+      >
+        {headline}
+      </button>
+      {expanded ? (
+        <div
+          style={{
+            marginTop: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          {loading ? (
+            <div style={{ fontSize: 11, color: "#9CA3AF" }}>加载沟通记录…</div>
+          ) : error ? (
+            <div style={{ fontSize: 11, color: "#B91C1C" }}>
+              {error}
+              <button
+                type="button"
+                onClick={() => {
+                  setItems(null);
+                  setError(null);
+                  setReloadKey((prev) => prev + 1);
+                }}
+                style={{
+                  marginLeft: 8,
+                  border: "none",
+                  background: "none",
+                  color: "#4F46E5",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                重试
+              </button>
+            </div>
+          ) : Array.isArray(items) && items.length === 0 ? (
+            <div style={{ fontSize: 11, color: "#9CA3AF" }}>暂无沟通记录</div>
+          ) : Array.isArray(items) ? (
+            items.map((entry) => {
+              const statusLabel =
+                entry?.source === "special_request"
+                  ? communicationSpecialStatusLabel(entry)
+                  : "";
+              const bodyText = entry?.text || null;
+              const noteText =
+                entry?.source === "special_request" ? entry?.note || null : null;
+              const deliverableAttachment =
+                entry?.source === "deliverable" ? entry?.attachment || null : null;
+              const specialAttachments =
+                entry?.source === "special_request"
+                  ? Array.isArray(entry?.attachments)
+                    ? entry.attachments
+                    : []
+                  : [];
+              return (
+                <div
+                  key={entry.key}
+                  style={{
+                    fontSize: 11,
+                    borderLeft: "2px solid #E5E7EB",
+                    paddingLeft: 8,
+                    color: "#4B5563",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      color: "#374151",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                      alignItems: "baseline",
+                    }}
+                  >
+                    <span>{communicationEntryHeadline(entry)}</span>
+                    {statusLabel ? (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          padding: "1px 6px",
+                          borderRadius: 999,
+                          backgroundColor: "#EEF2FF",
+                          color: "#3730A3",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {statusLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                  {entry.at ? (
+                    <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 2 }}>
+                      {formatExecutionTimeBeijing(entry.at) || "—"}
+                    </div>
+                  ) : null}
+                  {bodyText ? (
+                    <div
+                      style={{
+                        marginTop: 2,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {bodyText}
+                    </div>
+                  ) : null}
+                  {noteText ? (
+                    <div
+                      style={{
+                        marginTop: 2,
+                        color: "#6B7280",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      执行摘要：{noteText}
+                    </div>
+                  ) : null}
+                  {entry.link ? (
+                    <div style={{ marginTop: 2, wordBreak: "break-all" }}>
+                      <a
+                        href={entry.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "#4F46E5" }}
+                      >
+                        {entry.link}
+                      </a>
+                    </div>
+                  ) : null}
+                  {deliverableAttachment ? (
+                    <div style={{ marginTop: 2 }}>
+                      {deliverableAttachment.filename || "附件"}
+                      {deliverableAttachment.inboundAttachmentId ? (
+                        <>
+                          {" "}
+                          <a
+                            href={inboundAttachmentPreviewUrl(
+                              deliverableAttachment.inboundAttachmentId
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#4F46E5" }}
+                          >
+                            预览
+                          </a>
+                          {" "}
+                          <a
+                            href={inboundAttachmentDownloadUrl(
+                              deliverableAttachment.inboundAttachmentId
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#4F46E5" }}
+                          >
+                            下载
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {specialAttachments.length ? (
+                    <div style={{ marginTop: 2 }}>
+                      附件：{specialAttachments.map((att) => att.fileName).join("、")}
+                    </div>
+                  ) : null}
+                  {entry.deadline ? (
+                    <div style={{ marginTop: 2 }}>
+                      截止：{formatExecutionTimeBeijing(entry.deadline) || entry.deadline}
+                    </div>
+                  ) : null}
+                  {entry.promoCode ? (
+                    <div style={{ marginTop: 2 }}>投流码: {entry.promoCode}</div>
+                  ) : null}
+                </div>
+              );
+            })
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** 执行进度卡片：分析类长文默认两行，可展开；展开后可选 Markdown（sanitize） */
 function executionProgressCollapsibleText(raw) {
   if (raw == null || raw === "") return "—";
@@ -1533,6 +1848,7 @@ function ApproveQuoteContentBriefModal({
 
 /** 执行进度 Tab 下单条红人卡片（按阶段展示字段） */
 function ExecutionProgressRow({
+  campaignId,
   stageKey,
   item,
   needSample,
@@ -1543,8 +1859,7 @@ function ExecutionProgressRow({
   highlightUsername,
 }) {
   const [scriptContentExpanded, setScriptContentExpanded] = React.useState(false);
-  const [deliverablesExpanded, setDeliverablesExpanded] = React.useState(false);
-  const [negExpanded, setNegExpanded] = React.useState(false);
+  const [communicationExpanded, setCommunicationExpanded] = React.useState(false);
   const [contactProfileExpanded, setContactProfileExpanded] = React.useState(false);
   const [contactReasonExpanded, setContactReasonExpanded] = React.useState(true);
   const [pendingReasonExpanded, setPendingReasonExpanded] = React.useState(true);
@@ -1552,7 +1867,6 @@ function ExecutionProgressRow({
   const [counterCurrency, setCounterCurrency] = React.useState("USD");
   const [counterReason, setCounterReason] = React.useState("");
   const [counterSubmitted, setCounterSubmitted] = React.useState(false);
-  const [highlightQuoteAt, setHighlightQuoteAt] = React.useState(null);
   const [approveBriefOpen, setApproveBriefOpen] = React.useState(false);
   const [approvePrechecking, setApprovePrechecking] = React.useState(false);
   const [approveChargePreview, setApproveChargePreview] = React.useState(null);
@@ -1564,7 +1878,6 @@ function ExecutionProgressRow({
 
   React.useEffect(() => {
     setCounterSubmitted(false);
-    setHighlightQuoteAt(null);
   }, [item.id]);
   const platform = resolveInfluencerPlatform(item);
   const profileUrl = buildInfluencerProfileUrl(item);
@@ -2051,85 +2364,6 @@ function ExecutionProgressRow({
           ) : null}
           {labelRow("eCPM", ecpmDisplay)}
 
-          {quoteNegotiation.length > 0 && (
-            <div style={{ marginTop: 4 }}>
-              <button
-                type="button"
-                onClick={() => setNegExpanded(!negExpanded)}
-                style={{
-                  fontSize: 11,
-                  color: "#4F46E5",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              >
-                {negExpanded ? "收起砍价记录" : `展开砍价记录（${quoteNegotiation.length}）`}
-              </button>
-              {negExpanded && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                  }}
-                >
-                  {[...quoteNegotiation].reverse().map((entry, idx) => {
-                    const isHighlighted =
-                      highlightQuoteAt && entry.at === highlightQuoteAt;
-                    const roleLabel =
-                      entry.role === "advertiser"
-                        ? "广告主"
-                        : entry.role === "influencer"
-                        ? "红人"
-                        : entry.role || "—";
-                    const typeLabel =
-                      entry.type === "counter"
-                        ? "还价"
-                        : entry.type === "quote_rejected"
-                        ? "拒绝报价"
-                        : entry.type === "reopen"
-                        ? "撤销拒绝"
-                        : entry.type || "";
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          fontSize: 11,
-                          borderLeft: "2px solid #E5E7EB",
-                          paddingLeft: 8,
-                          color: "#4B5563",
-                          backgroundColor: isHighlighted ? "#ECFDF5" : "transparent",
-                          transition: "background-color 200ms ease",
-                        }}
-                      >
-                        <div style={{ fontWeight: 600, color: "#374151" }}>
-                          {roleLabel}
-                          {typeLabel ? ` · ${typeLabel}` : ""}
-                          {entry.amount != null && Number.isFinite(Number(entry.amount))
-                            ? ` · ${Number(entry.amount)} ${entry.currency || item.currency || "USD"}`
-                            : ""}
-                        </div>
-                        {entry.at ? (
-                          <div style={{ fontSize: 10, color: "#9CA3AF" }}>
-                            {formatExecutionTimeBeijing(entry.at) || "—"}
-                          </div>
-                        ) : null}
-                        {entry.reason ? (
-                          <div style={{ marginTop: 2, whiteSpace: "pre-wrap" }}>
-                            {entry.reason}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
           {canApproveReject && (
             <div
               style={{
@@ -2221,8 +2455,7 @@ function ExecutionProgressRow({
                     setCounterAmount("");
                     setCounterReason("");
                     setCounterSubmitted(true);
-                    setNegExpanded(true);
-                    setHighlightQuoteAt(result.quoteEntry?.at || null);
+                    setCommunicationExpanded(true);
                   }}
                   style={{
                     padding: "4px 10px",
@@ -2411,136 +2644,6 @@ function ExecutionProgressRow({
           {isVideoBucket ? (
             <>{labelRow("最新视频", renderDeliverableRef(latestVideoEntry))}</>
           ) : null}
-          {deliverablesTimeline.length > 0 && (
-            <div style={{ marginTop: 4 }}>
-              <button
-                type="button"
-                onClick={() => setDeliverablesExpanded(!deliverablesExpanded)}
-                style={{
-                  fontSize: 11,
-                  color: "#4F46E5",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              >
-                {deliverablesExpanded
-                  ? "收起交付时间线"
-                  : `展开交付时间线（${deliverablesTimeline.length}）`}
-              </button>
-              {deliverablesExpanded && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                  }}
-                >
-                  {[...deliverablesTimeline].reverse().map((entry, idx) => {
-                    const roleLabel =
-                      entry.role === "advertiser"
-                        ? "品牌方"
-                        : entry.role === "influencer"
-                        ? "红人"
-                        : entry.role === "system"
-                        ? "系统"
-                        : entry.role || "—";
-                    const previewHref = entry.attachment?.inboundAttachmentId
-                      ? inboundAttachmentPreviewUrl(
-                          entry.attachment.inboundAttachmentId
-                        )
-                      : null;
-                    const downloadHref = entry.attachment?.inboundAttachmentId
-                      ? inboundAttachmentDownloadUrl(
-                          entry.attachment.inboundAttachmentId
-                        )
-                      : null;
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          fontSize: 11,
-                          borderLeft: "2px solid #E5E7EB",
-                          paddingLeft: 8,
-                          color: "#4B5563",
-                        }}
-                      >
-                        <div style={{ fontWeight: 600, color: "#374151" }}>
-                          {roleLabel} · {executionDeliverableTypeLabel(entry)}
-                        </div>
-                        {entry.at ? (
-                          <div style={{ fontSize: 10, color: "#9CA3AF" }}>
-                            {formatExecutionTimeBeijing(entry.at) || "—"}
-                          </div>
-                        ) : null}
-                        {entry.link ? (
-                          <div style={{ marginTop: 2, wordBreak: "break-all" }}>
-                            <a
-                              href={entry.link}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ color: "#4F46E5" }}
-                            >
-                              {entry.link}
-                            </a>
-                          </div>
-                        ) : null}
-                        {entry.attachment ? (
-                          <div style={{ marginTop: 2 }}>
-                            {entry.attachment.filename || "附件"}
-                            {previewHref ? (
-                              <>
-                                {" "}
-                                <a
-                                  href={previewHref}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  style={{ color: "#4F46E5" }}
-                                >
-                                  预览
-                                </a>
-                              </>
-                            ) : null}
-                            {downloadHref ? (
-                              <>
-                                {" "}
-                                <a
-                                  href={downloadHref}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  style={{ color: "#4F46E5" }}
-                                >
-                                  下载
-                                </a>
-                              </>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {entry.content ? (
-                          <div
-                            style={{
-                              marginTop: 2,
-                              whiteSpace: "pre-wrap",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {entry.content}
-                          </div>
-                        ) : null}
-                        {entry.promoCode ? (
-                          <div style={{ marginTop: 2 }}>
-                            投流码: {entry.promoCode}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
           {draftReviewable && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button
@@ -2625,6 +2728,27 @@ function ExecutionProgressRow({
           {labelRow("CPM", item.cpm != null ? String(item.cpm) : "—")}
         </>
       )}
+      {(() => {
+        const embeddedCount =
+          (Array.isArray(quoteNegotiation) ? quoteNegotiation.length : 0) +
+          (Array.isArray(deliverablesTimeline)
+            ? deliverablesTimeline.length
+            : 0);
+        const sectionCount = Math.max(
+          Number(item.communicationCount || 0),
+          embeddedCount
+        );
+        if (sectionCount <= 0) return null;
+        return (
+          <ExecutionProgressCommunicationSection
+            campaignId={campaignId}
+            username={username}
+            count={sectionCount}
+            expanded={communicationExpanded}
+            onToggle={() => setCommunicationExpanded((v) => !v)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -9388,6 +9512,7 @@ export default function HomePage() {
                                         visibleExecutionItems.map((item) => (
                                           <ExecutionProgressRow
                                             key={item.id}
+                                            campaignId={resolvedCampaignId}
                                             stageKey="pendingPrice"
                                             item={item}
                                             needSample={needSampleFlag}
@@ -9407,6 +9532,7 @@ export default function HomePage() {
                                       visibleExecutionItems.map((item) => (
                                         <ExecutionProgressRow
                                           key={item.id}
+                                          campaignId={resolvedCampaignId}
                                           stageKey="pendingPrice"
                                           item={item}
                                           needSample={needSampleFlag}
@@ -9427,6 +9553,7 @@ export default function HomePage() {
                                     visibleExecutionItems.map((item) => (
                                       <ExecutionProgressRow
                                         key={item.id}
+                                        campaignId={resolvedCampaignId}
                                         stageKey={
                                           activePendingSampleSubTab === "confirmInfo"
                                             ? "pendingShippingAddress"
@@ -9450,6 +9577,7 @@ export default function HomePage() {
                                     visibleExecutionItems.map((item) => (
                                       <ExecutionProgressRow
                                         key={item.id}
+                                        campaignId={resolvedCampaignId}
                                         stageKey="pendingDraft"
                                         item={item}
                                         needSample={needSampleFlag}
@@ -9464,6 +9592,7 @@ export default function HomePage() {
                                   visibleExecutionItems.map((item) => (
                                     <ExecutionProgressRow
                                       key={item.id}
+                                      campaignId={resolvedCampaignId}
                                       stageKey={currentStage.key}
                                       item={item}
                                       needSample={needSampleFlag}
