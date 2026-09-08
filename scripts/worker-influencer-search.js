@@ -208,6 +208,29 @@ function withTaskTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
+let workerRestartScheduled = false;
+
+/** 是否应重启 worker 来释放可能泄漏的 CDP 锁/挂起的任务上下文。 */
+function shouldRestartWorkerOnFailure(err) {
+  const msg = String(err?.message || err || "");
+  return (
+    /cdp_9222_lock_timeout|task:\d+ timeout|timeout \d+ms|innertube 会话不可用|CDP 上下文可能已断开|stuck_reclaimed/i.test(
+      msg
+    )
+  );
+}
+
+/** 退出当前进程；guard/systemd 会自动拉起新 worker，从而清空进程内 CDP 锁。 */
+function scheduleWorkerRestart(reason) {
+  if (workerRestartScheduled) return;
+  workerRestartScheduled = true;
+  console.warn(
+    `[worker-influencer-search] 检测到可能泄漏的 CDP 锁/挂起上下文，2s 后重启 worker: ${reason}`
+  );
+  const timer = setTimeout(() => process.exit(1), 2000);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
 function resolveSearchTaskTimeoutMs() {
   return Math.max(
     60_000,
@@ -1250,6 +1273,9 @@ async function processImportTaskRow(task) {
         e?.message || e
       );
     });
+    if (shouldRestartWorkerOnFailure(err)) {
+      scheduleWorkerRestart(`import task ${task.id}: ${String(err?.message || err).slice(0, 180)}`);
+    }
   }
 }
 
@@ -1499,6 +1525,11 @@ async function platformLoop(platformSlug) {
               "failed",
               `task_timeout_or_error: ${String(err?.message || err).slice(0, 140)}`
             ).catch(() => {});
+            if (shouldRestartWorkerOnFailure(err)) {
+              scheduleWorkerRestart(
+                `[${platformSlug}] task ${task.id}: ${String(err?.message || err).slice(0, 180)}`
+              );
+            }
           }
 
           // 任务边界轮换 tk-ip 会话（换 sid = 换 IP，0 流量），下一个任务用新 IP。
