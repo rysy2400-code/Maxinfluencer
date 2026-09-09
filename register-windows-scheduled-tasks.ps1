@@ -26,6 +26,7 @@ function Register-MaxinNodeRepeatMinutes {
     [string]$ScriptRelative,
     [int]$Minutes,
     [string]$ExtraArgs = "",
+    [switch]$DirectNode,
     # 各任务启动相位错开，避免同一秒并发拉起多个 node.exe 时偶发
     # ERROR_USER_MAPPED_FILE (0x800710E0) 启动失败并卡死任务实例。
     [int]$OffsetSeconds = 0
@@ -40,8 +41,13 @@ function Register-MaxinNodeRepeatMinutes {
   # cmd 包装后任务可稳定启动，且 cmd /c 会透传 node 的退出码。
   $extra = ""
   if ($ExtraArgs) { $extra = " " + $ExtraArgs }
-  $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module ' + $ScriptRelative + $extra + '"'
-  $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $Root
+  if ($DirectNode) {
+    $arg = "--experimental-default-type=module " + $ScriptRelative + $extra
+    $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $arg -WorkingDirectory $Root
+  } else {
+    $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module ' + $ScriptRelative + $extra + '"'
+    $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $Root
+  }
   $start = (Get-Date).AddMinutes(1).AddSeconds($OffsetSeconds)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
@@ -56,8 +62,8 @@ Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerEmailEvents" -ScriptRela
 # 旧版“全量消费”计划任务不再使用，避免与以下两个分流任务重复消费
 $legacyAgentTask = "Maxinfluencer-ProcessInfluencerAgentEvents"
 Unregister-ScheduledTask -TaskName $legacyAgentTask -Confirm:$false -ErrorAction SilentlyContinue
-Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsUrgent" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 21 -ExtraArgs "--mode=urgent"
-Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsOutreach" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 29 -ExtraArgs "--mode=outreach"
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsUrgent" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 21 -ExtraArgs "--mode=urgent" -DirectNode
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsOutreach" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 29 -ExtraArgs "--mode=outreach" -DirectNode
 Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1 -OffsetSeconds 35
 Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 30 -OffsetSeconds 45
 Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10 -OffsetSeconds 55
