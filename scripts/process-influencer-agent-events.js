@@ -127,17 +127,97 @@ async function getExecutionPlatformInfluencerId(campaignId, tiktokUsername) {
   return v != null && String(v).trim() !== "" ? String(v).trim() : null;
 }
 
-async function fetchPendingInfluencerAgentEvents(limit = 20) {
+/** 事务型/高优先级事件（与批量 first_outreach 分流消费） */
+export const TRANSACTIONAL_AGENT_EVENT_TYPES = [
+  "advertiser_execution_followup",
+  "ask_influencer_special_request",
+  "outbound_email",
+];
+
+/** 批量首封邀约，允许排队等待 */
+export const OUTREACH_AGENT_EVENT_TYPES = ["first_outreach"];
+
+const AGENT_EVENT_MODE_VALUES = new Set(["all", "urgent", "outreach"]);
+
+/**
+ * 解析当前进程消费模式：
+ * - urgent：只消费 advertiser_execution_followup / ask_influencer_special_request / outbound_email；
+ * - outreach：只消费 first_outreach；
+ * - all：兼容旧调用，消费全部事件（同一张表里不应同时常驻 all 与 urgent/outreach，避免重复消费）。
+ */
+export function resolveAgentEventMode() {
+  const argMode = (process.argv || [])
+    .find((a) => a.startsWith("--mode="))
+    ?.split("=")[1]
+    ?.trim()
+    .toLowerCase();
+  const envMode = String(process.env.INFLUENCER_AGENT_EVENT_MODE || "")
+    .trim()
+    .toLowerCase();
+  const mode = argMode || envMode || "all";
+  if (!AGENT_EVENT_MODE_VALUES.has(mode)) {
+    console.warn(
+      `[ProcessInfluencerAgentEvents] 未知 mode="${mode}"，回退 all。`
+    );
+    return "all";
+  }
+  return mode;
+}
+
+function eventTypesForMode(mode) {
+  if (mode === "urgent") return TRANSACTIONAL_AGENT_EVENT_TYPES;
+  if (mode === "outreach") return OUTREACH_AGENT_EVENT_TYPES;
+  return null; // all
+}
+
+/**
+ * 原子认领 pending 事件：先取候选 ID，再逐条用
+ * `WHERE id=? AND status='pending'` 条件更新为 processing。
+ * 两个消费进程同时运行时，同一事件只会有一个进程更新成功，避免重复发信。
+ */
+async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
   const n = Math.min(50, Math.max(1, Number(limit) || 20));
+  const types = eventTypesForMode(mode);
+  const typeSql = types?.length
+    ? `AND event_type IN (${types.map(() => "?").join(",")})`
+    : "";
+  const selectParams = types?.length ? [...types] : [];
+
+  const candidates = await queryTikTok(
+    `
+    SELECT id
+    FROM tiktok_influencer_agent_event
+    WHERE status = 'pending'
+      ${typeSql}
+    ORDER BY created_at ASC
+    LIMIT ${n}
+  `,
+    selectParams
+  );
+
+  const claimedIds = [];
+  for (const row of candidates || []) {
+    const upd = await queryTikTok(
+      `
+      UPDATE tiktok_influencer_agent_event
+      SET status = 'processing', updated_at = NOW()
+      WHERE id = ? AND status = 'pending'
+    `,
+      [row.id]
+    );
+    if (Number(upd?.affectedRows || 0) > 0) claimedIds.push(row.id);
+  }
+
+  if (!claimedIds.length) return [];
+  const idPlaceholders = claimedIds.map(() => "?").join(",");
   const rows = await queryTikTok(
     `
     SELECT *
     FROM tiktok_influencer_agent_event
-    WHERE status = 'pending'
-    ORDER BY created_at ASC
-    LIMIT ${n}
+    WHERE id IN (${idPlaceholders})
+    ORDER BY created_at ASC, id ASC
   `,
-    []
+    claimedIds
   );
   return rows || [];
 }
@@ -985,14 +1065,17 @@ async function processInfluencerAgentEvent(eventRow) {
 }
 
 async function main() {
-  const events = await fetchPendingInfluencerAgentEvents(20);
+  const mode = resolveAgentEventMode();
+  const events = await fetchPendingInfluencerAgentEvents(20, mode);
   if (!events.length) {
-    console.log("[ProcessInfluencerAgentEvents] 当前没有 pending 事件。");
+    console.log(
+      `[ProcessInfluencerAgentEvents] mode=${mode} 当前没有 pending 事件。`
+    );
     return;
   }
 
   console.log(
-    `[ProcessInfluencerAgentEvents] 准备处理 ${events.length} 条 pending 事件。`
+    `[ProcessInfluencerAgentEvents] mode=${mode} 准备处理 ${events.length} 条 pending 事件。`
   );
 
   for (const ev of events) {

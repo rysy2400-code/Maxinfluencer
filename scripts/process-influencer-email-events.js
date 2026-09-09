@@ -101,6 +101,31 @@ function extractLinksFromEmailBody(bodyText) {
 
   return { draftLink: null, videoLink: null };
 }
+
+/** 归一化 LLM 返回的双语邮件摘要：{ original: 邮件原文语言摘要, zh: 中文摘要 } */
+function normalizeEmailSummary(raw) {
+  if (raw == null) return null;
+  let original = null;
+  let zh = null;
+  if (typeof raw === "string") {
+    original = raw.trim() || null;
+  } else if (typeof raw === "object") {
+    original =
+      typeof raw.original === "string" && raw.original.trim()
+        ? raw.original.trim()
+        : typeof raw.en === "string" && raw.en.trim()
+          ? raw.en.trim()
+          : null;
+    zh =
+      typeof raw.zh === "string" && raw.zh.trim()
+        ? raw.zh.trim()
+        : typeof raw.chinese === "string" && raw.chinese.trim()
+          ? raw.chinese.trim()
+          : null;
+  }
+  if (!original && !zh) return null;
+  return { original, zh };
+}
 import {
   buildActionMessageId,
   buildTraceIdFromInboundMessageId,
@@ -688,12 +713,14 @@ async function applyDecision(decision, event, executions) {
           upd.deliverable.attachmentFilename.trim()
             ? upd.deliverable.attachmentFilename.trim().slice(0, 255)
             : null,
+        emailSummary: normalizeEmailSummary(upd.deliverable.emailSummary),
       };
       if (
         deliverable.kind == null &&
         deliverable.content == null &&
         deliverable.link == null &&
-        deliverable.attachmentFilename == null
+        deliverable.attachmentFilename == null &&
+        deliverable.emailSummary == null
       ) {
         deliverable = null;
       }
@@ -1053,7 +1080,11 @@ ${influencerAgentBasePrompt}
           "type": "submitted|published_link",
           "content": "脚本/草稿正文（从邮件正文或附件提取，去掉寒暄客套；无正文可省略）",
           "link": "https://...（与 draftLink/videoLink 一致，可选）",
-          "attachmentFilename": "附件文件名（脚本/草稿以附件提交时填，须与 email.attachments[].filename 完全一致，可选）"
+          "attachmentFilename": "附件文件名（脚本/草稿以附件提交时填，须与 email.attachments[].filename 完全一致，可选）",
+          "emailSummary": {
+            "original": "红人来信原文语言的 1-2 句摘要：这封邮件提交了什么、在等什么",
+            "zh": "同一摘要的中文版本，供内部阅读"
+          }
         },
         "promoCode": "投流码（红人提交最终发布链接时如有，可选）",
         "shippingInfo": {
@@ -1128,6 +1159,7 @@ ${influencerAgentBasePrompt}
   - kind="script"；content 填从邮件正文/附件提取的脚本正文（保留 ON-SCREEN HOOK / VOICEOVER / VISUAL 等完整结构，去掉寒暄客套）；脚本为附件时 attachmentFilename 须与 email.attachments[].filename 完全一致；
   - 脚本以链接形式提供时，link 与 draftLink 一致。
 - 红人提交**视频草稿**时，deliverable.kind="video_draft"，link=draftLink；如草稿是附件文件，attachmentFilename 填附件文件名。
+- 红人提交脚本或视频草稿时，deliverable.emailSummary **必须**填写：original 使用红人来信原文语言（如邮件为日文就用日文，不要翻译成英文），zh 用中文表达同一内容，供内部阅读；只概括邮件提交了什么、需要什么，不要粘贴整封邮件正文。
 - 草稿已通过后红人提交**最终发布视频链接**时，deliverable.kind="published"、type="published_link"、link=videoLink；邮件/正文里如有投流码、推广码或 UTM 等，填 promoCode（没有则省略）。
 
 【报价阶段 · 与红人沟通的纪律（极其重要）】

@@ -307,6 +307,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         type: "submitted",
         content: payload.deliverable?.content || null,
         link: effectiveLink,
+        emailSummary: payload.deliverable?.emailSummary || null,
         attachment: attachmentMeta
           ? {
               inboundAttachmentId: attachmentMeta.inboundAttachmentId,

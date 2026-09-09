@@ -1445,6 +1445,89 @@ function ExecutionProgressCommunicationSection({
                       {bodyText}
                     </div>
                   ) : null}
+                  {entry.emailSummary ? (
+                    <div
+                      style={{
+                        marginTop: 4,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        background: "rgba(79,70,229,0.05)",
+                      }}
+                    >
+                      <span style={{ fontWeight: 700, color: "#3730A3" }}>
+                        邮件摘要
+                      </span>
+                      {entry.emailSummary.original ? (
+                        <div style={{ marginTop: 2, color: "#374151" }}>
+                          <span style={{ color: "#6B7280" }}>原文摘要：</span>
+                          {entry.emailSummary.original}
+                        </div>
+                      ) : null}
+                      {entry.emailSummary.zh ? (
+                        <div
+                          style={{
+                            marginTop: 2,
+                            color: "#6B7280",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>中文摘要：</span>
+                          {entry.emailSummary.zh}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {entry.emailReferences?.imageLinks?.length ||
+                  entry.emailReferences?.imageAttachments?.length ? (
+                    <div
+                      style={{
+                        marginTop: 4,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        background: "rgba(16,185,129,0.05)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 3,
+                      }}
+                    >
+                      <span style={{ fontWeight: 700, color: "#047857" }}>
+                        邮件参考图
+                      </span>
+                      {(entry.emailReferences?.imageLinks || []).map(
+                        (link, linkIdx) => (
+                          <a
+                            key={`img-link-${linkIdx}`}
+                            href={link}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              color: "#4F46E5",
+                              wordBreak: "break-all",
+                            }}
+                          >
+                            {link}
+                          </a>
+                        )
+                      )}
+                      {(entry.emailReferences?.imageAttachments || []).map(
+                        (att, attIdx) => {
+                          const previewHref = inboundAttachmentPreviewUrl(
+                            att.inboundAttachmentId
+                          );
+                          return (
+                            <a
+                              key={`img-att-${attIdx}`}
+                              href={previewHref}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: "#4F46E5" }}
+                            >
+                              {att.filename || `参考图 ${attIdx + 1}`}
+                            </a>
+                          );
+                        }
+                      )}
+                    </div>
+                  ) : null}
                   {noteText ? (
                     <div
                       style={{
@@ -2174,7 +2257,9 @@ function ExecutionProgressRow({
       String(latestFeedbackEntry.at || "") >= String(lastSubmittedEntry.at || ""));
   const latestScript =
     latestScriptEntry ||
-    (draftLink ? { link: draftLink, attachment: null, content: null } : null);
+    (isScriptBucket && draftLink
+      ? { link: draftLink, attachment: null, content: null }
+      : null);
 
   const renderDeliverableRef = (entry) => {
     if (!entry) return "—";
@@ -2184,9 +2269,11 @@ function ExecutionProgressRow({
     const downloadHref = entry.attachment?.inboundAttachmentId
       ? inboundAttachmentDownloadUrl(entry.attachment.inboundAttachmentId)
       : null;
+    const elements = [];
     if (entry.link) {
-      return (
+      elements.push(
         <a
+          key="link"
           href={entry.link}
           target="_blank"
           rel="noreferrer"
@@ -2197,8 +2284,8 @@ function ExecutionProgressRow({
       );
     }
     if (entry.attachment) {
-      return (
-        <span>
+      elements.push(
+        <span key="attachment">
           {entry.attachment.filename || "附件"}
           {previewHref ? (
             <>
@@ -2229,7 +2316,19 @@ function ExecutionProgressRow({
         </span>
       );
     }
-    return "—";
+    return elements.length ? (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}
+      >
+        {elements}
+      </div>
+    ) : (
+      "—"
+    );
   };
 
   const labelRow = (k, v) => (

@@ -25,6 +25,7 @@ function Register-MaxinNodeRepeatMinutes {
     [string]$Name,
     [string]$ScriptRelative,
     [int]$Minutes,
+    [string]$ExtraArgs = "",
     # 各任务启动相位错开，避免同一秒并发拉起多个 node.exe 时偶发
     # ERROR_USER_MAPPED_FILE (0x800710E0) 启动失败并卡死任务实例。
     [int]$OffsetSeconds = 0
@@ -37,7 +38,9 @@ function Register-MaxinNodeRepeatMinutes {
   # 用 cmd.exe 包装 node：直接以 node.exe 为任务动作在部分 Windows 机器上会偶发
   # ERROR_USER_MAPPED_FILE (0x800710E0) 启动失败并卡死任务实例（实测 0x800710E0）；
   # cmd 包装后任务可稳定启动，且 cmd /c 会透传 node 的退出码。
-  $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module ' + $ScriptRelative + '"'
+  $extra = ""
+  if ($ExtraArgs) { $extra = " " + $ExtraArgs }
+  $arg = '/c ""' + $nodeExe + '" --experimental-default-type=module ' + $ScriptRelative + $extra + '"'
   $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $Root
   $start = (Get-Date).AddMinutes(1).AddSeconds($OffsetSeconds)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
@@ -50,9 +53,13 @@ Write-Host "[register-tasks] Root=$Root Node=$nodeExe"
 
 Register-MaxinNodeRepeatMinutes -Name "PollInfluencerReplies" -ScriptRelative "scripts\poll-influencer-replies.js" -Minutes 1 -OffsetSeconds 5
 Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerEmailEvents" -ScriptRelative "scripts\process-influencer-email-events.js" -Minutes 1 -OffsetSeconds 15
-Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEvents" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 25
+# 旧版“全量消费”计划任务不再使用，避免与以下两个分流任务重复消费
+$legacyAgentTask = "Maxinfluencer-ProcessInfluencerAgentEvents"
+Unregister-ScheduledTask -TaskName $legacyAgentTask -Confirm:$false -ErrorAction SilentlyContinue
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsUrgent" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 21 -ExtraArgs "--mode=urgent"
+Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsOutreach" -ScriptRelative "scripts\process-influencer-agent-events.js" -Minutes 1 -OffsetSeconds 29 -ExtraArgs "--mode=outreach"
 Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1 -OffsetSeconds 35
 Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 30 -OffsetSeconds 45
 Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10 -OffsetSeconds 55
 
-Write-Host "[register-tasks] Done (6 tasks)."
+Write-Host "[register-tasks] Done (7 tasks)."

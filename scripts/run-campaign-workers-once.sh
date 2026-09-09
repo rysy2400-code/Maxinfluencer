@@ -12,7 +12,8 @@ run() {
 
 run "process-influencer-email-events.js"
 run "process-campaign-agent-events.js"
-run "process-influencer-agent-events.js"
+run "process-influencer-agent-events.js --mode=urgent"
+run "process-influencer-agent-events.js --mode=outreach"
 run "process-published-video-metrics.js"
 
 echo ""
