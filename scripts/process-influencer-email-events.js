@@ -126,6 +126,56 @@ function normalizeEmailSummary(raw) {
   if (!original && !zh) return null;
   return { original, zh };
 }
+
+function normalizeDeliverableTextForCompare(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function latestSubmittedDeliverable(lastEvent, kind) {
+  const timeline = Array.isArray(lastEvent?.deliverablesTimeline)
+    ? lastEvent.deliverablesTimeline
+    : [];
+  return (
+    [...timeline]
+      .reverse()
+      .find(
+        (e) =>
+          e?.kind === kind &&
+          e?.role === "influencer" &&
+          e?.type === "submitted"
+      ) || null
+  );
+}
+
+/**
+ * 判断“只有邮件正文、没有新附件/新链接”的重复脚本提交：
+ * 红人常把 PDF/脚本里已有的内容再粘贴一次，正文相同且仍引用同一条旧链接时，
+ * 不应再追加一条新的 submitted 交付记录。
+ */
+function isDuplicateBodyOnlyDeliverable({ deliverable, exec }) {
+  if (!deliverable || !deliverable.content) return false;
+  if (deliverable.attachmentFilename) return false;
+  if (!["script", "video_draft"].includes(deliverable.kind)) return false;
+
+  const latest = latestSubmittedDeliverable(exec?.lastEvent, deliverable.kind);
+  if (!latest?.content) return false;
+
+  const contentSame =
+    normalizeDeliverableTextForCompare(latest.content) ===
+    normalizeDeliverableTextForCompare(deliverable.content);
+  if (!contentSame) return false;
+
+  // 没有新文件时，只有链接仍是旧链接才判定为重复便利粘贴；
+  // 如果红人给了一条全新的脚本/草稿链接，即使正文相同也应视为重新提交。
+  const oldLink = String(latest.link || "").trim();
+  const newLink = String(deliverable.link || "").trim();
+  if (oldLink && newLink && oldLink !== newLink) return false;
+  if (newLink && !oldLink) return false;
+  return true;
+}
 import {
   buildActionMessageId,
   buildTraceIdFromInboundMessageId,
@@ -726,6 +776,16 @@ async function applyDecision(decision, event, executions) {
       }
     }
 
+    if (
+      deliverable &&
+      isDuplicateBodyOnlyDeliverable({ deliverable, exec })
+    ) {
+      console.warn(
+        `[ProcessInfluencerEmailEvents] 拦截重复便利粘贴：${campaignId}/${exec?.influencerId} 未新增附件/链接，正文与最新 ${deliverable.kind} 提交相同，不追加 submitted。`
+      );
+      continue;
+    }
+
     let promoCode =
       typeof upd.promoCode === "string" && upd.promoCode.trim()
         ? upd.promoCode.trim().slice(0, 255)
@@ -1073,13 +1133,13 @@ ${influencerAgentBasePrompt}
         "newStage": "quote_submitted",
         "note": "简要中文说明你为什么这么做",
         "flatFeeUSD": 200,
-        "draftLink": "https://www.tiktok.com/@xxx/video/123",
+        "draftLink": "https://...（真实脚本/草稿链接；禁止填参考图链接，可选）",
         "videoLink": "https://www.tiktok.com/@xxx/video/456",
         "deliverable": {
           "kind": "script|video_draft|published",
           "type": "submitted|published_link",
           "content": "脚本/草稿正文（从邮件正文或附件提取，去掉寒暄客套；无正文可省略）",
-          "link": "https://...（与 draftLink/videoLink 一致，可选）",
+          "link": "真实的脚本/草稿链接；禁止填邮件里 Google Drive 参考图链接（可选）",
           "attachmentFilename": "附件文件名（脚本/草稿以附件提交时填，须与 email.attachments[].filename 完全一致，可选）",
           "emailSummary": {
             "original": "红人来信原文语言的 1-2 句摘要：这封邮件提交了什么、在等什么",
@@ -1154,11 +1214,13 @@ ${influencerAgentBasePrompt}
 - 只有当当前 activeExecution.stage 为 pending_shipping_address，且你能填出完整 shippingInfo（Full Name、Country、City、Address Line、Post/Zip Code、Telephone；State/Province 可选）时，才允许 newStage=pending_sample。
 - 红人同意报价或 counter 报价时，newStage 必须为 quote_submitted。
 - 红人提交草稿时用 draftLink 字段（不要用 videoLink）；只有最终发布视频才用 videoLink。
-- draftLink 可以是 TikTok、Google Drive、Dropbox、Box、WeTransfer、MediaFire、iCloud 等任意可访问链接；从正文/附件识别到链接时务必填入 draftLink（published 阶段交最终稿除外，才用 videoLink）。
+- draftLink 只能是脚本/提案/草稿文件本身的可访问链接（如 TikTok 视频草稿、真实文档链接）；正文里出现的 Google Drive 参考图等图片链接**不要**填入 draftLink。
 - 红人提交**文字脚本**（写在邮件正文、作为附件文件、或给链接）时，除 draftLink 外**必须**返回 deliverable：
   - kind="script"；content 填从邮件正文/附件提取的脚本正文（保留 ON-SCREEN HOOK / VOICEOVER / VISUAL 等完整结构，去掉寒暄客套）；脚本为附件时 attachmentFilename 须与 email.attachments[].filename 完全一致；
   - 脚本以链接形式提供时，link 与 draftLink 一致。
 - 红人提交**视频草稿**时，deliverable.kind="video_draft"，link=draftLink；如草稿是附件文件，attachmentFilename 填附件文件名。
+- 脚本/草稿以 PDF、Word、图片等附件提交时，**必须**填 deliverable.attachmentFilename；**不要把邮件正文里的 Google Drive 参考图链接当作脚本链接**，只有红人明确给出脚本/草稿文件本身的链接时才填 deliverable.link/draftLink。
+- 如果红人没有发新文件、也没有新链接，只是把当前最新脚本/草稿正文重复粘贴（例如邮件写 “already included in the PDF”“pasted for convenience”“please share”），**禁止**新增 deliverable，也不要把 stage 从 script_review/video_review 再推进；如需回复只返回 outboundEmails。
 - 红人提交脚本或视频草稿时，deliverable.emailSummary **必须**填写：original 使用红人来信原文语言（如邮件为日文就用日文，不要翻译成英文），zh 用中文表达同一内容，供内部阅读；只概括邮件提交了什么、需要什么，不要粘贴整封邮件正文。
 - 草稿已通过后红人提交**最终发布视频链接**时，deliverable.kind="published"、type="published_link"、link=videoLink；邮件/正文里如有投流码、推广码或 UTM 等，填 promoCode（没有则省略）。
 

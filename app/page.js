@@ -2257,9 +2257,7 @@ function ExecutionProgressRow({
       String(latestFeedbackEntry.at || "") >= String(lastSubmittedEntry.at || ""));
   const latestScript =
     latestScriptEntry ||
-    (isScriptBucket && draftLink
-      ? { link: draftLink, attachment: null, content: null }
-      : null);
+    null;
 
   const renderDeliverableRef = (entry) => {
     if (!entry) return "—";
@@ -2269,23 +2267,9 @@ function ExecutionProgressRow({
     const downloadHref = entry.attachment?.inboundAttachmentId
       ? inboundAttachmentDownloadUrl(entry.attachment.inboundAttachmentId)
       : null;
-    const elements = [];
-    if (entry.link) {
-      elements.push(
-        <a
-          key="link"
-          href={entry.link}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: "#4F46E5", wordBreak: "break-all" }}
-        >
-          {entry.link}
-        </a>
-      );
-    }
     if (entry.attachment) {
-      elements.push(
-        <span key="attachment">
+      return (
+        <span>
           {entry.attachment.filename || "附件"}
           {previewHref ? (
             <>
@@ -2316,19 +2300,22 @@ function ExecutionProgressRow({
         </span>
       );
     }
-    return elements.length ? (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-        }}
-      >
-        {elements}
-      </div>
-    ) : (
-      "—"
-    );
+    if (entry.link) {
+      return (
+        <a
+          href={entry.link}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "#4F46E5", wordBreak: "break-all" }}
+        >
+          {entry.link}
+        </a>
+      );
+    }
+    if (entry.content) {
+      return <span>正文脚本（见下方）</span>;
+    }
+    return "—";
   };
 
   const labelRow = (k, v) => (
@@ -2731,7 +2718,7 @@ function ExecutionProgressRow({
             </span>
           ) : null}
           {labelRow("最新脚本", renderDeliverableRef(latestScript))}
-          {latestScript?.content ? (
+          {latestScript?.content && !latestScript?.attachment ? (
             <ExecutionProgressCollapsibleRow
               label="脚本正文"
               text={latestScript.content}
