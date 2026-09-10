@@ -1,10 +1,7 @@
-import fs from "fs";
 import { NextResponse } from "next/server";
 import { requireBillingAccess } from "../../../../../../lib/auth/require-billing-access.js";
-import {
-  getInvoiceById,
-  resolveInvoicePdfPath,
-} from "../../../../../../lib/billing/invoice-dao.js";
+import { getInvoiceById } from "../../../../../../lib/billing/invoice-dao.js";
+import { loadInvoicePdf } from "../../../../../../lib/billing/invoice-pdf-store.js";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +20,15 @@ export async function GET(req, { params }) {
       return NextResponse.json({ success: false, error: "发票不存在" }, { status: 404 });
     }
 
-    const absPath = resolveInvoicePdfPath(row.pdf_storage_key);
-    if (!absPath || !fs.existsSync(absPath)) {
+    let pdf;
+    try {
+      pdf = await loadInvoicePdf(row);
+    } catch (error) {
+      console.error("[billing/invoices/pdf] 生成失败", row.id, error);
       return NextResponse.json({ success: false, error: "PDF 文件不存在" }, { status: 404 });
     }
 
-    const bytes = fs.readFileSync(absPath);
-    return new NextResponse(bytes, {
+    return new NextResponse(pdf.bytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
