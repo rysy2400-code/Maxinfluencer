@@ -22,7 +22,8 @@ function Write-Log($msg) {
 
 function Test-PortListening {
   param([Parameter(Mandatory = $true)][int]$Port)
-  return [bool](netstat -ano | Select-String "0\.0\.0\.0:$Port\s+0\.0\.0\.0:0\s+LISTENING")
+  # Next.js 可能只绑 IPv6（[::]:PORT），只看 0.0.0.0 会误判为「未监听」并重复拉起进程
+  return [bool](netstat -ano | Select-String "(0\.0\.0\.0|\[::\]|\[::1\]|\*):$Port\s+\S+\s+LISTENING")
 }
 
 function Start-DetachedNextOnPort {

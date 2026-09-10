@@ -28,24 +28,66 @@ function Invoke-Npm {
 
 function Test-PortListening {
   param([Parameter(Mandatory = $true)][int]$Port)
-  return [bool](netstat -ano | Select-String "0\.0\.0\.0:$Port\s+0\.0\.0\.0:0\s+LISTENING")
+  # Next.js 可能只绑 IPv6（[::]:PORT），只看 0.0.0.0 会误判为「未监听」
+  return [bool](netstat -ano | Select-String "(0\.0\.0\.0|\[::\]|\[::1\]|\*):$Port\s+\S+\s+LISTENING")
 }
 
 function Stop-OrphanNextOnPort {
   param([Parameter(Mandatory = $true)][int]$Port)
   Write-Host "[deploy-web] Stopping orphan next processes listening on port $Port..."
   try {
-    $lines = netstat -ano | Select-String "0\.0\.0\.0:$Port\s+0\.0\.0\.0:0\s+LISTENING"
+    $lines = netstat -ano | Select-String "(0\.0\.0\.0|\[::\]|\[::1\]|\*):$Port\s+\S+\s+LISTENING"
     foreach ($line in $lines) {
       $procId = ($line.ToString().Trim() -split '\s+')[-1]
       if ($procId -notmatch '^\d+$') { continue }
       $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
-      if ($proc -and $proc.CommandLine -match ('next" start -p ' + $Port)) {
+      if ($proc -and $proc.CommandLine -match ('next.*start -p ' + $Port)) {
         Stop-Process -Id ([int]$procId) -Force -ErrorAction SilentlyContinue
       }
     }
   } catch {}
   Start-Sleep -Seconds 2
+}
+
+<#
+部署期间必须暂停 ENSURE 计划任务（MaxinWebEnsure 每 2 分钟跑一次，SYSTEM 账户）。
+否则构建窗口内端口空闲时它会抢先起一个游离的 next start，pm2 随后启动就会
+EADDRINUSE（曾导致 maxin-web 反复 errored 重启）。
+#>
+$EnsureTaskName = "MaxinWebEnsure"
+
+function Suspend-EnsureTask {
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    schtasks /change /tn $EnsureTaskName /disable 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "[deploy-web] paused scheduled task '$EnsureTaskName' for the deploy window."
+    } else {
+      Write-Host "[deploy-web] cannot pause '$EnsureTaskName' (exit $LASTEXITCODE) - continuing; watch for port conflicts."
+    }
+  } catch {
+    Write-Host "[deploy-web] cannot pause '$EnsureTaskName': $($_.Exception.Message)"
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
+}
+
+function Resume-EnsureTask {
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    schtasks /change /tn $EnsureTaskName /enable 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "[deploy-web] resumed scheduled task '$EnsureTaskName'."
+    } else {
+      Write-Host "[deploy-web] WARNING: failed to re-enable '$EnsureTaskName' (exit $LASTEXITCODE). Run: schtasks /change /tn $EnsureTaskName /enable"
+    }
+  } catch {
+    Write-Host "[deploy-web] WARNING: failed to re-enable '$EnsureTaskName': $($_.Exception.Message)"
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
 }
 
 function Stop-MaxinWebForDeploy {
@@ -172,58 +214,64 @@ module.exports = {
 "@
 Set-Content -Path $ecosystemPath -Value $ecosystemContent -Encoding ASCII
 
-Stop-MaxinWebForDeploy
-Remove-NodeModulesWithRetry -ProjectRoot $Root
-
-Write-Host "[deploy-web] npm ci..."
-$prevNodeOptsCi = $env:NODE_OPTIONS
-# npm ci 在 Windows 上偶发堆 OOM；显式提高上限。若仍失败，请先关闭浏览器等占内存进程或增大页文件后重跑。
-$env:NODE_OPTIONS = "--max-old-space-size=4096"
+# 整个停服/构建/启动窗口内暂停 ENSURE 计划任务，无论成功失败都在 finally 恢复
+Suspend-EnsureTask
 try {
-  Invoke-Npm @("ci", "--no-audit", "--no-fund")
-} catch {
-  Write-Host "[deploy-web] npm ci failed: $($_.Exception.Message)"
-  Write-Host "[deploy-web] If EPERM persists: close RDP editors touching the repo, pause antivirus scan on $Root, or reboot then re-run."
-  Write-Host "[deploy-web] If OOM: free RAM (close Chrome, etc.) or reboot, then re-run."
-  throw
-} finally {
-  $env:NODE_OPTIONS = $prevNodeOptsCi
-}
+  Stop-MaxinWebForDeploy
+  Remove-NodeModulesWithRetry -ProjectRoot $Root
 
-Write-Host "[deploy-web] next build (node --max-old-space-size + NODE_OPTIONS for workers)..."
-$prevNodeOpts = $env:NODE_OPTIONS
-# Windows 上 next build 静态 worker 易 OOM；与手动构建一致提高到 20GB
-$heap = "--max-old-space-size=20480"
-$env:NODE_OPTIONS = $heap
-$nodeExe = (Get-Command node -ErrorAction Stop).Source
-$nextCli = Join-Path $Root "node_modules\next\dist\bin\next"
-if (-not (Test-Path $nextCli)) {
-  throw "next CLI not found: $nextCli (npm ci incomplete?)"
-}
-try {
-  & $nodeExe $heap $nextCli "build"
-  if ($LASTEXITCODE -ne 0) {
-    throw "next build failed (exit $LASTEXITCODE)"
+  Write-Host "[deploy-web] npm ci..."
+  $prevNodeOptsCi = $env:NODE_OPTIONS
+  # npm ci 在 Windows 上偶发堆 OOM；显式提高上限。若仍失败，请先关闭浏览器等占内存进程或增大页文件后重跑。
+  $env:NODE_OPTIONS = "--max-old-space-size=4096"
+  try {
+    Invoke-Npm @("ci", "--no-audit", "--no-fund")
+  } catch {
+    Write-Host "[deploy-web] npm ci failed: $($_.Exception.Message)"
+    Write-Host "[deploy-web] If EPERM persists: close RDP editors touching the repo, pause antivirus scan on $Root, or reboot then re-run."
+    Write-Host "[deploy-web] If OOM: free RAM (close Chrome, etc.) or reboot, then re-run."
+    throw
+  } finally {
+    $env:NODE_OPTIONS = $prevNodeOptsCi
   }
+
+  Write-Host "[deploy-web] next build (node --max-old-space-size + NODE_OPTIONS for workers)..."
+  $prevNodeOpts = $env:NODE_OPTIONS
+  # Windows 上 next build 静态 worker 易 OOM；与手动构建一致提高到 20GB
+  $heap = "--max-old-space-size=20480"
+  $env:NODE_OPTIONS = $heap
+  $nodeExe = (Get-Command node -ErrorAction Stop).Source
+  $nextCli = Join-Path $Root "node_modules\next\dist\bin\next"
+  if (-not (Test-Path $nextCli)) {
+    throw "next CLI not found: $nextCli (npm ci incomplete?)"
+  }
+  try {
+    & $nodeExe $heap $nextCli "build"
+    if ($LASTEXITCODE -ne 0) {
+      throw "next build failed (exit $LASTEXITCODE)"
+    }
+  } finally {
+    $env:NODE_OPTIONS = $prevNodeOpts
+  }
+
+  Write-Host "[deploy-web] starting maxin-web (force pm2 restart after build)..."
+  Stop-OrphanNextOnPort -Port $WebPort
+  try {
+    pm2 delete maxin-web 2>$null | Out-Null
+  } catch {}
+  Start-Sleep -Seconds 2
+  pm2 start $ecosystemPath --only maxin-web --update-env
+  if ($LASTEXITCODE -ne 0) {
+    throw "pm2 start maxin-web failed (exit $LASTEXITCODE)"
+  }
+  pm2 save --force 2>$null | Out-Null
+
+  Start-Sleep -Seconds 3
+  if (-not (Test-PortListening -Port $WebPort)) {
+    throw "port $WebPort is not listening after ensure-maxin-web. Check logs\ensure-maxin-web.log"
+  }
+
+  Write-Host "[deploy-web] maxin-web online on port $WebPort."
 } finally {
-  $env:NODE_OPTIONS = $prevNodeOpts
+  Resume-EnsureTask
 }
-
-Write-Host "[deploy-web] starting maxin-web (force pm2 restart after build)..."
-Stop-OrphanNextOnPort -Port $WebPort
-try {
-  pm2 delete maxin-web 2>$null | Out-Null
-} catch {}
-Start-Sleep -Seconds 2
-pm2 start $ecosystemPath --only maxin-web --update-env
-if ($LASTEXITCODE -ne 0) {
-  throw "pm2 start maxin-web failed (exit $LASTEXITCODE)"
-}
-pm2 save --force 2>$null | Out-Null
-
-Start-Sleep -Seconds 3
-if (-not (Test-PortListening -Port $WebPort)) {
-  throw "port $WebPort is not listening after ensure-maxin-web. Check logs\ensure-maxin-web.log"
-}
-
-Write-Host "[deploy-web] maxin-web online on port $WebPort."
