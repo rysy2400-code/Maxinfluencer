@@ -1183,7 +1183,13 @@ ${influencerAgentBasePrompt}
         "specialRequestId": "SR-20260308-0001",       // 一轮特殊请求会话的唯一 ID
         "specialRequestStatus": "resolved",           // 红人同意时用 resolved；红人拒绝或需品牌再决定时用 pending_brand
         "creatorMessage": "I can do 300 for 2 + 200 for 1 more, and prefer posting on March 20.",
-        "note": "用简明中文总结红人态度和关键信息，方便执行侧阅读"
+        "note": "用简明中文总结红人态度和关键信息，方便执行侧阅读",
+        "contractUpdate": {                            // 可选：仅当本轮就「合同条款」达成一致时才填
+          "sourceSpecialRequestId": "SR-20260308-0001",
+          "additionalTerms": ["正式英文条款全文，写入合同的 4. Additional Terms；与固定条款不冲突的新增内容"],  // 可选
+          "sectionOverrides": { "paymentTiming": "3.2 Payment Timing. 完整替换文本（含编号）" },            // 可选，仅用于与固定条款冲突、直接改写该条款
+          "changeSummary": "一句话说明本次更新了什么（用于重发新合同的邮件）"                                  // 可选
+        }
       }
     ],
     "systemQuoteResponses": [
@@ -1277,6 +1283,11 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   - "published"（仅当 activeExecutions 中该 campaign 已是 published、且需更新 videoLink 时）
 - 如果你认为当前邮件不需要修改任何 Campaign 的 stage，请返回：{"updates": []}，但你仍然可以返回 outboundEmails 或 agentEvents。
 - 对于 creator_replied_special_request：当红人明确同意/接受品牌方的特殊请求（如改价、改时间、加条数等）时，specialRequestStatus 必须为 "resolved"；仅当红人拒绝或提出新条件需品牌再决定时，才用 "pending_brand"。
+- 合同条款（Contract terms）规则：
+  - 红人就**合同条款**（费用、付款时间/方式、验收、交付、权利归属/copyright/usage 等）提出异议或要求修改时，**你无权自行同意**，specialRequestStatus 用 "pending_brand"，在 note 中把红人的诉求完整转述给广告主。
+  - **只有**当本轮邮件表明「双方就条款文字已达成一致」时（例如红人明确接受了广告主提出的条款），才可填 contractUpdate，且 additionalTerms / sectionOverrides 必须用**正式英文**、忠实转述已经确认的内容，不得扩写或添加未确认的权利。
+  - 与既有固定条款冲突的，用 sectionOverrides 直接给出该条款的完整替换文本（含编号，如 "3.2 Payment Timing. ..."）；不冲突的新增内容用 additionalTerms。
+  - 若只是红人单方面提出、广告主尚未确认，**禁止**填 contractUpdate。
 
 【正文为空 / 自动回复 / 非实质性回复】
 - 若 email.bodyText 为空、极短（少于 15 个有效字符）或明显是自动回复（subject/body 含 "Thank you for your email"、"We value your message"、"Out of office"、"Automatic reply"、"Auto-Reply" 等）：

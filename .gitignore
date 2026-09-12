@@ -27,6 +27,10 @@ tiktok-user-data-chrome/
 # local venv (if any)
 .venv/
 
+# 合同 PDF（运行期生成，含红人个人信息，不入库）
+storage/contracts/
+tmp-contract-preview/
+
 # one-off local deploy bundles / scratch scripts（勿提交）
 tmp-*-deploy.zip
 tmp-setup-*.ps1

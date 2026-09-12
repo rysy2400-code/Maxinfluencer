@@ -438,6 +438,36 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
     [JSON.stringify(summary), campaignId, ...paramsExecutionCreatorMatch(influencerId)]
   );
 
+  // 条款类特殊请求闭合（双方就条款文字达成一致）→ 写入合同约定并自动生成/发送新版合同
+  const contractUpdate =
+    payload.contractUpdate && typeof payload.contractUpdate === "object"
+      ? { ...payload.contractUpdate }
+      : null;
+  if (contractUpdate && specialRequestStatus === "resolved") {
+    try {
+      const { applyContractUpdate } = await import("../lib/contract/apply-contract-update.js");
+      const applied = await applyContractUpdate({
+        campaignId,
+        influencerHandle: payload.tiktokUsername || influencerId,
+        platformInfluencerId: influencerId,
+        contractUpdate: {
+          ...contractUpdate,
+          sourceSpecialRequestId:
+            contractUpdate.sourceSpecialRequestId || specialRequestId || null,
+        },
+      });
+      console.log(
+        "[ProcessCampaignAgentEvents] contractUpdate applied:",
+        JSON.stringify(applied)
+      );
+    } catch (err) {
+      console.error(
+        "[ProcessCampaignAgentEvents] 应用 contractUpdate 失败（不影响特殊请求状态）:",
+        err?.message || err
+      );
+    }
+  }
+
   // 同步广告主聊天：红人同意或需品牌决策时均通知（不自动改 flat_fee）
   if (specialRequestStatus === "resolved" || specialRequestStatus === "pending_brand") {
     try {

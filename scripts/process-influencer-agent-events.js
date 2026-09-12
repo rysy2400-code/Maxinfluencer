@@ -11,11 +11,12 @@
  */
 
 import dotenv from "dotenv";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import { getInfluencerById } from "../lib/db/influencer-dao.js";
-import { getCampaignById } from "../lib/db/campaign-dao.js";
+import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import {
   sendOutreach,
   loadConversationHistoryForInfluencer,
@@ -43,6 +44,12 @@ import {
   buildTraceIdFromInboundMessageId,
   buildTraceIdFromSourceKey,
 } from "../lib/utils/timeline-ids.js";
+import {
+  generateContractForExecution,
+  resolveContractAbsPath,
+} from "../lib/contract/generate-contract.js";
+import { generateContractEmailBody } from "../lib/contract/contract-email.js";
+import { buildContractClauses } from "../lib/contract/contract-clauses.js";
 
 function parseJsonOrObject(value) {
   if (value == null) return null;
@@ -131,6 +138,7 @@ async function getExecutionPlatformInfluencerId(campaignId, tiktokUsername) {
 export const TRANSACTIONAL_AGENT_EVENT_TYPES = [
   "advertiser_execution_followup",
   "ask_influencer_special_request",
+  "send_contract_email",
   "outbound_email",
 ];
 
@@ -220,6 +228,34 @@ async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
     claimedIds
   );
   return rows || [];
+}
+
+/** 只认领并返回指定 id 的 pending 事件（用于人工定向补发，避免顺带消费其它事件） */
+async function claimInfluencerAgentEventById(id) {
+  const eventId = Number(id);
+  if (!Number.isFinite(eventId) || eventId <= 0) return null;
+  const upd = await queryTikTok(
+    `
+    UPDATE tiktok_influencer_agent_event
+    SET status = 'processing', updated_at = NOW()
+    WHERE id = ? AND status = 'pending'
+  `,
+    [eventId]
+  );
+  if (Number(upd?.affectedRows || 0) === 0) return null;
+  const rows = await queryTikTok(
+    `SELECT * FROM tiktok_influencer_agent_event WHERE id = ? LIMIT 1`,
+    [eventId]
+  );
+  return rows?.[0] || null;
+}
+
+/** 解析 --event-id <id> / AGENT_EVENT_ID，用于定向补发单条事件 */
+function resolveOnlyEventId() {
+  const i = process.argv.indexOf("--event-id");
+  const raw = i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : process.env.AGENT_EVENT_ID;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function looksLikeNumericPlatformId(v) {
@@ -816,6 +852,254 @@ Please output ONLY the email body in English (plain text), no JSON, no extra com
   }
 }
 
+async function handleSendContractEmail(eventRow, payload) {
+  const campaignId = payload.campaignId || eventRow.campaign_id || null;
+  if (!campaignId) {
+    throw new Error("send_contract_email 缺少 campaignId");
+  }
+
+  const handle = String(payload.tiktokUsername || payload.influencerId || "")
+    .replace(/^@/, "")
+    .trim();
+
+  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+    campaignId,
+    eventRow,
+    payload
+  );
+  if (!platformInfluencerId) {
+    throw new Error(
+      "send_contract_email 无法解析平台 influencer_id（请回填 execution.influencer_id 或提供 payload.platformInfluencerId）"
+    );
+  }
+
+  const influencer = await getInfluencerById(platformInfluencerId);
+  if (!influencer) {
+    throw new Error(
+      `send_contract_email 主档不存在红人 influencer_id=${platformInfluencerId}`
+    );
+  }
+
+  const toEmail =
+    typeof influencer.influencerEmail === "string" &&
+    influencer.influencerEmail.includes("@")
+      ? influencer.influencerEmail.trim()
+      : null;
+  if (!toEmail) {
+    throw new Error(
+      `send_contract_email 红人 influencer_id=${platformInfluencerId} 缺少邮箱联系方式`
+    );
+  }
+
+  // 合同 PDF：优先复用预生成（人工确认过）的文件，避免发送时重新生成导致文本漂移；
+  // 未提供时现场生成（品牌点「确认同意」后的自动流程走这一支）。
+  const preGenerated = payload.contract || null;
+  const preAbsPath =
+    preGenerated && (preGenerated.absPath || preGenerated.storageKey)
+      ? preGenerated.absPath || resolveContractAbsPath(preGenerated.storageKey)
+      : null;
+
+  let contract = null;
+  if (preAbsPath && fs.existsSync(preAbsPath)) {
+    contract = {
+      contractNo: preGenerated.contractNo,
+      storageKey: preGenerated.storageKey || null,
+      absPath: preAbsPath,
+      clauses: preGenerated.clauses || null,
+    };
+  } else {
+    const generated = await generateContractForExecution({
+      campaignId,
+      influencerHandle: handle,
+      influencerId: platformInfluencerId,
+    });
+    contract = {
+      contractNo: generated.contractNo,
+      storageKey: generated.storageKey,
+      absPath: generated.absPath,
+      clauses: generated.clauses || null,
+    };
+  }
+
+  // 冻结文件路径（人工补发复用已确认 PDF）没有 clauses，从执行表还原可变条款
+  let clauses = contract.clauses;
+  if (!clauses) {
+    try {
+      const execRow = await getExecutionRow(campaignId, handle || platformInfluencerId);
+      const le = execRow?.lastEvent || {};
+      clauses = buildContractClauses({
+        deliverablesText: null,
+        feeAmount: execRow?.flat_fee ?? null,
+        currency: execRow?.currency || "USD",
+        sectionOverrides: le.contractSectionOverrides || null,
+        additionalTerms: le.contractAdditionalTerms || null,
+      });
+    } catch {
+      clauses = null;
+    }
+  }
+
+  const pdfBuffer = fs.readFileSync(contract.absPath);
+  const fileName = `${contract.contractNo}.pdf`;
+  const revMatch = /-R(\d+)$/.exec(String(contract.contractNo || ""));
+  const revision = revMatch ? Number(revMatch[1]) : 1;
+  const previousContractNo =
+    revision >= 2 ? String(contract.contractNo).replace(/-R\d+$/, "") : null;
+
+  const campaignRow = await getCampaignById(campaignId).catch(() => null);
+  const bodyText = await generateContractEmailBody({
+    displayName: influencer.displayName,
+    handle,
+    contractNo: contract.contractNo,
+    fileName,
+    revision,
+    previousContractNo,
+    changeSummary: payload.contract?.changeSummary || null,
+    brandName: campaignRow?.productInfo?.brandName || campaignRow?.productInfo?.productName || null,
+    productName: campaignRow?.productInfo?.productName || campaignRow?.productInfo?.product || null,
+    productLink: campaignRow?.productInfo?.productLink || null,
+    campaignId,
+    clauses,
+  });
+
+  const ctx = await resolveInfluencerThreadMailContext({
+    influencerId: platformInfluencerId,
+    influencer,
+    campaignId,
+  });
+  const fromAccount = ctx.fromAccount;
+  const subject = ctx.subjectForSend;
+
+  const headers = {
+    "X-Maxin-Influencer-Id": platformInfluencerId || "",
+    "X-Maxin-Campaign-Id": campaignId || "",
+    "X-Maxin-Source": "InfluencerAgent",
+  };
+  if (ctx.inReplyTo) headers["In-Reply-To"] = ctx.inReplyTo;
+  if (ctx.references) headers["References"] = ctx.references;
+
+  const traceId = buildTraceIdFromSourceKey(
+    `contract:${contract.contractNo}:${eventRow.id}`
+  );
+
+  const attachmentMetas = [
+    {
+      fileName,
+      storageKey: contract.storageKey,
+      contentType: "application/pdf",
+      sizeBytes: pdfBuffer.length,
+    },
+  ];
+
+  const delivery = await sendOrDraftAgentEmail({
+    influencerId: platformInfluencerId,
+    campaignId,
+    fromAccount,
+    toEmail,
+    subject,
+    bodyText,
+    headers,
+    sourceType: "send_contract_email",
+    sourceEventId: eventRow.id,
+    triggerType: "send_contract_email",
+    traceId,
+    emailPayload: { inReplyTo: payload.inReplyTo || null },
+    payload: {
+      contract: { contractNo: contract.contractNo, storageKey: contract.storageKey },
+    },
+    attachments: [{ filename: fileName, contentType: "application/pdf", content: pdfBuffer }],
+    attachmentMetas,
+  });
+  if (delivery.drafted) return;
+  const { result, sendErr, fromEmail } = delivery;
+
+  // 附件落库（与人工发信/特殊请求一致）
+  const dedupeKeys = [];
+  {
+    const dedupeKey = `contract-att:${eventRow.id}`;
+    const attachmentId = await insertOutboundAttachment({
+      dedupeKey,
+      filename: fileName,
+      contentType: "application/pdf",
+      sizeBytes: pdfBuffer.length,
+      content: pdfBuffer,
+    });
+    dedupeKeys.push(dedupeKey);
+    attachmentMetas[0].attachmentId = attachmentId || null;
+  }
+
+  try {
+    await logConversationMessage({
+      influencerId: platformInfluencerId,
+      campaignId,
+      direction: "bin",
+      channel: "email",
+      fromEmail,
+      toEmail,
+      subject,
+      bodyText,
+      messageId: result?.messageId || null,
+      sourceType: "send_contract_email",
+      sourceEventTable: "tiktok_influencer_agent_event",
+      sourceEventId: eventRow.id,
+      sentAt: new Date(),
+      eventType: "email_outbound",
+      eventTime: new Date(),
+      actorType: "agent",
+      sendMode: "auto_send",
+      contentOrigin: "agent_generated",
+      traceId,
+      payload: {
+        kind: "email_outbound",
+        status: sendErr ? "failed" : "succeeded",
+        error: sendErr ? { message: sendErr?.message || String(sendErr) } : null,
+        email: {
+          to: toEmail,
+          subject,
+          inReplyTo: payload.inReplyTo || null,
+          messageId: result?.messageId || null,
+        },
+        contract: { contractNo: contract.contractNo, storageKey: contract.storageKey },
+        attachments: { source: "outbound_attachments", items: attachmentMetas },
+        source: {
+          eventTable: "tiktok_influencer_agent_event",
+          eventId: eventRow.id,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("[ProcessInfluencerAgentEvents] 写入合同邮件到对话表失败:", err);
+  }
+
+  if (dedupeKeys.length && result?.messageId) {
+    try {
+      const rows = await queryTikTok(
+        `
+        SELECT id
+        FROM tiktok_influencer_conversation_messages
+        WHERE influencer_id = ? AND message_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+        [platformInfluencerId, result.messageId]
+      );
+      const conversationMessageId = rows?.[0]?.id || null;
+      if (conversationMessageId) {
+        await attachOutboundAttachmentsToConversationMessage({
+          conversationMessageId,
+          dedupeKeys,
+        });
+      }
+    } catch (err) {
+      console.error("[ProcessInfluencerAgentEvents] 绑定合同附件到对话消息失败:", err);
+    }
+  }
+
+  if (sendErr) {
+    throw sendErr;
+  }
+}
+
 async function handleAdvertiserExecutionFollowup(eventRow, payload) {
   const campaignId = payload.campaignId || eventRow.campaign_id || null;
   const action = payload.action || null;
@@ -1051,6 +1335,12 @@ async function processInfluencerAgentEvent(eventRow) {
     return;
   }
 
+  if (type === "send_contract_email") {
+    await handleSendContractEmail(eventRow, payload);
+    await markInfluencerAgentEventStatus(eventRow.id, "succeeded", null);
+    return;
+  }
+
   if (type === "advertiser_execution_followup") {
     await handleAdvertiserExecutionFollowup(eventRow, payload);
     await markInfluencerAgentEventStatus(eventRow.id, "succeeded", null);
@@ -1066,16 +1356,21 @@ async function processInfluencerAgentEvent(eventRow) {
 
 async function main() {
   const mode = resolveAgentEventMode();
-  const events = await fetchPendingInfluencerAgentEvents(20, mode);
+  const onlyEventId = resolveOnlyEventId();
+  const events = onlyEventId
+    ? [await claimInfluencerAgentEventById(onlyEventId)].filter(Boolean)
+    : await fetchPendingInfluencerAgentEvents(20, mode);
   if (!events.length) {
     console.log(
-      `[ProcessInfluencerAgentEvents] mode=${mode} 当前没有 pending 事件。`
+      onlyEventId
+        ? `[ProcessInfluencerAgentEvents] 事件 ${onlyEventId} 不存在或不是 pending，跳过。`
+        : `[ProcessInfluencerAgentEvents] mode=${mode} 当前没有 pending 事件。`
     );
     return;
   }
 
   console.log(
-    `[ProcessInfluencerAgentEvents] mode=${mode} 准备处理 ${events.length} 条 pending 事件。`
+    `[ProcessInfluencerAgentEvents] mode=${mode}${onlyEventId ? ` (only event ${onlyEventId})` : ""} 准备处理 ${events.length} 条事件。`
   );
 
   for (const ev of events) {
