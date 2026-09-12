@@ -3361,6 +3361,41 @@ export default function HomePage() {
   },
   []);
 
+  /** 定位目标时直接把精确命中的单条执行记录并入对应列，避免逐页扫描数千条记录 */
+  const injectExecutionStatusItem = React.useCallback(
+    (campaignId, item, columnKey, fallbackStatus = null) => {
+      if (!campaignId || !item?.id || !columnKey) return;
+      setExecutionStatus((prev) => {
+        const base =
+          prev && String(prev.campaignId) === String(campaignId)
+            ? prev
+            : fallbackStatus?.campaignId
+            ? fallbackStatus
+            : null;
+        if (!base) return prev;
+        const existing = Array.isArray(base.columns?.[columnKey])
+          ? base.columns[columnKey]
+          : [];
+        if (existing.some((row) => row?.id === item.id)) return base;
+        const next = {
+          ...base,
+          columns: {
+            ...base.columns,
+            [columnKey]: [...existing, item],
+          },
+        };
+        const cached = executionCacheRef.current.get(campaignId);
+        executionCacheRef.current.set(campaignId, {
+          ...(cached || {}),
+          data: next,
+          fetchedAtByStage: cached?.fetchedAtByStage || {},
+        });
+        return next;
+      });
+    },
+    []
+  );
+
   /** 定位已分析列表：按游标逐页加载，直到目标红人进入已加载 items（不依赖滚动触发翻页） */
   const loadAnalyzedUntilFound = React.useCallback(
     async (handle, cid, signal) => {
@@ -3438,73 +3473,6 @@ export default function HomePage() {
     []
   );
 
-  /** 定位执行阶段列表：按游标逐页加载，直到目标红人进入该阶段已加载列表 */
-  const loadExecutionStageUntilFound = React.useCallback(
-    async (handle, stage, cid, signal, subTab = null) => {
-      executionLocateStageRef.current = stage;
-      setExecutionLocateState({ status: "loading", handle });
-      setActiveExecutionStage(stage);
-      const columnKeys =
-        stage === "pendingSample"
-          ? ["pendingShippingAddress", "pendingSample"]
-          : stage === "pendingDraft" && subTab
-          ? [subTab === "script" ? "pendingDraftScript" : "pendingDraftVideo"]
-          : [stage];
-      const pageKey = subTab && stage === "pendingDraft" ? `${stage}:${subTab}` : stage;
-      const MAX_PAGES = 40;
-      try {
-        let cursor = null;
-        for (let page = 1; page <= MAX_PAGES; page += 1) {
-          if (signal?.aborted) return;
-          const q = new URLSearchParams({ stage, limit: "40" });
-          if (subTab && stage === "pendingDraft") q.set("subTab", subTab);
-          if (cursor) q.set("cursor", cursor);
-          const res = await fetch(`/api/campaigns/${cid}/execution-status?${q.toString()}`, {
-            signal,
-            cache: "no-store",
-          });
-          const data = await res.json().catch(() => ({}));
-          if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
-          if (!res.ok || !data.success) throw new Error(data.error || "加载执行进度失败");
-          setExecutionStatus((prev) => {
-            const next = mergeExecutionStatusPage(prev, data, stage, true, subTab);
-            const prevCache = executionCacheRef.current.get(cid);
-            executionCacheRef.current.set(cid, {
-              data: next,
-              fetchedAtByStage: {
-                ...(prevCache?.fetchedAtByStage || {}),
-                [pageKey]: Date.now(),
-              },
-            });
-            return next;
-          });
-          const pageRows = columnKeys.flatMap(
-            (key) =>
-              data.columns && Array.isArray(data.columns[key]) ? data.columns[key] : []
-          );
-          if (pageRows.some((row) => row?.id === handle)) return;
-          const nextCursor =
-            data.page?.nextCursorByStage?.[stage] ?? data.page?.nextCursor ?? null;
-          if (!nextCursor) break;
-          cursor = nextCursor;
-        }
-        if (signal?.aborted || resolvedCampaignIdRef.current !== cid) return;
-        if (pendingFocusExecutionUsernameRef.current === handle) {
-          setExecutionLocateState({
-            status: "tooDeep",
-            handle,
-            message: "已加载前 1600 条仍未找到",
-          });
-          setHighlightExecutionUsername(null);
-          pendingFocusExecutionUsernameRef.current = null;
-        }
-      } finally {
-        executionLocateStageRef.current = null;
-      }
-    },
-    [mergeExecutionStatusPage]
-  );
-
   /** 定位红人所在阶段：先精确查询执行表（一次跨全部阶段），未命中再查候选表（已分析） */
   const locateExecutionInfluencer = React.useCallback(
     async (handle, cid) => {
@@ -3530,13 +3498,18 @@ export default function HomePage() {
         if (!stillCurrent()) return;
         if (!res1.ok || !d1.success) throw new Error(d1.error || "查询执行进度失败");
         let execColumn = null;
+        let execItem = null;
         for (const key of EXECUTION_STAGE_COLUMN_KEYS) {
-          if ((d1.columns?.[key] || []).some((row) => row?.id === handle)) {
+          const row = (d1.columns?.[key] || []).find(
+            (candidate) => candidate?.id === handle
+          );
+          if (row) {
             execColumn = key;
+            execItem = row;
             break;
           }
         }
-        if (execColumn) {
+        if (execColumn && execItem) {
           const stage =
             execColumn === "pendingShippingAddress" ? "pendingSample" : execColumn;
           let draftSubTab = null;
@@ -3560,7 +3533,17 @@ export default function HomePage() {
             executionLocateSubtabRef.current = { stage: "pendingDraft", subtab: draftSubTab };
             setActivePendingDraftSubTab(draftSubTab);
           }
-          await loadExecutionStageUntilFound(handle, stage, cid, controller.signal, draftSubTab);
+          setActiveExecutionStage(stage);
+          const pageKey =
+            draftSubTab && stage === "pendingDraft" ? `${stage}:${draftSubTab}` : stage;
+          const pendingRequest = executionRequestRef.current.get(`${cid}:${pageKey}`);
+          if (pendingRequest) {
+            pendingRequest.controller.abort();
+          }
+          injectExecutionStatusItem(cid, execItem, execColumn, {
+            ...d1,
+            campaignId: cid,
+          });
           return;
         }
 
@@ -3612,7 +3595,7 @@ export default function HomePage() {
         }
       }
     },
-    [loadExecutionStageUntilFound, loadAnalyzedUntilFound]
+    [injectExecutionStatusItem, loadAnalyzedUntilFound]
   );
 
   const focusExecutionInfluencer = React.useCallback(
