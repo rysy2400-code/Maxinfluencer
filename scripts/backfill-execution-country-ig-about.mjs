@@ -200,6 +200,7 @@ async function main() {
 
       await saveVideoPublishCountry({
         username: t.username,
+        platform: "instagram",
         videoPublishCountry: iso,
         locationSource: `ig_about:${r.source || "unknown"}`,
       });

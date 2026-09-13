@@ -444,6 +444,7 @@ async function handleFirstOutreach(eventRow, payload) {
     campaignId,
     platformInfluencerId: platformId,
     tiktokUsername,
+    platform: payload.platform || snapshot?.platform || snapshot?.platformSlug || null,
     snapshot,
     sourceEventId: eventRow.id,
   });
