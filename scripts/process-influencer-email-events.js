@@ -40,7 +40,7 @@ import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-qu
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
-import { syncCountryFromReply } from "../lib/influencer/country-reply-sync.js";
+import { applyResidenceCountryFromDelta } from "../lib/influencer/country-reply-sync.js";
 import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
@@ -938,6 +938,102 @@ async function applyDecision(decision, event, executions) {
   }
 }
 
+/**
+ * 方案 2：事件决策 LLM 已返回 profileDelta，这里按需落地商务档案与红人常住地。
+ *
+ * - 常住地：只有 relation=self_residence + 原句证据 + 置信度过线才会写库
+ *   （护栏在 lib/influencer/country-reply-sync.js）。
+ * - 商务档案：只有 hasProfileUpdate=true 时才调那次 LLM 重写 markdown，
+ *   纯寒暄/进度更新不再调用 → 每封回复通常只花 1 次 LLM。
+ * - doNotContact：置为免打扰并终止本事件后续动作（不回信）。
+ *
+ * 本函数只做「落库/维护」，不推进 stage，也不发信——那些仍由既有
+ * applySystemQuoteResponses / applyDecision / handleOutboundEmails 负责。
+ */
+async function applyMaintenanceFromDecision({
+  decision,
+  event,
+  executions,
+  influencerRow,
+  influencerId,
+  conversationHistory,
+}) {
+  const result = { country: null, profile: null, stopProcessing: false };
+  const delta = decision?.profileDelta || null;
+  if (!influencerRow || !influencerId || !delta) return result;
+  if (
+    isLikelyAutoReply(event.subject, event.body_text) ||
+    isBodyEffectivelyEmpty(event.body_text)
+  ) {
+    return result;
+  }
+
+  if (delta.doNotContact) {
+    await markInfluencerDoNotContact({
+      influencerId,
+      reason: delta.doNotContactReason || event.body_text,
+      sourceMessageId: event.message_id || null,
+    });
+    result.stopProcessing = true;
+    return result;
+  }
+
+  try {
+    result.country = await applyResidenceCountryFromDelta({
+      influencerId,
+      profileDelta: delta,
+      event,
+      executions,
+    });
+  } catch (err) {
+    result.country = { changed: false, error: err?.message || String(err) };
+    console.warn(
+      "[ProcessInfluencerEmailEvents] 国家信息回写失败:",
+      err?.message || err
+    );
+  }
+
+  if (delta.hasProfileUpdate) {
+    try {
+      result.profile = await updateBusinessProfileFromReply({
+        influencer: influencerRow,
+        email: {
+          subject: event.subject || "",
+          bodyText: event.body_text || "",
+          messageId: event.message_id || null,
+          receivedAt: event.received_at || event.created_at || null,
+        },
+        conversationHistory,
+        profileDelta: delta,
+      });
+      if (result.profile?.doNotContact) {
+        await markInfluencerDoNotContact({
+          influencerId,
+          reason: result.profile.doNotContactReason || event.body_text,
+          sourceMessageId: event.message_id || null,
+        });
+        result.stopProcessing = true;
+        return result;
+      }
+      if (result.profile?.changed && result.profile.profileMarkdown) {
+        await updateInfluencerBusinessProfile({
+          influencerId,
+          markdown: result.profile.profileMarkdown,
+          sourceMessageId: event.message_id || null,
+        });
+      }
+    } catch (err) {
+      result.profile = { changed: false, error: err?.message || String(err) };
+      console.warn(
+        "[ProcessInfluencerEmailEvents] 商务档案更新失败:",
+        err?.message || err
+      );
+    }
+  }
+
+  return result;
+}
+
 async function processEvent(event) {
   await markEventStatus(event.id, "processing", null);
 
@@ -965,8 +1061,6 @@ async function processEvent(event) {
   const influencerRow =
     canonicalEventInfluencerId &&
     (await getInfluencerById(canonicalEventInfluencerId).catch(() => null));
-  let profileMaintenance = null;
-  let countryMaintenance = null;
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
     await markInfluencerDoNotContact({
       influencerId: canonicalEventInfluencerId,
@@ -976,59 +1070,8 @@ async function processEvent(event) {
     await markEventStatus(event.id, "succeeded", null);
     return;
   }
-  if (
-    influencerRow &&
-    !isLikelyAutoReply(event.subject, event.body_text) &&
-    !isBodyEffectivelyEmpty(event.body_text)
-  ) {
-    try {
-      countryMaintenance = await syncCountryFromReply({
-        influencerId: canonicalEventInfluencerId,
-        event,
-        executions,
-      });
-    } catch (err) {
-      countryMaintenance = { changed: false, error: err?.message || String(err) };
-      console.warn(
-        "[ProcessInfluencerEmailEvents] 国家信息回写失败:",
-        err?.message || err
-      );
-    }
-
-    try {
-      profileMaintenance = await updateBusinessProfileFromReply({
-        influencer: influencerRow,
-        email: {
-          subject: event.subject || "",
-          bodyText: event.body_text || "",
-          messageId: event.message_id || null,
-          receivedAt: event.received_at || event.created_at || null,
-        },
-        conversationHistory,
-      });
-      if (profileMaintenance?.doNotContact) {
-        await markInfluencerDoNotContact({
-          influencerId: canonicalEventInfluencerId,
-          reason: profileMaintenance.doNotContactReason || event.body_text,
-          sourceMessageId: event.message_id || null,
-        });
-        await markEventStatus(event.id, "succeeded", null);
-        return;
-      }
-      if (profileMaintenance?.changed && profileMaintenance.profileMarkdown) {
-        await updateInfluencerBusinessProfile({
-          influencerId: canonicalEventInfluencerId,
-          markdown: profileMaintenance.profileMarkdown,
-          sourceMessageId: event.message_id || null,
-        });
-      }
-    } catch (err) {
-      console.warn(
-        "[ProcessInfluencerEmailEvents] 商务档案更新失败:",
-        err?.message || err
-      );
-    }
-  }
+  // 商务档案 / 常住地维护已改为「事件决策 LLM 先判定，再按需触发」：
+  // profileDelta 由下方决策 LLM 返回，applyMaintenanceFromDecision 负责落库。
   const threadMailCtx = await resolveInfluencerThreadMailContext({
     influencerId: canonicalEventInfluencerId,
     influencer: influencerRow,
@@ -1052,14 +1095,14 @@ async function processEvent(event) {
     activeExecutions: executions,
     reusableShippingInfo,
     conversationHistory,
+    existingBusinessProfileMarkdown:
+      influencerRow?.businessProfileMarkdown || null,
     threadInfo: {
       canonicalThreadSubject: threadMailCtx.canonicalBase,
       rootMessageId: threadMailCtx.rootMessageId,
       parentMessageId: threadMailCtx.parentMessageId,
       suggestedSubjectForReply: threadMailCtx.subjectForSend,
     },
-    profileMaintenance,
-    countryMaintenance,
   };
 
   // 读取附件并提取可读文本（给 LLM）
@@ -1109,12 +1152,13 @@ ${influencerAgentBasePrompt}
   - activeExecutions：该红人在各个 campaign 下当前的执行状态；
   - threadInfo：规范化线程标题（canonicalThreadSubject）、根/父 Message-ID、以及建议的续信标题（suggestedSubjectForReply，通常为 Re: + 规范化标题）。
 - 你的目标是：在尊重红人体验的前提下，做出合理的业务决策，并通过结构化 JSON 告诉系统要做什么。
-- profileMaintenance.questions 若非空，须在正常业务回复结尾自然询问这些缺失或待确认项目；不要重复询问已有信息。
-- countryMaintenance.changed=true 表示系统已经从本封回复识别并回写了红人国家；后续邮件不要重复询问所在国家。
+- profileDelta.questions 若非空，须在正常业务回复结尾自然询问这些缺失或待确认项目；不要重复询问已有信息（见 existingBusinessProfileMarkdown）。
+- 本封若从红人处确认了常住国家（profileDelta.residenceRelation="self_residence"），系统会据此回写红人国家；后续邮件不要重复询问所在国家。
 
 输入 JSON 中包含：
 - email：当前这封邮件的关键信息；
 - activeExecutions：该红人当前所有相关执行记录；
+- existingBusinessProfileMarkdown：该红人已确认的商务档案（Markdown，可能为空模板）；用于判断本轮有哪些新事实、还缺哪些信息；
 - reusableShippingInfo：系统从红人级记忆或最近历史对话中找到的最近一次完整寄样信息（如有）。当需要确认历史地址时，邮件中允许展示完整地址给红人确认。
 - conversationHistory：按时间倒序的最近若干条对话消息（Bin 与红人的往来，direction=bin/ influencer）。
   - 你需要基于 conversationHistory「续写对话」，而不是重新自我介绍或重复问过的问题。
@@ -1199,8 +1243,35 @@ ${influencerAgentBasePrompt}
         "newAmountUsd": 800,
         "note": "红人对系统建议合作和价格的明确回复摘要"
       }
-    ]
+    ],
+    "profileDelta": {
+      "hasProfileUpdate": true,
+      "residenceCountry": "JP",
+      "residenceRelation": "self_residence|self_travel|other|quoted_history|unknown",
+      "residenceEvidenceQuote": "I'm based in Osaka, Japan.",
+      "residenceConfidence": 0.9,
+      "facts": ["本轮新增或变更的商务档案事实（中文简述，没有就空数组）"],
+      "questions": ["本轮要在回信里追问的档案缺项（英文，没有就空数组）"],
+      "doNotContact": false,
+      "doNotContactReason": null
+    }
   }
+
+【商务档案与常住地增量 · profileDelta（每封回复都必须返回这个对象）】
+- profileDelta 只描述**本轮这封邮件**带来的新信息，不是整份档案；没有新信息就全部留空/false。
+- residenceCountry 只填**红人本人常驻的国家**，用 ISO 3166-1 alpha-2 码（JP / US / ID …）。判断依据必须是第一人称、现在时、且有长期性，例如 "I'm based in Japan"、"I live in Osaka"、"我常驻日本"。
+- residenceRelation 必须如实标注，它决定系统是否写库：
+  - self_residence：红人明确说自己常住/居住在某个国家——**只有这个取值会被系统写库**；
+  - self_travel：只是旅行、出差或临时停留；
+  - other：说的是别人或别的东西，例如「你们的客户来自中国吗」「my audience is mostly in the US」、物流目的地、机构所在地；
+  - quoted_history：只出现在下方被引用的历史邮件里；
+  - unknown：本轮没有提到。
+- residenceEvidenceQuote 必须逐字摘抄邮件里支撑该结论的原文句子（英文/原文语言）。没有原句就不要填 residenceCountry。
+- 明确排除：反问句与疑问句、your agency / your clients / our audience 之类的主体、货币（JPY/USD 等）、语言、时区、签名与人名公司名里的地名、引用历史里的国家。旅行中的临时位置不算常住地。
+- facts：本轮新增或变更的档案事实（最低报价、内容类别偏好/排除、可用性等），用于更新商务档案。
+- questions：对照 existingBusinessProfileMarkdown，列出仍然缺失或需要澄清的档案项（最低报价、内容类别、可用性等）；**必须**在本次 outboundEmails 的正文结尾用自然的英文追问这些问题，不要写成表单，也不要重复询问档案里已有的信息。只填事实类问题，不要问国家。
+- hasProfileUpdate：facts 非空，或本轮修改了既有档案事实时为 true；纯寒暄、进度更新、仅追问缺项时为 false。
+- doNotContact / doNotContactReason：红人明确要求停止联系，或提及投诉、律师、举报时为 true 并简述原因；否则 false / null。
 
 - updates 会被写入 tiktok_advertiser_agent_event，由后台 worker 落库；**stage 变更受状态机约束**，越权变更会被拦截，但报价/寄样/草稿/视频链接等字段仍可能写入。
 - activeExecutions 中 stage=pending_creator_confirmation 时，只能在红人明确接受、拒绝或提出新价格后填写 systemQuoteResponses。不要同时为同一 campaign 填 updates。
@@ -1308,7 +1379,9 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
     raw = await callDeepSeekLLM(
       [{ role: "user", content: userContent }],
       systemPrompt,
-      { maxTokens: 16384 }
+      // 决策 JSON 现在额外带 profileDelta；reasoning token 也计入 max_tokens。
+      // 实测该 relay（DeepSeek-V4-Flash-0731）接受 max_tokens 到 65536，这里留 1.5 倍余量。
+      { maxTokens: 24576 }
     );
   } catch (err) {
     await requeueOrFailEmailEvent(
@@ -1333,6 +1406,27 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
     );
     return;
   }
+
+  const maintenance = await applyMaintenanceFromDecision({
+    decision,
+    event,
+    executions,
+    influencerRow,
+    influencerId: canonicalEventInfluencerId,
+    conversationHistory,
+  });
+  if (maintenance.stopProcessing) {
+    await markEventStatus(event.id, "succeeded", null);
+    return;
+  }
+  console.log(
+    "[ProcessInfluencerEmailEvents] 维护结果",
+    JSON.stringify({
+      eventId: event.id,
+      country: maintenance.country,
+      profileChanged: !!maintenance.profile?.changed,
+    })
+  );
 
   try {
     await applySystemQuoteResponses(decision, event, executions);

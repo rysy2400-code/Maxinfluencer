@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   extractCountryFromReplyText,
+  resolveResidenceCountryUpdate,
   shouldAskCountryInOutreach,
 } from "../lib/influencer/country-reply-sync.js";
 
@@ -29,6 +30,88 @@ assert.equal(
 assert.equal(
   shouldAskCountryInOutreach({ influencer: {}, executionSnapshot: {} }),
   true
+);
+
+// --- profileDelta 护栏（LLM 结果 → 是否允许写库） ---
+const selfResidence = resolveResidenceCountryUpdate({
+  residenceCountry: "Japan",
+  residenceRelation: "self_residence",
+  residenceEvidenceQuote: "I'm based in Osaka, Japan.",
+  residenceConfidence: 0.9,
+});
+assert.equal(selfResidence.ok, true);
+assert.equal(selfResidence.iso, "JP");
+assert.equal(selfResidence.relation, "self_residence");
+
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "日本",
+    residenceRelation: "self_residence",
+    residenceEvidenceQuote: "我常驻日本，可以配合寄样。",
+    residenceConfidence: 1,
+  }).iso,
+  "JP"
+);
+
+// 9/13 那类误判：问的是「你们客户是否来自中国」→ 不是红人常住地
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "CN",
+    residenceRelation: "other",
+    residenceEvidenceQuote:
+      "do most of your current clients and projects come from the Greater China region?",
+    residenceConfidence: 0.9,
+  }).ok,
+  false
+);
+
+// 旅行/临时停留不写库
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "ID",
+    residenceRelation: "self_travel",
+    residenceEvidenceQuote: "I'm traveling in Bali this week.",
+    residenceConfidence: 0.9,
+  }).reason,
+  "not_self_residence"
+);
+
+// 没有原句证据不写库
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "JP",
+    residenceRelation: "self_residence",
+    residenceEvidenceQuote: "",
+    residenceConfidence: 0.9,
+  }).reason,
+  "missing_evidence"
+);
+
+// 置信度不足不写库
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "JP",
+    residenceRelation: "self_residence",
+    residenceEvidenceQuote: "maybe Japan?",
+    residenceConfidence: 0.4,
+  }).reason,
+  "low_confidence"
+);
+
+// 非法国家名不写库
+assert.equal(
+  resolveResidenceCountryUpdate({
+    residenceCountry: "somewhere",
+    residenceRelation: "self_residence",
+    residenceEvidenceQuote: "I'm based somewhere nice.",
+    residenceConfidence: 0.9,
+  }).reason,
+  "country_not_normalized"
+);
+
+assert.equal(
+  resolveResidenceCountryUpdate(null).reason,
+  "missing_profile_delta"
 );
 
 console.log("country reply sync tests passed");
