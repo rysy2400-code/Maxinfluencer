@@ -1,23 +1,15 @@
 name: Deploy Crawler (Windows VM Cluster)
 
+# 只支持手动触发（Actions 页面 Run workflow，或 gh workflow run "Deploy Crawler (Windows VM Cluster)"）。
+#
+# 为什么不再随 push 自动部署：
+# 爬虫机跑的是 worker-influencer-search.js / crawler-health-checker.js，它们依赖
+# lib/db/**、lib/influencer/**、lib/utils/** 等共享目录。而这些目录几乎每次 web / worker
+# 发版都会改，导致爬虫集群被反复误触发（5 台机器各做一次 git reset --hard + clean -fd + npm ci），
+# 并且长期失败也无人察觉。爬虫是独立部署单元，发版时机应由人判断。
+#
+# 需要部署爬虫时，确认目标提交已包含爬虫相关改动后再手动触发；回滚/补发可用 target_sha 指定提交。
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/worker-*.js"
-      - "scripts/*search*.js"
-      - "scripts/tiktok-*.js"
-      - "scripts/enrich-*.js"
-      - "lib/cdp/**"
-      - "lib/tools/influencer-functions/**"
-      - "lib/influencer/**"
-      # lib/agents/** 只影响 web / worker（邮件与 Campaign Agent），不部署 crawler 集群
-      - "lib/db/**"
-      - "lib/utils/work-live-step-bridge.js"
-      - "package.json"
-      - "package-lock.json"
-      - "deploy-crawler.ps1"
-      - ".github/workflows/deploy-crawler.yml"
   workflow_dispatch:
     inputs:
       target_sha:

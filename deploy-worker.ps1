@@ -61,6 +61,23 @@ if ($deployWorkerSelfHashAtStart -and $deployWorkerSelfHashAfterPull -and ($depl
 
 Write-Host "[deploy-worker] npm ci..."
 npm ci
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[deploy-worker] npm ci failed (exit $LASTEXITCODE); retrying once..."
+  npm ci
+}
+if ($LASTEXITCODE -ne 0) {
+  throw "npm ci failed (exit $LASTEXITCODE). node_modules may be incomplete; aborted."
+}
+# npm ci 曾静默装不全（实测只装了 70/275 个包），后续计划任务会以
+# ERR_MODULE_NOT_FOUND 退出码 1 失败，但部署本身看起来是成功的。这里做一次兜底校验。
+# 注意：本文件的提示文案一律用英文，PS 5.1 读无 BOM 的 UTF-8 时会把中文字符串解析坏。
+$requiredModules = @("dotenv", "mysql2", "ioredis")
+foreach ($mod in $requiredModules) {
+  if (-not (Test-Path (Join-Path $Root "node_modules\$mod"))) {
+    throw "Missing dependency after npm ci: node_modules\$mod. Aborted."
+  }
+}
+Write-Host "[deploy-worker] npm ci OK"
 
 $reg = Join-Path $Root "register-windows-scheduled-tasks.ps1"
 if (-not (Test-Path $reg)) {
