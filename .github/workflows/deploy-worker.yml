@@ -11,6 +11,9 @@ on:
       - "lib/agents/**"
       - "lib/heartbeat/**"
       - "lib/db/**"
+      # worker 的邮件事件链路依赖 lib/influencer/**（如 country-reply-sync、business-profile），
+      # 缺了这条会导致只改 lib/influencer 时 worker 拿不到新代码
+      - "lib/influencer/**"
       - "package.json"
       - "package-lock.json"
       - "deploy-worker.ps1"

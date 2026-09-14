@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   extractCountryFromReplyText,
+  resolveSnapshotCountry,
   resolveResidenceCountryUpdate,
   shouldAskCountryInOutreach,
 } from "../lib/influencer/country-reply-sync.js";
@@ -112,6 +113,30 @@ assert.equal(
 assert.equal(
   resolveResidenceCountryUpdate(null).reason,
   "missing_profile_delta"
+);
+
+// --- 展示用生效国家：本人确认优先于平台值 ---
+assert.equal(
+  resolveSnapshotCountry({
+    videoPublishCountry: "US",
+    residenceCountry: "JP",
+  }),
+  "JP"
+);
+assert.equal(
+  resolveSnapshotCountry({ residence_country: "ID", video_publish_country: "US" }),
+  "ID"
+);
+assert.equal(resolveSnapshotCountry({ videoPublishCountry: "US" }), "US");
+assert.equal(resolveSnapshotCountry({}), null);
+
+// 已有本人确认常住地时不再追问国家
+assert.equal(
+  shouldAskCountryInOutreach({
+    influencer: { residence_country: "JP" },
+    executionSnapshot: {},
+  }),
+  false
 );
 
 console.log("country reply sync tests passed");

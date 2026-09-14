@@ -1073,7 +1073,12 @@ function formatInfluencerStat(v) {
 }
 
 function resolveVideoPublishCountry(item) {
-  const v = item?.videoPublishCountry ?? item?.video_publish_country;
+  // 红人本人确认的常住地优先，其次才是平台抓到的发布地/账号国家
+  const v =
+    item?.residenceCountry ??
+    item?.residence_country ??
+    item?.videoPublishCountry ??
+    item?.video_publish_country;
   if (v == null || v === "") return null;
   const country = String(v).trim();
   if (!country || country.toLowerCase() === "country_unknown") return null;
