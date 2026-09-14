@@ -97,6 +97,35 @@ function useAutoResizeTextArea(value, maxHeight = 220) {
   return ref;
 }
 
+/** 微信式未读数字徽标（红底白字，>99 显示 99+） */
+function UnreadCountBadge({ count, title, size = "normal" }) {
+  const n = Number(count) || 0;
+  if (n <= 0) return null;
+  const small = size === "small";
+  return (
+    <span
+      title={title || `${n} 条未读`}
+      style={{
+        flexShrink: 0,
+        minWidth: small ? 14 : 16,
+        height: small ? 14 : 16,
+        padding: small ? "0 4px" : "0 5px",
+        borderRadius: 999,
+        backgroundColor: "#F5222D",
+        color: "#FFFFFF",
+        fontSize: small ? 9 : 10,
+        lineHeight: small ? "14px" : "16px",
+        fontWeight: 600,
+        textAlign: "center",
+        boxSizing: "border-box",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
 /** 侧栏会话行「⋯」更多菜单（悬停显隐由父级控制），对齐 DeepSeek 式交互 */
 function CampaignSessionRowMenu({ sessionId, showTrigger, menuOpen, onToggleMenu, onRename, onDelete }) {
   return (
@@ -665,6 +694,9 @@ async function fetchSessionBundleFromServer(sessionId) {
 /** 已发布会话：轮询服务端 Bin 自动消息（与 report-heartbeat 写入间隔对齐） */
 const SESSION_MESSAGES_POLL_MS = 60_000;
 
+/** 未读提示轮询间隔（方案约定 1 分钟） */
+const UNREAD_POLL_MS = 60_000;
+
 /** 微信式灰条：相邻有时间的消息间隔 ≥5 分钟或跨自然日 */
 const CHAT_TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
@@ -1175,9 +1207,19 @@ function ExecutionProgressSubTabs({ tabs, activeKey, onChange }) {
               color: isActive ? "#3730A3" : "#4B5563",
               fontSize: 11,
               cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
             }}
           >
-            {tab.label}（{tab.count}）
+            <span>
+              {tab.label}（{tab.count}）
+            </span>
+            <UnreadCountBadge
+              count={tab.badge}
+              size="small"
+              title="有新的红人沟通记录"
+            />
           </button>
         );
       })}
@@ -1256,6 +1298,8 @@ function communicationEntryHeadline(entry) {
     typeLabel = communicationQuoteTypeLabel(entry);
   } else if (entry?.source === "deliverable") {
     typeLabel = executionDeliverableTypeLabel(entry);
+  } else if (entry?.source === "shipping") {
+    typeLabel = entry?.type === "confirmed" ? "确认寄样地址" : "提供寄样地址";
   } else if (entry?.source === "special_request") {
     if (entry?.type === "ask") {
       const requestLabel = COMMUNICATION_REQUEST_TYPE_LABEL[entry?.requestType];
@@ -1283,6 +1327,7 @@ function ExecutionProgressCommunicationSection({
   campaignId,
   username,
   count,
+  unreadCount = 0,
   expanded,
   onToggle,
 }) {
@@ -1290,6 +1335,42 @@ function ExecutionProgressCommunicationSection({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [reloadKey, setReloadKey] = React.useState(0);
+  /** 展开即视为已读：本地先清零，避免等下一次轮询才消失 */
+  const [localUnread, setLocalUnread] = React.useState(Number(unreadCount) || 0);
+
+  React.useEffect(() => {
+    setLocalUnread(Number(unreadCount) || 0);
+  }, [unreadCount, username]);
+
+  const handleToggle = () => {
+    const nextExpanded = !expanded;
+    if (nextExpanded && localUnread > 0) {
+      setLocalUnread(0);
+      void fetch("/api/notifications/mark-read", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "campaign_influencer",
+          campaignId,
+          username,
+        }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          window.dispatchEvent(
+            new CustomEvent("maxin:influencer-read", {
+              detail: { campaignId, username },
+            })
+          );
+        })
+        .catch((e) => {
+          console.warn("[CommunicationSection] 标记已读失败:", e?.message || e);
+          setLocalUnread(Number(unreadCount) || 0);
+        });
+    }
+    onToggle();
+  };
 
   React.useEffect(() => {
     if (!expanded || items || !campaignId || !username) return undefined;
@@ -1328,7 +1409,7 @@ function ExecutionProgressCommunicationSection({
     <div style={{ marginTop: 4 }}>
       <button
         type="button"
-        onClick={onToggle}
+        onClick={handleToggle}
         style={{
           fontSize: 11,
           color: "#4F46E5",
@@ -1336,9 +1417,17 @@ function ExecutionProgressCommunicationSection({
           border: "none",
           cursor: "pointer",
           padding: 0,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
         }}
       >
-        {headline}
+        <span>{headline}</span>
+        <UnreadCountBadge
+          count={localUnread}
+          size="small"
+          title="新增未读沟通记录"
+        />
       </button>
       {expanded ? (
         <div
@@ -1935,6 +2024,7 @@ function ExecutionProgressRow({
   stageKey,
   item,
   needSample,
+  unreadCount = 0,
   execPatchingId,
   patchExecution,
   precheckApproveQuote,
@@ -2830,6 +2920,7 @@ function ExecutionProgressRow({
             campaignId={campaignId}
             username={username}
             count={sectionCount}
+            unreadCount={unreadCount}
             expanded={communicationExpanded}
             onToggle={() => setCommunicationExpanded((v) => !v)}
           />
@@ -2974,6 +3065,12 @@ export default function HomePage() {
   const loadingRef = useRef(false); // 供会话消息轮询读取最新 loading，避免闭包陈旧
   const [campaignSessions, setCampaignSessions] = useState([]); // Campaign 草稿列表
   const [publishedSessions, setPublishedSessions] = useState([]); // 已发布 Campaign 列表
+  // 未读提示：侧栏汇总 sessionId -> { chat, red, total }
+  const [unreadSummary, setUnreadSummary] = useState({});
+  // 未读提示：当前 campaign 明细 { campaignId, byStage, byInfluencer, total }
+  const [unreadDetail, setUnreadDetail] = useState(null);
+  const unreadDetailReqSeqRef = useRef(0);
+  const lastMarkedSessionRef = useRef(null);
   const publishedSessionGroups = useMemo(() => {
     const running = [];
     const paused = [];
@@ -5302,6 +5399,168 @@ export default function HomePage() {
     const stageKey = activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage;
     await loadExecutionStatusPage(stageKey, { campaignId: cid, quiet: true });
   }, [resolvedCampaignId, activeExecutionStage, loadExecutionStatusPage]);
+
+  /** 拉取侧栏未读汇总（每个 session 的聊天未读 + 红人未读红人数） */
+  const refreshUnreadSummary = useCallback(async () => {
+    if (!authUser) return;
+    try {
+      const res = await fetch("/api/notifications/unread-summary", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) return;
+      setUnreadSummary(data.sessions || {});
+    } catch (e) {
+      console.warn("[HomePage] 未读汇总拉取失败:", e?.message || e);
+    }
+  }, [authUser]);
+
+  /** 拉取当前 campaign 的未读明细（各 tab 红人数 + 每个红人未读数） */
+  const refreshUnreadDetail = useCallback(async (campaignId) => {
+    const cid = campaignId || resolvedCampaignId;
+    if (!cid) {
+      setUnreadDetail(null);
+      return;
+    }
+    const reqSeq = ++unreadDetailReqSeqRef.current;
+    try {
+      const res = await fetch(
+        `/api/notifications/unread-detail?campaignId=${encodeURIComponent(cid)}`,
+        { credentials: "include", cache: "no-store" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (reqSeq !== unreadDetailReqSeqRef.current) return;
+      if (!res.ok || !data?.success) return;
+      setUnreadDetail({
+        campaignId: cid,
+        byStage: data.byStage || {},
+        byInfluencer: data.byInfluencer || {},
+        total: Number(data.total || 0),
+      });
+    } catch (e) {
+      console.warn("[HomePage] 未读明细拉取失败:", e?.message || e);
+    }
+  }, [resolvedCampaignId]);
+
+  /** 标记会话聊天框已读（水位按真实登录用户记） */
+  const markSessionRead = useCallback(async (sessionId, token = "") => {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return;
+    const key = `session:${sid}:${token}`;
+    if (lastMarkedSessionRef.current === key) return;
+    lastMarkedSessionRef.current = key;
+    try {
+      await fetch("/api/notifications/mark-read", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "session", sessionId: sid }),
+      });
+      setUnreadSummary((prev) => {
+        const cur = prev[sid];
+        if (!cur) return prev;
+        const red = Number(cur.red || 0);
+        const next = { ...prev };
+        if (red > 0) next[sid] = { chat: 0, red, total: red };
+        else delete next[sid];
+        return next;
+      });
+    } catch (e) {
+      lastMarkedSessionRef.current = null;
+      console.warn("[HomePage] 标记会话已读失败:", e?.message || e);
+    }
+  }, []);
+
+  // 切会话 / 切 campaign：清掉上一份未读明细，并允许重新标记已读
+  useEffect(() => {
+    unreadDetailReqSeqRef.current += 1;
+    setUnreadDetail(null);
+    lastMarkedSessionRef.current = null;
+  }, [resolvedCampaignId, currentSessionId]);
+
+  // 未读提示：60s 轮询（页面隐藏时暂停），进入即先拉一次
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!mounted || !authUser) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") return;
+      await refreshUnreadSummary();
+      if (resolvedCampaignId) await refreshUnreadDetail(resolvedCampaignId);
+    };
+
+    void tick();
+    const intervalId = setInterval(tick, UNREAD_POLL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [mounted, authUser, resolvedCampaignId, refreshUnreadSummary, refreshUnreadDetail]);
+
+  // 红人卡片展开沟通记录后：立即刷新未读明细与侧栏汇总
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onInfluencerRead = () => {
+      void refreshUnreadDetail();
+      void refreshUnreadSummary();
+    };
+    window.addEventListener("maxin:influencer-read", onInfluencerRead);
+    return () => window.removeEventListener("maxin:influencer-read", onInfluencerRead);
+  }, [refreshUnreadDetail, refreshUnreadSummary]);
+
+  // 未读提示：聊天滚到底部即标记该会话已读（方案约定「打开且滚到底部即已读」）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!isExecutionPhaseGlobal || !currentSessionId) return;
+    if (document.visibilityState !== "visible") return;
+    if (!shouldAutoScrollRef.current) return;
+    const assistantCount = Array.isArray(messages)
+      ? messages.filter((m) => m?.role === "assistant").length
+      : 0;
+    void markSessionRead(currentSessionId, `a${assistantCount}`);
+  }, [isExecutionPhaseGlobal, currentSessionId, messages, markSessionRead]);
+
+  /** 当前 campaign 的未读明细（防止切换瞬间拿到上一份） */
+  const activeUnreadDetail = useMemo(
+    () =>
+      unreadDetail && unreadDetail.campaignId === resolvedCampaignId
+        ? unreadDetail
+        : null,
+    [unreadDetail, resolvedCampaignId]
+  );
+
+  /** 红人卡片红色数字：新增未读沟通记录数（不含寄样条目） */
+  const unreadCardCount = useCallback(
+    (item) => {
+      const handle = String(item?.id || "").trim();
+      if (!handle || !activeUnreadDetail?.byInfluencer) return 0;
+      return Number(activeUnreadDetail.byInfluencer[handle]?.cardUnread || 0);
+    },
+    [activeUnreadDetail]
+  );
+
+  /** tab / 子 tab 徽标数字（有未读的红人数） */
+  const unreadStageBadge = useCallback(
+    (key) => {
+      if (!key || !activeUnreadDetail?.byStage) return 0;
+      return Number(activeUnreadDetail.byStage[key] || 0);
+    },
+    [activeUnreadDetail]
+  );
+
+  /** 侧栏徽标数字：聊天未读 + 红人未读红人数 */
+  const sessionUnreadTotal = useCallback(
+    (sessionId) => Number(unreadSummary?.[String(sessionId)]?.total || 0),
+    [unreadSummary]
+  );
 
   const refreshAuthUser = useCallback(async () => {
     try {
@@ -8015,6 +8274,10 @@ export default function HomePage() {
                                     : ""}
                           </div>
                         </div>
+                        <UnreadCountBadge
+                          count={sessionUnreadTotal(session.id)}
+                          title="未读：Bin 消息 + 红人新沟通记录"
+                        />
                         {renamingSessionId !== session.id ? (
                           <CampaignSessionRowMenu
                             sessionId={session.id}
@@ -8193,6 +8456,10 @@ export default function HomePage() {
                             {session.title || "已发布 Campaign"}
                           </div>
                           )}
+                          <UnreadCountBadge
+                            count={sessionUnreadTotal(session.id)}
+                            title="未读：Bin 消息 + 红人新沟通记录"
+                          />
                           {renamingSessionId !== session.id ? (
                             <CampaignSessionRowMenu
                               sessionId={session.id}
@@ -8536,6 +8803,11 @@ export default function HomePage() {
                 } else {
                   // 如果用户滚动回底部，重新启用自动滚动
                   shouldAutoScrollRef.current = true;
+                  // 未读提示：滚到底部即标记该会话已读
+                  const assistantCount = Array.isArray(messages)
+                    ? messages.filter((m) => m?.role === "assistant").length
+                    : 0;
+                  void markSessionRead(currentSessionId, `a${assistantCount}`);
                 }
               }}
             >
@@ -9011,6 +9283,7 @@ export default function HomePage() {
                       count:
                         executionStatus?.totalByStage?.pendingSampleReady ??
                         pendingSampleReadyItems.length,
+                      badge: unreadStageBadge("pendingSample"),
                     },
                   ];
                   const analyzedSubTabs = [
@@ -9047,6 +9320,7 @@ export default function HomePage() {
                       count:
                         executionStatus?.totalByStage?.pendingDraftScript ??
                         pendingDraftScriptItems.length,
+                      badge: unreadStageBadge("pendingDraftScript"),
                     },
                     {
                       key: "video",
@@ -9054,6 +9328,7 @@ export default function HomePage() {
                       count:
                         executionStatus?.totalByStage?.pendingDraftVideo ??
                         pendingDraftVideoItems.length,
+                      badge: unreadStageBadge("pendingDraftVideo"),
                     },
                   ];
                   const showExecutionSubTabs =
@@ -9161,9 +9436,19 @@ export default function HomePage() {
                                         color: isActive ? "#3730A3" : "#4B5563",
                                         fontSize: 12,
                                         cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: 4,
                                       }}
                                     >
-                                      {stage.title}（{tabCount}）
+                                      <span>
+                                        {stage.title}（{tabCount}）
+                                      </span>
+                                      <UnreadCountBadge
+                                        count={unreadStageBadge(stage.key)}
+                                        size="small"
+                                        title="有新的红人沟通记录"
+                                      />
                                     </button>
                                   );
                                 })}
@@ -9472,6 +9757,7 @@ export default function HomePage() {
                                             precheckApproveQuote={precheckApproveQuote}
                                             executionUsernameSet={executionUsernameSet}
                                             highlightUsername={highlightExecutionUsername}
+                                            unreadCount={unreadCardCount(item)}
                                           />
                                         ))
                                       )
@@ -9495,6 +9781,7 @@ export default function HomePage() {
                                           patchExecution={patchExecution}
                                           executionUsernameSet={executionUsernameSet}
                                           highlightUsername={highlightExecutionUsername}
+                                          unreadCount={unreadCardCount(item)}
                                         />
                                       ))
                                     )
@@ -9526,6 +9813,7 @@ export default function HomePage() {
                                           precheckApproveQuote={precheckApproveQuote}
                                           executionUsernameSet={executionUsernameSet}
                                           highlightUsername={highlightExecutionUsername}
+                                          unreadCount={unreadCardCount(item)}
                                         />
                                       ))
                                     )}
@@ -9590,6 +9878,7 @@ export default function HomePage() {
                                             precheckApproveQuote={precheckApproveQuote}
                                             executionUsernameSet={executionUsernameSet}
                                             highlightUsername={highlightExecutionUsername}
+                                            unreadCount={unreadCardCount(item)}
                                           />
                                         ))
                                       )
@@ -9609,6 +9898,7 @@ export default function HomePage() {
                                           patchExecution={patchExecution}
                                           executionUsernameSet={executionUsernameSet}
                                           highlightUsername={highlightExecutionUsername}
+                                          unreadCount={unreadCardCount(item)}
                                         />
                                       ))
                                     )}
@@ -9634,6 +9924,7 @@ export default function HomePage() {
                                         patchExecution={patchExecution}
                                         executionUsernameSet={executionUsernameSet}
                                         highlightUsername={highlightExecutionUsername}
+                                        unreadCount={unreadCardCount(item)}
                                       />
                                     ))
                                   )
@@ -9654,6 +9945,7 @@ export default function HomePage() {
                                         patchExecution={patchExecution}
                                         executionUsernameSet={executionUsernameSet}
                                         highlightUsername={highlightExecutionUsername}
+                                        unreadCount={unreadCardCount(item)}
                                       />
                                     ))
                                   )
@@ -9669,6 +9961,7 @@ export default function HomePage() {
                                       patchExecution={patchExecution}
                                       executionUsernameSet={executionUsernameSet}
                                       highlightUsername={highlightExecutionUsername}
+                                      unreadCount={unreadCardCount(item)}
                                     />
                                   ))
                                 )}

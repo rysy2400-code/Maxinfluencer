@@ -25,6 +25,7 @@ import {
   buildTraceIdFromInboundMessageId,
 } from "../lib/utils/timeline-ids.js";
 import { resolveInfluencerAgentUpdate } from "../lib/execution/stage-transition.js";
+import { influencerEntryDelta } from "../lib/execution/influencer-entry-seq.js";
 import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
@@ -55,6 +56,14 @@ function validIsoOrNow(value) {
     if (Number.isFinite(t)) return new Date(t).toISOString();
   }
   return new Date().toISOString();
+}
+
+/** 寄样地址核心字段指纹：只比较地址本身，忽略 source / lastConfirmedAt 等元信息 */
+function shippingCoreKey(raw) {
+  const info = normalizeShippingInfo(raw) || {};
+  return ["fullName", "country", "state", "city", "addressLine", "postalCode", "phone"]
+    .map((key) => String(info[key] || "").trim().toLowerCase())
+    .join("|");
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -161,7 +170,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   const execRows = await queryTikTok(
     `
-    SELECT stage, flat_fee, currency, quote_negotiation, quote_origin, last_event
+    SELECT stage, flat_fee, currency, quote_negotiation, quote_origin, last_event, shipping_info
     FROM tiktok_campaign_execution
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
@@ -267,6 +276,32 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   // —— 结构化交付时间线（脚本 / 视频草稿 / 发布链接），存 last_event.deliverablesTimeline ——
   const savedAtIso = new Date().toISOString();
+
+  // —— 寄样条目：红人提供/确认完整寄样地址，存 last_event.shippingTimeline ——
+  // 只用于未读判定（「待寄送样品」tab 徽标）；卡片不显示数字，故不计入 infl_card_seq。
+  // 地址未变化（重复确认同一地址）时不再追加，避免刷出假未读。
+  let shippingTimeline = Array.isArray(mergedLastEvent.shippingTimeline)
+    ? mergedLastEvent.shippingTimeline
+    : [];
+  if (!Array.isArray(shippingTimeline)) shippingTimeline = [];
+  if (
+    shippingInfo &&
+    shippingCoreKey(parseJsonOrObject(cur.shipping_info)) !== shippingCoreKey(shippingInfo)
+  ) {
+    shippingTimeline = [
+      ...shippingTimeline,
+      {
+        kind: "shipping",
+        role: "influencer",
+        type: "provided",
+        at: savedAtIso,
+        source: "influencer_email",
+        emailEventId: emailEvent.id || null,
+      },
+    ];
+    mergedLastEvent.shippingTimeline = shippingTimeline;
+  }
+
   let deliverablesTimeline = Array.isArray(mergedLastEvent.deliverablesTimeline)
     ? mergedLastEvent.deliverablesTimeline
     : [];
@@ -366,6 +401,12 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     },
   };
 
+  // 红人侧沟通条目累计计数：未读提示用它做纯 SQL 判定（含寄样 / 不含寄样各一份）。
+  const entryDelta = influencerEntryDelta(
+    { quoteNegotiation: cur.quote_negotiation, lastEvent: cur.last_event },
+    { quoteNegotiation: negotiation, lastEvent: mergedLastEvent }
+  );
+
   await queryTikTok(
     `
     UPDATE tiktok_campaign_execution
@@ -376,6 +417,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         quote_origin = ?,
         video_link = COALESCE(?, video_link),
         shipping_info = COALESCE(?, shipping_info),
+        infl_event_seq = COALESCE(infl_event_seq, 0) + ?,
+        infl_card_seq = COALESCE(infl_card_seq, 0) + ?,
         last_event = ?
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
@@ -387,6 +430,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       nextQuoteOrigin,
       videoLink,
       shippingInfo ? JSON.stringify(shippingInfo) : null,
+      entryDelta.eventDelta,
+      entryDelta.cardDelta,
       JSON.stringify(mergedLastEvent),
       campaignId,
       ...paramsExecutionCreatorMatch(influencerId),
