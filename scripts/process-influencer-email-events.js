@@ -29,6 +29,7 @@ import {
 } from "../lib/execution/content-brief.js";
 import {
   getInfluencerById,
+  listInfluencerPlatformIdentities,
   markInfluencerDoNotContact,
   updateInfluencerBusinessProfile,
 } from "../lib/db/influencer-dao.js";
@@ -36,6 +37,7 @@ import {
   isExplicitDoNotContact,
   updateBusinessProfileFromReply,
 } from "../lib/influencer/business-profile.js";
+import { seedKnownPlatformProfiles } from "../lib/influencer/business-profile-platform-identity.js";
 import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-quote.js";
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
@@ -957,6 +959,7 @@ async function applyMaintenanceFromDecision({
   influencerRow,
   influencerId,
   conversationHistory,
+  businessProfileMarkdownForPrompt = null,
 }) {
   const result = { country: null, profile: null, stopProcessing: false };
   const delta = decision?.profileDelta || null;
@@ -996,7 +999,13 @@ async function applyMaintenanceFromDecision({
   if (delta.hasProfileUpdate) {
     try {
       result.profile = await updateBusinessProfileFromReply({
-        influencer: influencerRow,
+        influencer:
+          businessProfileMarkdownForPrompt != null
+            ? {
+                ...influencerRow,
+                businessProfileMarkdown: businessProfileMarkdownForPrompt,
+              }
+            : influencerRow,
         email: {
           subject: event.subject || "",
           bodyText: event.body_text || "",
@@ -1061,6 +1070,11 @@ async function processEvent(event) {
   const influencerRow =
     canonicalEventInfluencerId &&
     (await getInfluencerById(canonicalEventInfluencerId).catch(() => null));
+  const platformIdentities = canonicalEventInfluencerId
+    ? await listInfluencerPlatformIdentities(canonicalEventInfluencerId).catch(
+        () => []
+      )
+    : [];
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
     await markInfluencerDoNotContact({
       influencerId: canonicalEventInfluencerId,
@@ -1072,6 +1086,11 @@ async function processEvent(event) {
   }
   // 商务档案 / 常住地维护已改为「事件决策 LLM 先判定，再按需触发」：
   // profileDelta 由下方决策 LLM 返回，applyMaintenanceFromDecision 负责落库。
+  // 已知平台身份（如 YouTube @mixallin1）直接补进档案，避免把已有账号当成 Unknown 再问。
+  const seededBusinessProfileMarkdown = seedKnownPlatformProfiles(
+    influencerRow?.businessProfileMarkdown || "",
+    platformIdentities
+  );
   const threadMailCtx = await resolveInfluencerThreadMailContext({
     influencerId: canonicalEventInfluencerId,
     influencer: influencerRow,
@@ -1096,7 +1115,7 @@ async function processEvent(event) {
     reusableShippingInfo,
     conversationHistory,
     existingBusinessProfileMarkdown:
-      influencerRow?.businessProfileMarkdown || null,
+      seededBusinessProfileMarkdown || null,
     threadInfo: {
       canonicalThreadSubject: threadMailCtx.canonicalBase,
       rootMessageId: threadMailCtx.rootMessageId,
@@ -1414,6 +1433,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
     influencerRow,
     influencerId: canonicalEventInfluencerId,
     conversationHistory,
+    businessProfileMarkdownForPrompt:
+      seededBusinessProfileMarkdown || null,
   });
   if (maintenance.stopProcessing) {
     await markEventStatus(event.id, "succeeded", null);
