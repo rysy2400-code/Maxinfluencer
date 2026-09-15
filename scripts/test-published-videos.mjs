@@ -18,6 +18,10 @@ import {
   normalizePublishedLinksInput,
   mergePublishedLinkLists,
 } from "../lib/execution/published-link-extraction.js";
+import {
+  igShortcodeToMediaId,
+  igMediaIdToShortcode,
+} from "../lib/execution/instagram-shortcode.js";
 
 let failed = 0;
 
@@ -192,6 +196,19 @@ assert(
 );
 
 // —— 7. 邮件正文多平台抽取（真实 case: shinwamystery）——
+// Instagram shortcode ↔ 数字 media id（私有接口 /api/v1/media/{id}/info/ 需要数字 id）
+assertEq(
+  igShortcodeToMediaId("DdQ5YvdpMUz"),
+  "3985938059104666931",
+  "ig shortcode → media id (verified against live API)"
+);
+assertEq(
+  igMediaIdToShortcode("3985938059104666931"),
+  "DdQ5YvdpMUz",
+  "ig media id → shortcode round trip"
+);
+assertEq(igShortcodeToMediaId("bad!char"), null, "ig shortcode rejects invalid chars");
+
 // 7.1 落库合并：两次回传（先 YouTube+Instagram，后 TikTok）→ 3 条、时间线不重复
 const firstUpdate = upsertPublishedVideosFromUpdate({
   lastEvent: {},

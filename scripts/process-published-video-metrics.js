@@ -125,12 +125,25 @@ async function main() {
 
     let browser = null;
     let page = null;
+    let createdPage = false;
     const needBrowser = platform !== "tiktok";
     if (needBrowser) {
       try {
         browser = await chromium.connectOverCDP(endpoint, { timeout: 20000 });
         const context = browser.contexts()[0] || (await browser.newContext());
-        page = await context.newPage();
+        // Instagram：优先复用已在 instagram.com 的 tab（API 直调，无需新页面/导航）
+        const existingPage =
+          platform === "instagram"
+            ? context
+                .pages()
+                .find((p) => /instagram\.com/.test(String(p.url() || "")))
+            : null;
+        if (existingPage) {
+          page = existingPage;
+        } else {
+          page = await context.newPage();
+          createdPage = true;
+        }
         try {
           await page.bringToFront();
         } catch {
@@ -194,12 +207,14 @@ async function main() {
       if (delayMs > 0) await sleep(delayMs);
     }
 
-    if (needBrowser && page) {
+    if (needBrowser && page && createdPage) {
       try {
         await page.close();
       } catch {
         /* ignore */
       }
+    }
+    if (needBrowser && browser) {
       try {
         await browser.close();
       } catch {
