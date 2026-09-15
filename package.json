@@ -20,6 +20,8 @@
     "test:stage-transition": "node scripts/test-stage-transition.mjs",
     "test:approve-quote": "node scripts/test-approve-quote-charge-logic.mjs",
     "migrate:execution-commission": "node scripts/add-execution-commission-percent.js",
+    "migrate:influencer-language": "node scripts/add-influencer-language-table.js",
+    "backfill:influencer-language": "node scripts/backfill-influencer-language.mjs",
     "backfill:execution-terms": "node scripts/backfill-execution-commission-terms.mjs",
     "repair:unconfirmed-quotes": "node scripts/repair-price-unconfirmed-quote-submitted.mjs",
     "backfill:published-videos": "node scripts/backfill-published-videos.mjs",

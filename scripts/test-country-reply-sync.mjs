@@ -20,13 +20,37 @@ assert.equal(
 );
 assert.equal(extractCountryFromReplyText("Thanks for getting back to us.")?.iso, undefined);
 assert.equal(extractCountryFromReplyText("I can do it next week.")?.iso, undefined);
+// 口径（2026-09 确认）：首封邮件只补「居住国家」；账号国家已知也要问，已答过就跳过。
 assert.equal(
   shouldAskCountryInOutreach({ influencer: { region: "US" }, executionSnapshot: {} }),
-  false
+  true,
+  "只有平台 region 时仍要问居住国家"
 );
 assert.equal(
-  shouldAskCountryInOutreach({ influencer: {}, executionSnapshot: { videoPublishCountry: "GB" } }),
-  false
+  shouldAskCountryInOutreach({
+    influencer: {},
+    executionSnapshot: { videoPublishCountry: "GB" },
+  }),
+  true,
+  "只有账号国家时仍要问居住国家"
+);
+assert.equal(
+  shouldAskCountryInOutreach({
+    influencer: {},
+    executionSnapshot: { residenceCountry: "GB" },
+  }),
+  false,
+  "快照里已有居住国家 → 不再问"
+);
+assert.equal(
+  shouldAskCountryInOutreach({ influencer: { residenceCountry: "JP" }, executionSnapshot: {} }),
+  false,
+  "主档已有居住国家（含跨 campaign 历史回复）→ 不再问"
+);
+assert.equal(
+  shouldAskCountryInOutreach({ influencer: { residence_country: "JP" }, executionSnapshot: {} }),
+  false,
+  "下划线字段同样生效"
 );
 assert.equal(
   shouldAskCountryInOutreach({ influencer: {}, executionSnapshot: {} }),

@@ -4,6 +4,44 @@ import {
   loadAnalyzedBreakdown,
   loadExcludedCount,
 } from "../../../../../lib/db/execution-counts-cache.js";
+import { loadInfluencerLanguageMap } from "../../../../../lib/influencer/influencer-language-store.js";
+
+/**
+ * 候选快照里没有 bio 语言（老数据）时，按 influencer_id 回查语言旁路表补齐，
+ * 让卡片「语言」列对存量红人同样可见。
+ */
+async function attachBioLanguage(candidates = []) {
+  const missing = (candidates || []).filter((c) => {
+    const has =
+      c?.bioLanguage ?? c?.bio_language ?? c?.snapshot?.bioLanguage ?? null;
+    return !has && (c?.platformInfluencerId || c?.snapshot?.platformInfluencerId);
+  });
+  if (!missing.length) return candidates;
+  try {
+    const ids = missing
+      .map((c) => c.platformInfluencerId || c.snapshot?.platformInfluencerId)
+      .map((v) => (v == null ? "" : String(v).trim()))
+      .filter(Boolean);
+    const map = await loadInfluencerLanguageMap(ids);
+    if (!map.size) return candidates;
+    return (candidates || []).map((c) => {
+      const pid = c?.platformInfluencerId || c?.snapshot?.platformInfluencerId;
+      const hit = pid ? map.get(String(pid)) : null;
+      if (!hit?.bioLanguage) return c;
+      if (c?.snapshot && typeof c.snapshot === "object") {
+        return { ...c, snapshot: { ...c.snapshot, bioLanguage: hit.bioLanguage } };
+      }
+      if (c?.bioLanguage) return c;
+      return { ...c, bioLanguage: hit.bioLanguage };
+    });
+  } catch (err) {
+    console.warn(
+      "[Campaign Candidates API] 读取红人画像语言失败:",
+      err?.message || err
+    );
+    return candidates;
+  }
+}
 
 function parseJson(value) {
   if (value == null) return null;
@@ -154,6 +192,7 @@ export async function GET(req, { params }) {
           matchAnalysis: null,
         };
       });
+      const candidatesWithLanguage = await attachBioLanguage(candidates);
 
       const last = (rows || []).length > 0 ? rows[rows.length - 1] : null;
       const nextBeforeId = last ? String(last.id) : null;
@@ -162,7 +201,7 @@ export async function GET(req, { params }) {
 
       const payload = {
         success: true,
-        data: candidates,
+        data: candidatesWithLanguage,
         nextBeforeId,
       };
       if (excludedCount != null) payload.excludedCount = excludedCount;
@@ -219,10 +258,11 @@ export async function GET(req, { params }) {
           snapshot,
         };
       });
+      const candidatesWithLanguage = await attachBioLanguage(candidates);
 
       return NextResponse.json({
         success: true,
-        data: candidates,
+        data: candidatesWithLanguage,
       });
     }
 
@@ -303,13 +343,14 @@ export async function GET(req, { params }) {
 
       return { ...snapshot, ...base };
     });
+    const candidatesWithLanguage = await attachBioLanguage(candidates);
 
     const last = (rows || []).length > 0 ? rows[rows.length - 1] : null;
     const nextBeforeId = last ? encodeAnalyzedCursor(last) : null;
 
     const payload = {
       success: true,
-      data: candidates,
+      data: candidatesWithLanguage,
       nextBeforeId,
     };
     if (totalMatchAnalysisCount != null) {

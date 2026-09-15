@@ -51,6 +51,11 @@ import { validateInfluencerAgentStageTransition } from "../lib/execution/stage-t
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { applyResidenceCountryFromDelta } from "../lib/influencer/country-reply-sync.js";
 import {
+  upsertCommunicationLanguage,
+  getInfluencerLanguage,
+} from "../lib/influencer/influencer-language-store.js";
+import { normalizeLanguageCode } from "../lib/influencer/infer-bio-language.js";
+import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
   resolveReusableShippingInfo,
@@ -1175,13 +1180,37 @@ async function applyMaintenanceFromDecision({
 }) {
   const result = { country: null, profile: null, stopProcessing: false };
   const delta = decision?.profileDelta || null;
-  if (!influencerRow || !influencerId || !delta) return result;
+  if (!influencerRow || !influencerId) return result;
   if (
     isLikelyAutoReply(event.subject, event.body_text) ||
     isBodyEffectivelyEmpty(event.body_text)
   ) {
     return result;
   }
+
+  // 沟通语言：以红人本封邮件的语言为准（LLM 判定），后续发信跟着切。
+  // 自动回复/空正文不更新语言（上面已提前返回）。
+  try {
+    const language = normalizeLanguageCode(decision?.outboundLanguage);
+    if (language) {
+      await upsertCommunicationLanguage({
+        influencerId,
+        language,
+        source: "reply",
+      });
+      result.language = { changed: true, language };
+    } else {
+      result.language = { changed: false, reason: "no_outbound_language" };
+    }
+  } catch (err) {
+    result.language = { changed: false, error: err?.message || String(err) };
+    console.warn(
+      "[ProcessInfluencerEmailEvents] 沟通语言回写失败:",
+      err?.message || err
+    );
+  }
+
+  if (!delta) return result;
 
   if (delta.doNotContact) {
     await markInfluencerDoNotContact({
@@ -1287,6 +1316,20 @@ async function processEvent(event) {
         () => []
       )
     : [];
+  // 当前沟通语言（红人上一次回复语言或 bio 兜底），供决策 LLM 判断无法识别语言时沿用
+  const influencerLanguage = canonicalEventInfluencerId
+    ? await getInfluencerLanguage(canonicalEventInfluencerId).catch((err) => {
+        console.warn(
+          "[ProcessInfluencerEmailEvents] 读取红人沟通语言失败:",
+          err?.message || err
+        );
+        return null;
+      })
+    : null;
+  const existingCommunicationLanguage =
+    influencerLanguage?.communicationLanguage ||
+    influencerLanguage?.bioLanguage ||
+    null;
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
     if (DRY_RUN) {
       console.log("[Replay] 命中 do-not-contact 分支，跳过 LLM（未写库）。");
@@ -1332,6 +1375,7 @@ async function processEvent(event) {
     conversationHistory,
     existingBusinessProfileMarkdown:
       seededBusinessProfileMarkdown || null,
+    existingCommunicationLanguage,
     threadInfo: {
       canonicalThreadSubject: threadMailCtx.canonicalBase,
       rootMessageId: threadMailCtx.rootMessageId,
@@ -1477,7 +1521,7 @@ ${influencerAgentBasePrompt}
         "influencerId": "7123...",         // 可选，默认使用当前事件的 influencerId
         "to": "influencer@example.com",    // 可选，默认发给当前邮件的 from
         "subject": "Re: xxx",              // 可选，如不确定可以留空，由系统统一使用线程标题
-        "body": "邮件正文（英文或中英均可）",
+        "body": "邮件正文（必须使用 outboundLanguage 指定的语言）",
         "inReplyTo": "原邮件的 Message-ID（可选，如果不填则默认回复当前这封邮件）",
         "reason": "简要说明为什么要发这封邮件"
       }
@@ -1514,6 +1558,7 @@ ${influencerAgentBasePrompt}
         "note": "红人对系统建议合作和价格的明确回复摘要"
       }
     ],
+    "outboundLanguage": "en",
     "profileDelta": {
       "hasProfileUpdate": true,
       "residenceCountry": "JP",
@@ -1526,6 +1571,14 @@ ${influencerAgentBasePrompt}
       "doNotContactReason": null
     }
   }
+
+【回复语言 · outboundLanguage（每封回复都必须返回）】
+- 用**红人本封邮件的语言**回复：他写英语就用英语，写西语就用西语，写印尼语就用印尼语；不要默认英语。
+- 红人混写多种语言（例如英语问候 + 西语正文）时，你自主判断哪种语言对他最自然，选一种即可，不要在正文里解释语言选择。
+- 红人上一次用 A 语言、这一封改用 B 语言时**跟着这一封改**（以最近一封为准），不要沿用旧语言。
+- 填 BCP-47 简码，例如 en / es / pt / id / vi / th / ja / ko / zh / fr / de / ar / ru。无法判断时沿用 existingCommunicationLanguage，再不然用 en。
+- outboundLanguage 只影响 outboundEmails 里给红人看的正文；内部 JSON 说明（note / reason 等）仍用中文。
+- 合同、条款、付款等法律口径文本仍以英文合同为准，邮件正文可用红人语言解释，但不得改写条款含义。
 
 【商务档案与常住地增量 · profileDelta（每封回复都必须返回这个对象）】
 - profileDelta 只描述**本轮这封邮件**带来的新信息，不是整份档案；没有新信息就全部留空/false。

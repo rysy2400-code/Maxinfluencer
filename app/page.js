@@ -43,6 +43,7 @@ import {
   formatCountryForDisplay,
   isUnknownCountryValue,
 } from "../lib/influencer/campaign-country-codes.js";
+import { languageDisplayName } from "../lib/influencer/country-primary-language.js";
 import { partitionPendingPriceItems } from "../lib/execution/pending-price-items.js";
 import { formatUsdAmount } from "../lib/billing/balance-messages.js";
 import { resolveLatestInfluencerQuote } from "../lib/execution/quote-resolution.js";
@@ -1271,17 +1272,38 @@ function ExecutionProgressPublishedVideos({ item }) {
   );
 }
 
-function resolveVideoPublishCountry(item) {
-  // 红人本人确认的常住地优先，其次才是平台抓到的发布地/账号国家
+/** 账号国家：搜索任务执行时从红人主页抓取到的国家（平台证据） */
+function resolveAccountCountry(item) {
   const v =
-    item?.residenceCountry ??
-    item?.residence_country ??
+    item?.accountCountry ??
+    item?.account_country ??
     item?.videoPublishCountry ??
     item?.video_publish_country;
   if (v == null || v === "") return null;
   const country = String(v).trim();
   if (!country || country.toLowerCase() === "country_unknown") return null;
   return country;
+}
+
+/** 居住国家：红人在邮件里本人确认的常住地 */
+function resolveResidenceCountry(item) {
+  const v = item?.residenceCountry ?? item?.residence_country;
+  if (v == null || v === "") return null;
+  const country = String(v).trim();
+  if (!country || country.toLowerCase() === "country_unknown") return null;
+  return country;
+}
+
+/** 卡片「语言」列：红人主页简介语言（推断不出显示 —） */
+function resolveBioLanguageLabel(item) {
+  const code =
+    item?.bioLanguage ??
+    item?.bio_language ??
+    item?.profile_data?.bioLanguage ??
+    null;
+  const raw = code == null ? "" : String(code).trim();
+  if (!raw) return "—";
+  return languageDisplayName(raw);
 }
 
 function formatGmvStat(item) {
@@ -1326,12 +1348,19 @@ function ExecutionProgressLastReplyTime({ at }) {
   );
 }
 
-/** 执行进度卡片：国家 · 粉丝 · 播放 · GMV */
+/** 执行进度卡片：账号国家 · 居住国家 · 语言 · 粉丝 · 播放 · GMV */
 function ExecutionProgressMetricsLine({ item }) {
-  const countryRaw = resolveVideoPublishCountry(item);
-  const country =
-    formatCountryForDisplay(countryRaw) ??
-    (isUnknownCountryValue(countryRaw) ? "—" : countryRaw);
+  const accountCountryRaw = resolveAccountCountry(item);
+  const accountCountry =
+    formatCountryForDisplay(accountCountryRaw) ??
+    (isUnknownCountryValue(accountCountryRaw) ? "—" : accountCountryRaw) ??
+    "—";
+  const residenceCountryRaw = resolveResidenceCountry(item);
+  const residenceCountry =
+    formatCountryForDisplay(residenceCountryRaw) ??
+    (isUnknownCountryValue(residenceCountryRaw) ? "—" : residenceCountryRaw) ??
+    "—";
+  const language = resolveBioLanguageLabel(item);
   const followers = formatInfluencerStat(
     item?.followers ?? item?.followerCount ?? item?.follower_count
   );
@@ -1340,10 +1369,15 @@ function ExecutionProgressMetricsLine({ item }) {
   );
   const gmv = formatGmvStat(item);
   return (
-    <div style={{ fontSize: 11, color: "#6B7280" }}>
-      国家 {country} · 粉丝 {followers} · 播放 {views}
-      {` · GMV ${gmv}`}
-    </div>
+    <>
+      <div style={{ fontSize: 11, color: "#6B7280" }}>
+        账号国家 {accountCountry} · 居住国家 {residenceCountry} · 语言 {language}
+      </div>
+      <div style={{ fontSize: 11, color: "#6B7280" }}>
+        粉丝 {followers} · 播放 {views}
+        {` · GMV ${gmv}`}
+      </div>
+    </>
   );
 }
 
