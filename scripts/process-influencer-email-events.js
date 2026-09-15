@@ -41,7 +41,13 @@ import { seedKnownPlatformProfiles } from "../lib/influencer/business-profile-pl
 import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-quote.js";
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
-import { normalizeCommissionPercent } from "../lib/execution/agreed-terms.js";
+import {
+  normalizeCommissionPercent,
+  normalizeFixedFeeUsd,
+  resolveExecutionAgreedTerms,
+  validateQuoteSubmittedAdmission,
+} from "../lib/execution/agreed-terms.js";
+import { validateInfluencerAgentStageTransition } from "../lib/execution/stage-transition.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { applyResidenceCountryFromDelta } from "../lib/influencer/country-reply-sync.js";
 import {
@@ -68,6 +74,45 @@ const AUTO_REPLY_PATTERNS = [
 
 /** LLM 决策失败最多重试次数（含首次），避免瞬时故障直接丢事件 */
 const MAX_EMAIL_EVENT_ATTEMPTS = 3;
+
+/**
+ * 回放/干跑模式（只读，不写库）：用于验证 prompt 改动在真实邮件上的表现。
+ *
+ *   node --experimental-default-type=module scripts/process-influencer-email-events.js \
+ *     --dry-run --event-id=3691616 --repeat=3
+ *
+ * 可选：
+ *   --assume-exec='{"CAMP-xxx":{"stage":"pending_quote","flatFeeUsd":null,"quoteNegotiation":[],"lastEvent":{...}}}'
+ *   --history-before=2026-09-12T22:56:29.000Z
+ */
+const DRY_RUN =
+  process.argv.includes("--dry-run") || process.env.EMAIL_DECISION_DRY_RUN === "1";
+const REPLAY_EVENT_ID = (() => {
+  const raw = process.argv.find((a) => a.startsWith("--event-id="));
+  const n = raw ? Number(raw.slice("--event-id=".length)) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+})();
+const REPLAY_REPEAT = (() => {
+  const raw = process.argv.find((a) => a.startsWith("--repeat="));
+  const n = raw ? Number(raw.slice("--repeat=".length)) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 10) : 1;
+})();
+const ASSUME_EXEC = (() => {
+  const raw = process.argv.find((a) => a.startsWith("--assume-exec="));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw.slice("--assume-exec=".length));
+  } catch (err) {
+    console.error("[Replay] --assume-exec 不是合法 JSON:", err?.message || err);
+    return null;
+  }
+})();
+const HISTORY_BEFORE = (() => {
+  const raw = process.argv.find((a) => a.startsWith("--history-before="));
+  if (!raw) return null;
+  const t = new Date(raw.slice("--history-before=".length)).getTime();
+  return Number.isFinite(t) ? t : null;
+})();
 
 function isLikelyAutoReply(subject, bodyText) {
   const combined = `${subject || ""}\n${bodyText || ""}`.trim();
@@ -219,6 +264,115 @@ async function fetchPendingEvents(limit = 10) {
     []
   );
   return rows || [];
+}
+
+/** 回放用：按 id 取单条邮件事件（不限 status） */
+async function fetchEventById(id) {
+  const rows = await queryTikTok(
+    `SELECT * FROM tiktok_influencer_email_events WHERE id = ? LIMIT 1`,
+    [id]
+  );
+  return rows?.[0] || null;
+}
+
+/**
+ * 回放报告：打印 LLM 原始决策，并按生产同款逻辑评估「这次更新会不会被准入拦下」。
+ * 只读，不做任何写库。
+ */
+async function reportDryRunDecision({ event, payload, decision }) {
+  const updates = Array.isArray(decision?.updates) ? decision.updates : [];
+  console.log("[Replay] 邮件:", payload.email.subject || "(无主题)");
+  console.log("[Replay] 正文:", String(payload.email.bodyText || "").replace(/\s+/g, " ").slice(0, 220));
+  console.log(
+    "[Replay] 执行状态:",
+    payload.activeExecutions
+      .map((e) => `${e.campaignId}=${e.stage}`)
+      .join(" | ") || "(无)"
+  );
+  console.log("[Replay] 决策 JSON:\n" + JSON.stringify(decision, null, 2));
+
+  for (const upd of updates) {
+    const ex = payload.activeExecutions.find((e) => e.campaignId === upd.campaignId);
+    const assumed =
+      ASSUME_EXEC && upd.campaignId ? ASSUME_EXEC[upd.campaignId] || null : null;
+    let row = null;
+    try {
+      row = await getExecutionRow(
+        upd.campaignId,
+        ex?.influencerId || event.influencer_id
+      );
+    } catch {
+      row = null;
+    }
+    const baseRow = {
+      ...(row || {}),
+      ...(assumed?.stage !== undefined ? { stage: assumed.stage } : {}),
+      ...(assumed?.flatFeeUsd !== undefined ? { flat_fee: assumed.flatFeeUsd } : {}),
+      ...(assumed?.quoteNegotiation !== undefined
+        ? { quote_negotiation: assumed.quoteNegotiation }
+        : {}),
+      ...(assumed?.commissionPercent !== undefined
+        ? { commission_percent: assumed.commissionPercent }
+        : {}),
+      ...(assumed?.lastEvent !== undefined ? { lastEvent: assumed.lastEvent } : {}),
+    };
+
+    const returnedFlat = normalizeFixedFeeUsd(upd.flatFeeUSD);
+    const returnedCommission = normalizeCommissionPercent(upd.commissionPercent);
+    const existingNegotiation = Array.isArray(baseRow.quote_negotiation)
+      ? baseRow.quote_negotiation
+      : (() => {
+          try {
+            const parsed = JSON.parse(baseRow.quote_negotiation || "[]");
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })();
+    const nextNegotiation =
+      returnedFlat != null
+        ? [
+            ...existingNegotiation,
+            {
+              role: "influencer",
+              amount: returnedFlat,
+              ...(returnedCommission != null
+                ? { commissionPercent: returnedCommission }
+                : {}),
+            },
+          ]
+        : existingNegotiation;
+    const terms = resolveExecutionAgreedTerms(
+      { commission: ex?.campaignInfo?.commission, campaignInfo: ex?.campaignInfo },
+      {
+        ...baseRow,
+        flat_fee: returnedFlat != null ? returnedFlat : baseRow.flat_fee,
+        quote_negotiation: nextNegotiation,
+        commission_percent:
+          returnedCommission != null
+            ? returnedCommission
+            : baseRow.commission_percent,
+      }
+    );
+    const admission = validateQuoteSubmittedAdmission(terms);
+    const gate = validateInfluencerAgentStageTransition(
+      baseRow.stage || "pending_quote",
+      upd.newStage,
+      baseRow.lastEvent || {},
+      terms
+    );
+    console.log(
+      [
+        "",
+        `[回放结论] campaign=${upd.campaignId}`,
+        `  LLM 返回：flatFeeUSD=${JSON.stringify(upd.flatFeeUSD)} commissionPercent=${JSON.stringify(upd.commissionPercent)} newStage=${upd.newStage}`,
+        `  解析后条款：固定费=${terms.fixedFeeUsd} 佣金=${terms.commissionPercent} 已谈定=${terms.isQuoteReady}`,
+        `  硬准入：${admission.ready ? "通过" : "不通过 — " + admission.reason}`,
+        `  状态机：${gate.allowed ? "允许 → " + (gate.dataOnly ? "仅数据更新" : upd.newStage) : "拦截 — " + gate.reason}`,
+        "",
+      ].join("\n")
+    );
+  }
 }
 
 async function fetchActiveExecutionsForInfluencer(influencerId) {
@@ -1102,7 +1256,7 @@ async function applyMaintenanceFromDecision({
 }
 
 async function processEvent(event) {
-  await markEventStatus(event.id, "processing", null);
+  if (!DRY_RUN) await markEventStatus(event.id, "processing", null);
 
   const executions = await fetchActiveExecutionsForInfluencer(
     event.influencer_id
@@ -1134,12 +1288,16 @@ async function processEvent(event) {
       )
     : [];
   if (influencerRow && isExplicitDoNotContact(event.body_text)) {
-    await markInfluencerDoNotContact({
-      influencerId: canonicalEventInfluencerId,
-      reason: event.body_text,
-      sourceMessageId: event.message_id || null,
-    });
-    await markEventStatus(event.id, "succeeded", null);
+    if (DRY_RUN) {
+      console.log("[Replay] 命中 do-not-contact 分支，跳过 LLM（未写库）。");
+    } else {
+      await markInfluencerDoNotContact({
+        influencerId: canonicalEventInfluencerId,
+        reason: event.body_text,
+        sourceMessageId: event.message_id || null,
+      });
+      await markEventStatus(event.id, "succeeded", null);
+    }
     return;
   }
   // 商务档案 / 常住地维护已改为「事件决策 LLM 先判定，再按需触发」：
@@ -1211,6 +1369,33 @@ async function processEvent(event) {
         extractedKind: "attachments_error",
       },
     ];
+  }
+
+  // 回放模式：按需把执行状态/对话历史还原到「当时那一刻」，避免用已被污染的状态测试
+  if (DRY_RUN && ASSUME_EXEC) {
+    payload.activeExecutions = payload.activeExecutions.map((ex) => {
+      const patch = ASSUME_EXEC[ex.campaignId];
+      if (!patch) return ex;
+      return {
+        ...ex,
+        ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
+        ...(patch.quoteOrigin !== undefined ? { quoteOrigin: patch.quoteOrigin } : {}),
+        ...(patch.lastEvent !== undefined ? { lastEvent: patch.lastEvent } : {}),
+        ...(patch.flatFeeUsd !== undefined ? { flatFeeUsd: patch.flatFeeUsd } : {}),
+        ...(patch.quoteNegotiation !== undefined
+          ? { quoteNegotiation: patch.quoteNegotiation }
+          : {}),
+        ...(patch.commissionPercent !== undefined
+          ? { commissionPercent: patch.commissionPercent }
+          : {}),
+      };
+    });
+  }
+  if (DRY_RUN && HISTORY_BEFORE) {
+    payload.conversationHistory = payload.conversationHistory.filter((h) => {
+      const t = new Date(h.sentAt || h.eventTime || h.createdAt || 0).getTime();
+      return !Number.isFinite(t) || t < HISTORY_BEFORE;
+    });
   }
 
   const systemPrompt = `
@@ -1467,6 +1652,7 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   - note 中应写「疑似自动回复或正文未能解析，等待红人实质性回复」，**不要**写「正文为空但回复行为表明有意向」。
 - 只有 email.bodyText 中**明确**出现报价、提交草稿/视频链接等实质性内容时，才可推进 stage。
 - 红人**只说「有兴趣 / 愿意合作 / 想推进」但没有给出固定费或佣金**时，属于「价格未确认」：允许继续保持 pending_quote 并回信确认价格，**不得**推进到 quote_submitted（详见上方【报价阶段 · 与红人沟通的纪律】）。
+- 例外（重要）：正文虽短，但**明确表达了合作意愿或接受了邀约**（如 "I would love to!"、"Yes, I'm interested"、"Sounds good"）时，**不属于**自动回复/无实质内容：**必须**返回 outboundEmails 回信并追问固定费与佣金（价格未确认时 stage 保持 pending_quote）；**禁止**整封不回复、把红人晾在原地。
 `;
 
   const userContent = `下面是一个红人的最新邮件和与该红人相关的所有 Campaign 执行状态，请根据邮件内容判断是否需要更新某些 Campaign 的 stage。\n\n输入数据（JSON）：\n${JSON.stringify(
@@ -1505,6 +1691,11 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
         500
       )}`
     );
+    return;
+  }
+
+  if (DRY_RUN) {
+    await reportDryRunDecision({ event, payload, decision, raw });
     return;
   }
 
@@ -1547,6 +1738,28 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
 }
 
 async function main() {
+  if (DRY_RUN) {
+    const target = REPLAY_EVENT_ID
+      ? await fetchEventById(REPLAY_EVENT_ID)
+      : (await fetchPendingEvents(1))[0] || null;
+    if (!target) {
+      console.log("[Replay] 未找到可回放的邮件事件。");
+      return;
+    }
+    console.log(
+      `[Replay] 事件 ${target.id}（${target.from_email} → ${target.to_email}）｜重复 ${REPLAY_REPEAT} 次｜只读不写库`
+    );
+    for (let i = 1; i <= REPLAY_REPEAT; i += 1) {
+      console.log(`\n===== 第 ${i}/${REPLAY_REPEAT} 次调用 =====`);
+      try {
+        await processEvent(target);
+      } catch (err) {
+        console.error("[Replay] 调用失败:", err?.message || err);
+      }
+    }
+    return;
+  }
+
   const events = await fetchPendingEvents(10);
   if (!events.length) {
     console.log("[ProcessInfluencerEmailEvents] 当前没有 pending 事件。");
