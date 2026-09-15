@@ -1188,10 +1188,10 @@ function ExecutionProgressPublishedVideos({ item }) {
                   border: "1px solid #EEF0F3",
                   borderRadius: 8,
                   backgroundColor: "#FAFAFB",
-                  padding: "6px 8px",
+                  padding: "7px 9px",
                   display: "flex",
                   flexDirection: "column",
-                  gap: 2,
+                  gap: 3,
                 }}
               >
                 <div
@@ -1199,7 +1199,7 @@ function ExecutionProgressPublishedVideos({ item }) {
                     display: "flex",
                     gap: 6,
                     alignItems: "center",
-                    flexWrap: "wrap",
+                    minWidth: 0,
                   }}
                 >
                   <span
@@ -1218,37 +1218,31 @@ function ExecutionProgressPublishedVideos({ item }) {
                     {meta.label}
                   </span>
                   {entry.url ? (
-                    <>
-                      <a
-                        href={entry.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          color: "#4F46E5",
-                          wordBreak: "break-all",
-                          flex: 1,
-                          minWidth: 120,
-                        }}
-                      >
-                        {entry.url}
-                      </a>
-                      <a
-                        href={entry.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: "#6B7280", whiteSpace: "nowrap", flexShrink: 0 }}
-                      >
-                        [打开]
-                      </a>
-                    </>
+                    <a
+                      href={entry.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={entry.url}
+                      style={{
+                        color: "#4F46E5",
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {entry.url}
+                    </a>
                   ) : (
                     <span style={{ flex: 1, color: "#6B7280" }}>—</span>
                   )}
                 </div>
-                <div style={{ color: "#6B7280", wordBreak: "break-word" }}>
+                <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
                   投流码: {entry.promoCode || "—"}
                 </div>
-                <div style={{ color: "#6B7280" }}>
+                <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
                   {failed ? (
                     <>播放 — · 赞 — · 评 — · 数据抓取失败（将重试）</>
                   ) : (
