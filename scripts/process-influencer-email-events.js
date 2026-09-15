@@ -49,6 +49,11 @@ import {
   resolveReusableShippingInfo,
   upsertInfluencerShippingInfo,
 } from "../lib/execution/shipping-info.js";
+import {
+  extractPublishedLinksFromEmailBody,
+  normalizePublishedLinksInput,
+  mergePublishedLinkLists,
+} from "../lib/execution/published-link-extraction.js";
 
 const AUTO_REPLY_PATTERNS = [
   /thank you for your email/i,
@@ -793,6 +798,25 @@ async function applyDecision(decision, event, executions) {
         ? upd.promoCode.trim().slice(0, 255)
         : null;
 
+    // 多平台发布链接：LLM 的 publishedLinks 优先，邮件正文兜底补齐，单值 videoLink 兼容
+    let publishedLinks = normalizePublishedLinksInput(upd.publishedLinks);
+    if (event.body_text && (videoLink || deliverable?.kind === "published")) {
+      publishedLinks = mergePublishedLinkLists(
+        publishedLinks,
+        extractPublishedLinksFromEmailBody(event.body_text)
+      );
+    }
+    if (deliverable?.kind === "published" && deliverable.link) {
+      publishedLinks = mergePublishedLinkLists(publishedLinks, [
+        { platform: null, url: deliverable.link, promoCode },
+      ]);
+    }
+    if (videoLink) {
+      publishedLinks = mergePublishedLinkLists(publishedLinks, [
+        { platform: null, url: videoLink, promoCode },
+      ]);
+    }
+
     let shippingInfo =
       upd.shippingInfo && typeof upd.shippingInfo === "object"
         ? normalizeShippingInfo(upd.shippingInfo)
@@ -874,6 +898,7 @@ async function applyDecision(decision, event, executions) {
       videoLink,
       deliverable,
       promoCode,
+      publishedLinks,
       shippingInfo,
       emailEvent: {
         id: event.id,
@@ -889,6 +914,7 @@ async function applyDecision(decision, event, executions) {
         videoLink,
         deliverable,
         promoCode,
+        publishedLinks,
       },
       createdAt: new Date().toISOString(),
     };
@@ -1210,6 +1236,13 @@ ${influencerAgentBasePrompt}
           }
         },
         "promoCode": "投流码（红人提交最终发布链接时如有，可选）",
+        "publishedLinks": [
+          {
+            "platform": "youtube|instagram|tiktok|x",
+            "url": "该平台已发布视频链接",
+            "promoCode": "该平台的投流码/推广码/UTM（如有，可选）"
+          }
+        ],
         "shippingInfo": {
           "name": "xxx",
           "phone": "xxx",
@@ -1319,6 +1352,10 @@ ${influencerAgentBasePrompt}
 - 如果红人没有发新文件、也没有新链接，只是把当前最新脚本/草稿正文重复粘贴（例如邮件写 “already included in the PDF”“pasted for convenience”“please share”），**禁止**新增 deliverable，也不要把 stage 从 script_review/video_review 再推进；如需回复只返回 outboundEmails。
 - 红人提交脚本或视频草稿时，deliverable.emailSummary **必须**填写：original 使用红人来信原文语言（如邮件为日文就用日文，不要翻译成英文），zh 用中文表达同一内容，供内部阅读；只概括邮件提交了什么、需要什么，不要粘贴整封邮件正文。
 - 草稿已通过后红人提交**最终发布视频链接**时，deliverable.kind="published"、type="published_link"、link=videoLink；邮件/正文里如有投流码、推广码或 UTM 等，填 promoCode（没有则省略）。
+- **多平台发布（重要）**：红人一次或分多次回传多个平台的发布链接时，**必须**把每条发布链接都放进 publishedLinks 数组，一条链接一个元素（platform 用 youtube / instagram / tiktok / x，url 填该平台的视频链接，该平台自己的投流码填 promoCode），**禁止**只填一个 videoLink 而丢掉其它平台。
+  - publishedLinks 里只放**已发布的视频/帖子链接**（如 youtu.be、youtube.com/watch、instagram.com/reel、vt.tiktok.com、tiktok.com/@xx/video、x.com/xx/status），不要放红人主页链接、Google Drive 草稿链接或参考图链接。
+  - 同时仍要按兼容要求填 videoLink（取 publishedLinks 中的第一条；多平台时优先填该 Campaign 主投放平台那条），promoCode 填该条的投流码。
+  - 如果红人本次只补发其中一个平台的链接（其余平台之前已回传），publishedLinks 只填本次新增的平台链接即可，系统会按平台合并保留历史。
 
 【报价阶段 · 与红人沟通的纪律（极其重要）】
 - 判断品牌是否已同意报价：看 activeExecutions[].lastEvent.quoteApprovedAt 是否存在。不存在则一律视为**品牌尚未确认**。

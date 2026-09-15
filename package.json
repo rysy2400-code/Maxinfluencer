@@ -14,6 +14,8 @@
     "test:exec-scheduler-merge": "node scripts/test-execution-scheduler-merge.mjs",
     "test:business-profile-platform-identity": "node --experimental-default-type=module scripts/test-business-profile-platform-identity.mjs",
     "test:email-ops": "node scripts/run-esm-script.cjs scripts/test-email-delivery-classification.mjs",
+    "test:published-videos": "node scripts/test-published-videos.mjs",
+    "backfill:published-videos": "node scripts/backfill-published-videos.mjs",
     "migrate:email-ops": "node scripts/run-esm-script.cjs scripts/migrate-email-ops-facts.mjs",
     "backfill:email-ops": "node scripts/run-esm-script.cjs scripts/backfill-email-ops-facts.mjs",
     "migrate:topup-reference": "node scripts/migrate-topup-reference-global-unique.js"

@@ -30,6 +30,9 @@ import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
 } from "../lib/execution/shipping-info.js";
+import {
+  upsertPublishedVideosFromUpdate,
+} from "../lib/execution/published-videos.js";
 import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
 import { buildInboundImageMarkers } from "../lib/influencer/inbound-attachment-urls.js";
 import {
@@ -97,6 +100,21 @@ function parseQuoteNegotiationColumn(raw) {
   const o = parseJsonOrObject(raw);
   if (Array.isArray(o)) return o.filter((x) => x && typeof x === "object");
   return [];
+}
+
+/** Campaign 主投放平台：用于挑选 publishedVideos 的主链接（查不到返回 null） */
+async function resolveCampaignMainPlatform(campaignId) {
+  if (!campaignId) return null;
+  try {
+    const rows = await queryTikTok(
+      "SELECT platform FROM tiktok_campaign WHERE id = ? LIMIT 1",
+      [campaignId]
+    );
+    const p = rows?.[0]?.platform;
+    return p ? String(p) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchPendingCampaignAgentEvents(limit = 20) {
@@ -357,23 +375,67 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     ];
   }
 
-  if (resolved.allowVideoLinkUpdate && videoLink) {
-    if (videoLink) mergedLastEvent.videoLink = videoLink;
-    if (payload.promoCode) mergedLastEvent.promoCode = payload.promoCode;
-    deliverablesTimeline = [
-      ...deliverablesTimeline,
-      {
-        kind: "published",
-        role: "influencer",
-        type: "published_link",
-        link: videoLink,
-        content: payload.promoCode ? `投流码: ${payload.promoCode}` : null,
+  // —— 已发布视频（多平台）：合并进 last_event.publishedVideos，并同步旧单值字段 ——
+  if (resolved.allowVideoLinkUpdate) {
+    const publishedAt = validIsoOrNow(eventRow.created_at);
+    const incoming = [];
+    if (videoLink) {
+      incoming.push({
+        platform: null,
+        url: videoLink,
         promoCode: payload.promoCode || null,
-        at: savedAtIso,
+      });
+    }
+    if (Array.isArray(payload.publishedLinks)) {
+      for (const raw of payload.publishedLinks) {
+        incoming.push({
+          platform: raw?.platform,
+          url: typeof raw === "string" ? raw : raw?.url || raw?.link,
+          promoCode: raw?.promoCode || null,
+        });
+      }
+    }
+
+    if (incoming.length) {
+      const campaignPlatform = await resolveCampaignMainPlatform(campaignId);
+      const upserted = upsertPublishedVideosFromUpdate({
+        lastEvent: mergedLastEvent,
+        timeline: deliverablesTimeline,
+        incoming,
+        preferredPlatform: campaignPlatform,
+        feeUsd:
+          flatFee != null
+            ? flatFee
+            : cur.flat_fee != null
+              ? Number(cur.flat_fee)
+              : null,
+        publishedAt,
         source: "influencer_email",
         emailEventId: emailEvent.id || null,
-      },
-    ];
+        savedAt: savedAtIso,
+      });
+      const mergedVideos = upserted.publishedVideos;
+      const legacyFields = upserted.legacy;
+      mergedLastEvent.publishedVideos = mergedVideos;
+      videoLink = legacyFields.videoLink;
+      mergedLastEvent.videoLink = legacyFields.videoLink;
+      if (legacyFields.promoCode) {
+        mergedLastEvent.promoCode = legacyFields.promoCode;
+      }
+      if (legacyFields.views != null) mergedLastEvent.views = legacyFields.views;
+      if (legacyFields.likes != null) mergedLastEvent.likes = legacyFields.likes;
+      if (legacyFields.comments != null) {
+        mergedLastEvent.comments = legacyFields.comments;
+      }
+      if (legacyFields.cpm != null) mergedLastEvent.cpm = legacyFields.cpm;
+
+      deliverablesTimeline = upserted.deliverablesTimeline;
+      if (upserted.appended.length) {
+        console.log(
+          `[ProcessCampaignAgentEvents] publishedVideos 更新 ${campaignId}/${influencerId}: 新增 ${upserted.appended.length} 条，共 ${mergedVideos.length} 条平台链接。`
+        );
+      }
+    }
   }
 
   if (deliverablesTimeline.length) {
@@ -396,6 +458,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       skippedStageReason: draftLinkOnly ? null : skippedStageReason || null,
       flatFeeUSD: flatFee,
       videoLink,
+      publishedVideos: mergedLastEvent.publishedVideos || null,
       draftLink,
       shippingInfo: shippingInfo || null,
     },

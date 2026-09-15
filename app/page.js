@@ -1072,6 +1072,211 @@ function formatInfluencerStat(v) {
   return String(v);
 }
 
+/** 已发布视频平台标识 → 展示样式（固定顺序：YouTube → Instagram → TikTok → X） */
+const PUBLISHED_PLATFORM_META = {
+  youtube: { label: "YouTube", bg: "#FEF2F2", fg: "#B91C1C", border: "#FECACA" },
+  instagram: { label: "Instagram", bg: "#FDF2F8", fg: "#BE185D", border: "#F9A8D4" },
+  tiktok: { label: "TikTok", bg: "#F3F4F6", fg: "#111827", border: "#D1D5DB" },
+  x: { label: "X", bg: "#EFF6FF", fg: "#1D4ED8", border: "#93C5FD" },
+};
+const PUBLISHED_PLATFORM_ORDER = ["youtube", "instagram", "tiktok", "x"];
+
+function publishedPlatformFromUrl(url) {
+  const s = String(url || "").toLowerCase();
+  if (s.includes("youtu.be") || s.includes("youtube.com")) return "youtube";
+  if (s.includes("instagram.com")) return "instagram";
+  if (s.includes("tiktok.com")) return "tiktok";
+  if (s.includes("x.com") || s.includes("twitter.com")) return "x";
+  return "unknown";
+}
+
+function formatPublishedUpdatedAt(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/**
+ * 「已发布视频」卡片的多平台区块：按平台分行展示 链接 / 投流码 / 播放·赞·评，
+ * CPM 只保留合计（合作费用 ÷ 全平台合计播放）。老数据无 publishedVideos 时降级为单条。
+ */
+function ExecutionProgressPublishedVideos({ item }) {
+  const raw = Array.isArray(item?.publishedVideos) ? item.publishedVideos : [];
+  let videos = raw.filter((v) => v && (v.url || v.promoCode));
+
+  if (!videos.length) {
+    const legacyUrl =
+      item?.executionVideoLink || item?.videoLink || item?.video_link || "";
+    const legacyCode = item?.promoCode || item?.adcode || "";
+    if (legacyUrl || legacyCode) {
+      videos = [
+        {
+          platform: publishedPlatformFromUrl(legacyUrl),
+          url: legacyUrl,
+          promoCode: legacyCode,
+          metrics: {
+            views: item?.views,
+            viewsDisplay: item?.views,
+            likes: item?.likes,
+            likesDisplay: item?.likes,
+            comments: item?.comments,
+            commentsDisplay: item?.comments,
+            updatedAt: item?.metricsUpdatedAt,
+          },
+          metricsError: item?.metricsFetchError || null,
+        },
+      ];
+    }
+  }
+
+  if (!videos.length) {
+    return (
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>已发布视频</span>
+        <span style={{ flex: 1 }}>—</span>
+      </div>
+    );
+  }
+
+  const ordered = [...videos].sort((a, b) => {
+    const ia = PUBLISHED_PLATFORM_ORDER.indexOf(a.platform);
+    const ib = PUBLISHED_PLATFORM_ORDER.indexOf(b.platform);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
+  const totalCpm =
+    item?.publishedCpm != null
+      ? item.publishedCpm
+      : item?.cpm != null && item.cpm !== ""
+        ? Number(item.cpm)
+        : null;
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>
+          已发布视频
+        </span>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+          {ordered.map((entry, idx) => {
+            const meta =
+              PUBLISHED_PLATFORM_META[entry.platform] ||
+              {
+                label: entry.platform && entry.platform !== "unknown" ? entry.platform : "其他平台",
+                bg: "#F3F4F6",
+                fg: "#374151",
+                border: "#D1D5DB",
+              };
+            const metrics = entry.metrics || {};
+            const hasMetrics =
+              metrics.views != null ||
+              metrics.likes != null ||
+              metrics.comments != null;
+            const failed = !hasMetrics && entry.metricsError;
+            const updatedAt = formatPublishedUpdatedAt(metrics.updatedAt);
+            return (
+              <div
+                key={`${entry.platform}-${entry.url || idx}`}
+                style={{
+                  border: "1px solid #EEF0F3",
+                  borderRadius: 8,
+                  backgroundColor: "#FAFAFB",
+                  padding: "6px 8px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      backgroundColor: meta.bg,
+                      color: meta.fg,
+                      border: `1px solid ${meta.border}`,
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {meta.label}
+                  </span>
+                  {entry.url ? (
+                    <>
+                      <a
+                        href={entry.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: "#4F46E5",
+                          wordBreak: "break-all",
+                          flex: 1,
+                          minWidth: 120,
+                        }}
+                      >
+                        {entry.url}
+                      </a>
+                      <a
+                        href={entry.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "#6B7280", whiteSpace: "nowrap", flexShrink: 0 }}
+                      >
+                        [打开]
+                      </a>
+                    </>
+                  ) : (
+                    <span style={{ flex: 1, color: "#6B7280" }}>—</span>
+                  )}
+                </div>
+                <div style={{ color: "#6B7280", wordBreak: "break-word" }}>
+                  投流码: {entry.promoCode || "—"}
+                </div>
+                <div style={{ color: "#6B7280" }}>
+                  {failed ? (
+                    <>播放 — · 赞 — · 评 — · 数据抓取失败（将重试）</>
+                  ) : (
+                    <>
+                      播放 {formatInfluencerStat(metrics.viewsDisplay ?? metrics.views)}
+                      {" · "}赞 {formatInfluencerStat(metrics.likesDisplay ?? metrics.likes)}
+                      {" · "}评 {formatInfluencerStat(metrics.commentsDisplay ?? metrics.comments)}
+                      {updatedAt ? ` · ${updatedAt} 更新` : ""}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合计 CPM</span>
+        <span style={{ flex: 1 }}>
+          {totalCpm != null && Number.isFinite(Number(totalCpm))
+            ? Number(totalCpm).toLocaleString("en-US", { maximumFractionDigits: 2 })
+            : "—"}
+        </span>
+      </div>
+    </>
+  );
+}
+
 function resolveVideoPublishCountry(item) {
   // 红人本人确认的常住地优先，其次才是平台抓到的发布地/账号国家
   const v =
@@ -2309,9 +2514,6 @@ function ExecutionProgressRow({
     draftLink = vd.draftLink || vd.link || vd.url;
   }
 
-  const publishedLink =
-    item.videoLink || item.executionVideoLink || item.video_link;
-
   const deliverablesTimeline = Array.isArray(item.deliverablesTimeline)
     ? item.deliverablesTimeline
     : [];
@@ -2891,22 +3093,7 @@ function ExecutionProgressRow({
               ? `${Number(flatUsd)} ${item.currency || "USD"}${ecpmDisplay && ecpmDisplay !== "—" ? ` · eCPM ${ecpmDisplay}` : ""}`
               : "—"
           )}
-          {labelRow(
-            "视频",
-            publishedLink ? (
-              <a href={publishedLink} target="_blank" rel="noreferrer" style={{ color: "#4F46E5" }}>
-                {publishedLink}
-              </a>
-            ) : (
-              "—"
-            )
-          )}
-          {labelRow("投流码", item.promoCode || item.adcode || "—")}
-          {labelRow(
-            "播放 / 赞 / 评",
-            `${formatInfluencerStat(item.views)} / ${formatInfluencerStat(item.likes)} / ${formatInfluencerStat(item.comments)}`
-          )}
-          {labelRow("CPM", item.cpm != null ? String(item.cpm) : "—")}
+          <ExecutionProgressPublishedVideos item={item} />
         </>
       )}
       {(() => {

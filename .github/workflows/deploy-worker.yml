@@ -9,6 +9,7 @@ on:
       - "scripts/run-*.js"
       - "scripts/crawler-health-checker.js"
       - "lib/agents/**"
+      - "lib/execution/**"
       - "lib/heartbeat/**"
       - "lib/db/**"
       # worker 的邮件事件链路依赖 lib/influencer/**（如 country-reply-sync、business-profile），

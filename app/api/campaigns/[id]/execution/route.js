@@ -9,6 +9,59 @@ import { getAuthenticatedAdvertiserUser } from "../../../../../lib/auth/advertis
 import { assertUserCanAccessCampaign } from "../../../../../lib/auth/campaign-access.js";
 import { executeApproveQuote } from "../../../../../lib/execution/approve-quote.js";
 import { precheckQuoteApproveCharge } from "../../../../../lib/billing/approve-quote-charge.js";
+import {
+  mergePublishedVideos,
+  buildLegacyPublishedFields,
+} from "../../../../../lib/execution/published-videos.js";
+
+/**
+ * 归一化广告主 Portal 传入的已发布视频：支持 publishedLinks/videos 数组，
+ * 并兼容旧的单值 videoLink + promoCode。
+ */
+function normalizePortalPublishedLinks(payload = {}, fallback = {}) {
+  const out = [];
+  const list = Array.isArray(payload.publishedLinks)
+    ? payload.publishedLinks
+    : Array.isArray(payload.videos)
+      ? payload.videos
+      : [];
+  for (const item of list) {
+    const url =
+      typeof item === "string"
+        ? item
+        : item?.url || item?.videoLink || item?.link || "";
+    if (!url) continue;
+    const hasMetrics =
+      item && typeof item === "object" &&
+      (item.views != null || item.likes != null || item.comments != null);
+    out.push({
+      platform: item && typeof item === "object" ? item.platform : null,
+      url,
+      promoCode:
+        item && typeof item === "object" ? item.promoCode || null : null,
+      publishedAt: fallback.publishedAt || null,
+      source: fallback.source || "advertiser_portal",
+      metrics: hasMetrics
+        ? {
+            views: item.views ?? null,
+            likes: item.likes ?? null,
+            comments: item.comments ?? null,
+            source: "advertiser_portal",
+            updatedAt: fallback.publishedAt || null,
+          }
+        : null,
+    });
+  }
+  if (fallback.videoLink) {
+    out.push({
+      url: fallback.videoLink,
+      promoCode: fallback.promoCode || null,
+      publishedAt: fallback.publishedAt || null,
+      source: fallback.source || "advertiser_portal",
+    });
+  }
+  return out;
+}
 
 /**
  * PATCH /api/campaigns/[id]/execution
@@ -355,24 +408,59 @@ export async function PATCH(req, { params }) {
       }
       case "publishVideo":
         stage = "published";
-        lastEvent = {
+        {
+          const existing = await getExecutionRow(campaignId, influencerId);
+          const prevVideos = Array.isArray(existing?.lastEvent?.publishedVideos)
+            ? existing.lastEvent.publishedVideos
+            : [];
+          const incoming = normalizePortalPublishedLinks(payload, {
+            videoLink: payload.videoLink,
+            promoCode: payload.promoCode,
+            publishedAt: new Date().toISOString(),
+            source: "advertiser_portal",
+          });
+          const mergedVideos = mergePublishedVideos(prevVideos, incoming);
+          const legacy = buildLegacyPublishedFields(mergedVideos, {
+            feeUsd: Number(existing?.flat_fee) || null,
+          });
+          lastEvent = {
+            publishedVideos: mergedVideos,
+            videoLink: legacy.videoLink,
+            promoCode: legacy.promoCode,
+            views: payload.views ?? legacy.views,
+            likes: payload.likes ?? legacy.likes,
+            comments: payload.comments ?? legacy.comments,
+            publishedAt: new Date().toISOString(),
+          };
+        }
+        break;
+      case "updatePublished": {
+        const existing = await getExecutionRow(campaignId, influencerId);
+        const prevVideos = Array.isArray(existing?.lastEvent?.publishedVideos)
+          ? existing.lastEvent.publishedVideos
+          : [];
+        const incoming = normalizePortalPublishedLinks(payload, {
           videoLink: payload.videoLink,
           promoCode: payload.promoCode,
-          views: payload.views,
-          likes: payload.likes,
-          comments: payload.comments,
           publishedAt: new Date().toISOString(),
-        };
-        break;
-      case "updatePublished":
+          source: "advertiser_portal",
+        });
+        const mergedVideos = incoming.length
+          ? mergePublishedVideos(prevVideos, incoming)
+          : prevVideos;
+        const legacy = buildLegacyPublishedFields(mergedVideos, {
+          feeUsd: Number(existing?.flat_fee) || null,
+        });
         lastEvent = {
-          ...(payload.videoLink != null && { videoLink: payload.videoLink }),
-          ...(payload.promoCode != null && { promoCode: payload.promoCode }),
+          ...(mergedVideos.length ? { publishedVideos: mergedVideos } : {}),
+          ...(payload.videoLink != null && { videoLink: legacy.videoLink }),
+          ...(payload.promoCode != null && { promoCode: legacy.promoCode }),
           ...(payload.views != null && { views: payload.views }),
           ...(payload.likes != null && { likes: payload.likes }),
           ...(payload.comments != null && { comments: payload.comments }),
         };
         break;
+      }
       default:
         return NextResponse.json(
           { success: false, error: `未知 action: ${action}` },
