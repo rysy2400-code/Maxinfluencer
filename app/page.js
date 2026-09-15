@@ -1366,6 +1366,16 @@ const EXECUTION_STAGE_COLUMN_KEYS = [
   "published",
 ];
 
+/** 执行进度各阶段展示名（tab 标题与定位提示共用同一份文案） */
+const EXECUTION_STAGE_TITLES = {
+  analyzed: "已分析红人",
+  contacted: "待红人报价",
+  pendingPrice: "待审核价格",
+  pendingSample: "待寄样品",
+  pendingDraft: "待审核草稿",
+  published: "已发布视频",
+};
+
 const EXECUTION_CACHE_TTL_MS = 20_000;
 
   /** 已分析列表分组：推荐 = 显式推荐 true，或 isRecommended 未置 false 且 shouldContact；否则为不推荐 */
@@ -3756,7 +3766,12 @@ export default function HomePage() {
     []
   );
 
-  /** 定位红人所在阶段：先精确查询执行表（一次跨全部阶段），未命中再查候选表（已分析） */
+  /**
+   * 定位红人所在阶段：先精确查询执行表（一次跨全部阶段），未命中再查候选表（已分析）。
+   * @returns {Promise<{found: boolean, scope?: "execution"|"analyzed", stage?: string,
+   *   columnKey?: string, subtab?: string|null, reason?: "notFound"|"error"|"stale",
+   *   message?: string}>}
+   */
   const locateExecutionInfluencer = React.useCallback(
     async (handle, cid) => {
       const sessionId = executionCampaignSessionRef.current;
@@ -3778,7 +3793,7 @@ export default function HomePage() {
           cache: "no-store",
         });
         const d1 = await res1.json().catch(() => ({}));
-        if (!stillCurrent()) return;
+        if (!stillCurrent()) return { found: false, reason: "stale" };
         if (!res1.ok || !d1.success) throw new Error(d1.error || "查询执行进度失败");
         let execColumn = null;
         let execItem = null;
@@ -3827,7 +3842,13 @@ export default function HomePage() {
             ...d1,
             campaignId: cid,
           });
-          return;
+          return {
+            found: true,
+            scope: "execution",
+            stage,
+            columnKey: execColumn,
+            subtab: draftSubTab,
+          };
         }
 
         // 2) 候选表（已分析）：username 精确查询定位
@@ -3837,7 +3858,7 @@ export default function HomePage() {
           cache: "no-store",
         });
         const d2 = await res2.json().catch(() => ({}));
-        if (!stillCurrent()) return;
+        if (!stillCurrent()) return { found: false, reason: "stale" };
         if (!res2.ok || !d2.success) throw new Error(d2.error || "查询已分析列表失败");
         const analyzedRow = (Array.isArray(d2.data) ? d2.data : []).find(
           (row) => row?.id === handle
@@ -3851,7 +3872,7 @@ export default function HomePage() {
           executionLocateSubtabRef.current = { stage: "analyzed", subtab };
           setActiveAnalyzedSubTab(subtab);
           await loadAnalyzedUntilFound(handle, cid, controller.signal);
-          return;
+          return { found: true, scope: "analyzed", stage: "analyzed", subtab };
         }
 
         // 执行表与已分析均无此红人
@@ -3860,8 +3881,11 @@ export default function HomePage() {
           setHighlightExecutionUsername(null);
           pendingFocusExecutionUsernameRef.current = null;
         }
+        return { found: false, reason: "notFound" };
       } catch (e) {
-        if (e?.name === "AbortError" || !stillCurrent()) return;
+        if (e?.name === "AbortError" || !stillCurrent()) {
+          return { found: false, reason: "stale" };
+        }
         console.error("[HomePage] 定位执行红人失败:", e);
         if (pendingFocusExecutionUsernameRef.current === handle) {
           setExecutionLocateState({
@@ -3872,6 +3896,7 @@ export default function HomePage() {
           setHighlightExecutionUsername(null);
           pendingFocusExecutionUsernameRef.current = null;
         }
+        return { found: false, reason: "error", message: e.message || "定位失败" };
       } finally {
         if (executionLocateAbortRef.current === controller) {
           executionLocateAbortRef.current = null;
@@ -3882,11 +3907,11 @@ export default function HomePage() {
   );
 
   const focusExecutionInfluencer = React.useCallback(
-    (username) => {
+    async (username) => {
       const handle = String(username || "")
         .trim()
         .replace(/^@/, "");
-      if (!handle) return;
+      if (!handle) return { found: false, reason: "empty" };
 
       setBinComputerView("overview");
       setHighlightExecutionUsername(handle);
@@ -3954,11 +3979,17 @@ export default function HomePage() {
       pendingFocusExecutionUsernameRef.current = handle;
       if (targetStage) {
         setActiveExecutionStage(targetStage);
+        return {
+          found: true,
+          scope: targetStage === "analyzed" ? "analyzed" : "execution",
+          stage: targetStage,
+        };
       } else if (cid) {
-        void locateExecutionInfluencer(handle, cid);
+        return locateExecutionInfluencer(handle, cid);
       } else {
         pendingFocusExecutionUsernameRef.current = null;
         setHighlightExecutionUsername(null);
+        return { found: false, reason: "noCampaign" };
       }
     },
     [executionStatus, analyzedCandidatesItems, resolvedCampaignId, locateExecutionInfluencer]
@@ -4007,7 +4038,33 @@ export default function HomePage() {
         }
       }
 
+      // 待审核价格里没有该红人：退化为跨 tab 全局定位（执行进度各阶段 + 已分析）
       if (!matches.length) {
+        if (!resolvedCampaignId) {
+          setPendingPriceSearchMessage(`未找到“${query}”`);
+          return;
+        }
+        const result = await focusExecutionInfluencer(query);
+        if (result?.found) {
+          setPendingPriceSearchMessage(
+            result.stage === "pendingPrice"
+              ? "已定位"
+              : `不在「${EXECUTION_STAGE_TITLES.pendingPrice}」，已定位到「${
+                  EXECUTION_STAGE_TITLES[result.stage] || result.stage
+                }」`
+          );
+          return;
+        }
+        if (result?.reason === "error") {
+          setPendingPriceSearchMessage(result.message || "定位失败");
+          return;
+        }
+        if (result?.reason === "notFound") {
+          setPendingPriceSearchMessage(
+            `未找到“${query}”（已检索执行进度与已分析列表）`
+          );
+          return;
+        }
         setPendingPriceSearchMessage(`未找到“${query}”`);
         return;
       }
@@ -4034,6 +4091,7 @@ export default function HomePage() {
     executionStatus,
     resolvedCampaignId,
     mergeExecutionStatusPage,
+    focusExecutionInfluencer,
   ]);
 
   React.useEffect(() => {
@@ -7003,7 +7061,7 @@ export default function HomePage() {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              focusExecutionInfluencer(match.username);
+              void focusExecutionInfluencer(match.username);
             }}
             style={{
               color: "#4F46E5",
@@ -9375,21 +9433,37 @@ export default function HomePage() {
                   const stageDefsAll = [
                     {
                       key: "analyzed",
-                      title: "已分析红人",
+                      title: EXECUTION_STAGE_TITLES.analyzed,
                       items: analyzedCandidatesItems,
                     },
-                    { key: "contacted", title: "待红人报价", items: cols.contacted || [] },
-                    { key: "pendingPrice", title: "待审核价格", items: cols.pendingPrice || [] },
+                    {
+                      key: "contacted",
+                      title: EXECUTION_STAGE_TITLES.contacted,
+                      items: cols.contacted || [],
+                    },
+                    {
+                      key: "pendingPrice",
+                      title: EXECUTION_STAGE_TITLES.pendingPrice,
+                      items: cols.pendingPrice || [],
+                    },
                     {
                       key: "pendingSample",
-                      title: "待寄样品",
+                      title: EXECUTION_STAGE_TITLES.pendingSample,
                       items: [
                         ...(cols.pendingShippingAddress || []),
                         ...(cols.pendingSample || []),
                       ],
                     },
-                    { key: "pendingDraft", title: "待审核草稿", items: cols.pendingDraft || [] },
-                    { key: "published", title: "已发布视频", items: cols.published || [] },
+                    {
+                      key: "pendingDraft",
+                      title: EXECUTION_STAGE_TITLES.pendingDraft,
+                      items: cols.pendingDraft || [],
+                    },
+                    {
+                      key: "published",
+                      title: EXECUTION_STAGE_TITLES.published,
+                      items: cols.published || [],
+                    },
                   ];
                   const stageDefs = stageDefsAll.filter(
                     (s) => s.key !== "pendingSample" || needSampleFlag
@@ -9775,8 +9849,8 @@ export default function HomePage() {
                                             setPendingPriceSearchMessage("");
                                           }
                                         }}
-                                        aria-label="搜索待审核价格红人"
-                                        placeholder="搜索卡片上的用户名"
+                                        aria-label="搜索并定位红人"
+                                        placeholder="搜索用户名 / ID（跨全部 tab 定位）"
                                         style={{
                                           flex: 1,
                                           minWidth: 0,
@@ -9834,8 +9908,8 @@ export default function HomePage() {
                                     <button
                                       type="button"
                                       onClick={() => setPendingPriceSearchOpen(true)}
-                                      aria-label="搜索待审核价格红人"
-                                      title="搜索待审核价格红人"
+                                      aria-label="定位红人（跨全部 tab）"
+                                      title="定位红人：待审核价格没有时，自动到其他 tab 查找"
                                       style={{
                                         padding: "4px 10px",
                                         borderRadius: 6,
