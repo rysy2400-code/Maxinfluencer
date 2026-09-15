@@ -12,6 +12,7 @@
     "test:account-admin": "node scripts/test-account-admin-validation.mjs",
     "test:captcha-handoff": "node scripts/test-captcha-human-handoff.mjs",
     "test:exec-scheduler-merge": "node scripts/test-execution-scheduler-merge.mjs",
+    "test:extract-json-object": "node scripts/test-extract-json-object.mjs",
     "test:business-profile-platform-identity": "node --experimental-default-type=module scripts/test-business-profile-platform-identity.mjs",
     "test:email-ops": "node scripts/run-esm-script.cjs scripts/test-email-delivery-classification.mjs",
     "test:published-videos": "node scripts/test-published-videos.mjs",

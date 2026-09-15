@@ -324,7 +324,7 @@ async function run() {
     );
     assert.equal(decision.needTool, false);
     assert.equal(decision.toolName, null);
-    assert.match(decision.reply, /没有识别到可导入的红人链接或附件/);
+    assert.match(decision.reply, /没有识别到可导入的红人链接或名单附件/);
     ok("无名单来源时安全降级");
   }
 
