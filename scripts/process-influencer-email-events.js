@@ -41,6 +41,7 @@ import { seedKnownPlatformProfiles } from "../lib/influencer/business-profile-pl
 import { applySystemQuoteCreatorResponse } from "../lib/billing/refund-system-quote.js";
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import { enqueueAdvertiserExecutionFollowup } from "../lib/execution/enqueue-advertiser-followup.js";
+import { normalizeCommissionPercent } from "../lib/execution/agreed-terms.js";
 import { resolveInfluencerThreadMailContext } from "../lib/email/influencer-thread-mail.js";
 import { applyResidenceCountryFromDelta } from "../lib/influencer/country-reply-sync.js";
 import {
@@ -589,8 +590,35 @@ async function handleOutboundEmails(decision, event, executions) {
         "[ProcessInfluencerEmailEvents] sendMail 失败：",
         sendErr?.message || sendErr
       );
+    } else {
+      // 报价阶段（价格还没谈定）发出的每一封回信都算一轮「追问价格」，
+      // 供下一轮决策判断是否已达到追问上限（见 prompt「报价阶段纪律」）。
+      await bumpQuoteFollowUpCount({ campaignId, exec }).catch(() => {});
     }
   }
+}
+
+/**
+ * 报价阶段追问计数 +1：只统计仍在「待报价」的执行（stage = pending_quote）。
+ * 固定费/佣金都明确后由 campaign agent worker 侧清零；用于封顶追问轮数（≤3 轮）。
+ */
+async function bumpQuoteFollowUpCount({ campaignId, exec }) {
+  const influencerId = exec?.influencerId;
+  if (!campaignId || !influencerId) return;
+  await queryTikTok(
+    `
+    UPDATE tiktok_campaign_execution
+    SET last_event = JSON_SET(
+          COALESCE(last_event, JSON_OBJECT()),
+          '$.quoteFollowUpCount',
+          COALESCE(JSON_EXTRACT(last_event, '$.quoteFollowUpCount'), 0) + 1
+        )
+    WHERE campaign_id = ?
+      AND stage = 'pending_quote'
+      AND ${SQL_EXECUTION_CREATOR_MATCH_E}
+  `,
+    [campaignId, ...paramsExecutionCreatorMatch(influencerId)]
+  );
 }
 
 async function handleAgentEvents(decision, event, executions) {
@@ -735,6 +763,8 @@ async function applyDecision(decision, event, executions) {
         : upd.flatFeeUSD && !Number.isNaN(Number(upd.flatFeeUSD))
         ? Number(upd.flatFeeUSD)
         : null;
+    // 执行级佣金：与固定费同规则；0 = 明确谈定为零，null = 未谈定（禁止用 0 代替未谈定）
+    let commissionPercent = normalizeCommissionPercent(upd.commissionPercent);
 
     let videoLink =
       typeof upd.videoLink === "string" && upd.videoLink.trim()
@@ -894,6 +924,7 @@ async function applyDecision(decision, event, executions) {
       newStage,
       note: note || "",
       flatFeeUSD: flatFee,
+      commissionPercent,
       draftLink,
       videoLink,
       deliverable,
@@ -910,6 +941,7 @@ async function applyDecision(decision, event, executions) {
       },
       parsedFromEmailBody: {
         flatFeeUSD: flatFee,
+        commissionPercent,
         draftLink,
         videoLink,
         deliverable,
@@ -1222,6 +1254,7 @@ ${influencerAgentBasePrompt}
         "newStage": "quote_submitted",
         "note": "简要中文说明你为什么这么做",
         "flatFeeUSD": 200,
+        "commissionPercent": 10,
         "draftLink": "https://...（真实脚本/草稿链接；禁止填参考图链接，可选）",
         "videoLink": "https://www.tiktok.com/@xxx/video/456",
         "deliverable": {
@@ -1358,13 +1391,24 @@ ${influencerAgentBasePrompt}
   - 如果红人本次只补发其中一个平台的链接（其余平台之前已回传），publishedLinks 只填本次新增的平台链接即可，系统会按平台合并保留历史。
 
 【报价阶段 · 与红人沟通的纪律（极其重要）】
+- **合作价格 = 固定费（flatFeeUSD）+ 佣金（commissionPercent）两项，两者必须一起确认。**
+  - flatFeeUSD：本单红人明确接受的**固定费**美元金额（不是 campaign 总预算、不是 eCPM 上限、不是其他档位的价格）。
+  - commissionPercent：本单**佣金百分比**（0–100）。campaign 邀约口径里写明的佣金比例即为默认值，红人若明确改过则以红人接受的为准。
+  - 若该 campaign 的邀约口径本就是**纯佣金 / 纯产品置换**（activeExecutions[].lastEvent.outreachEmail.pricingMode = "commission_only"，邀约邮件里没有固定费）：红人接受邀约时，flatFeeUSD 必须显式返回 **0**、commissionPercent 返回邀约口径的佣金比例（纯产品置换为 0），**不要**返回 null，也不要再追问固定费。
+  - **未谈定**的项返回 null（或省略该字段）；**禁止**用 0 表示「未谈定」——0 是**明确谈定为零**（如纯佣金合作固定费为 0、纯产品置换佣金为 0）。
+  - 只要有一项还是 null，就**视为价格未确认**。
+- **价格未确认时（固定费或佣金为 null）**：
+  - **禁止**把 newStage 设为 quote_submitted（系统会拦截，只会让红人在「待报价」原地打转）；
+  - 保持 newStage=pending_quote，并**必须**返回 outboundEmails：自然地继续和红人确认缺的那一项（例如问「你的固定费是多少 / 是否接受 X USD 固定费 + Y% 佣金」），可给出区间或参考价帮助对方决策；**禁止**只是礼貌寒暄而没有问价格；
+  - 结合 activeExecutions[].lastEvent.quoteFollowUpCount 判断已追问轮数：已追问 **2 轮**仍未确认时，本轮不要再追问，改为发 special request（agentEvents 里 type="creator_replied_special_request"、specialRequestStatus="pending_brand"），把「红人卡在哪、需要广告主给什么（预算区间/是否接受其条款）」一次讲清；**该 special request 不得伴随 quote_submitted**。
+- 价格确认后（固定费与佣金都已明确，允许都是 0）才允许 newStage=quote_submitted；此时 note 里必须同时写明固定费与佣金，例如「固定费 $0 + 佣金 10%，无固定费纯佣金合作」。
 - 判断品牌是否已同意报价：看 activeExecutions[].lastEvent.quoteApprovedAt 是否存在。不存在则一律视为**品牌尚未确认**。
 - 红人同时提供多个内容形式/交付档位及不同价格时（例如 Shorts / Integration / Long-Form）：
   - 必须结合对应 activeExecutions[].campaignInfo、productInfo 和已有对话，判断 Campaign 实际要求的交付形式；
   - flatFeeUSD 只能填写与该交付形式匹配的价格，不能因为它最低或最先出现就默认选择第一档；
   - note 中必须写明选中的档位、价格以及用于匹配的 Campaign 交付要求；
   - 如果上下文仍不足以判断具体交付形式，不得填写 flatFeeUSD，也不得创建报价 update。改为在 agentEvents 中返回 type="creator_replied_special_request"、specialRequestStatus="pending_brand"、clarificationType="delivery_requirement"，用 creatorMessage 完整列出红人的报价选项，并在 note 中明确询问广告主补充具体交付要求。
-- 红人明确接受广告主上一轮还价时，flatFeeUSD 填写红人明确接受的金额；该回复会成为新的红人有效报价。
+- 红人明确接受广告主上一轮还价时，flatFeeUSD 填写红人明确接受的金额、commissionPercent 填写对应的佣金比例；该回复会成为新的红人有效报价。
 - 当你将 newStage 设为 quote_submitted（红人接受邀约价或给出 counter 报价）时：
   - **必须**同时返回 outboundEmails，礼貌回复红人；
   - 正文必须说明：你已将其报价/意向**同步给品牌方**，**正在等待品牌确认**，确认后会再联系；请红人暂时**不要**开始制作素材；
@@ -1421,7 +1465,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   - **禁止**仅因「红人回复了邮件」就将 newStage 设为 quote_submitted，也**禁止**推断红人已接受报价或有意向合作。
   - 应返回 {"updates": []}，且通常不需要 outboundEmails（除非需礼貌确认已收到并等待正式回复）。
   - note 中应写「疑似自动回复或正文未能解析，等待红人实质性回复」，**不要**写「正文为空但回复行为表明有意向」。
-- 只有 email.bodyText 中**明确**出现报价、同意合作、提交草稿/视频链接等实质性内容时，才可推进 stage。
+- 只有 email.bodyText 中**明确**出现报价、提交草稿/视频链接等实质性内容时，才可推进 stage。
+- 红人**只说「有兴趣 / 愿意合作 / 想推进」但没有给出固定费或佣金**时，属于「价格未确认」：允许继续保持 pending_quote 并回信确认价格，**不得**推进到 quote_submitted（详见上方【报价阶段 · 与红人沟通的纪律】）。
 `;
 
   const userContent = `下面是一个红人的最新邮件和与该红人相关的所有 Campaign 执行状态，请根据邮件内容判断是否需要更新某些 Campaign 的 stage。\n\n输入数据（JSON）：\n${JSON.stringify(

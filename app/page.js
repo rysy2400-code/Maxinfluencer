@@ -2691,6 +2691,20 @@ function ExecutionProgressRow({
 
       {stageKey === "contacted" && (
         <>
+          {item.campaignAgentDecision?.quoteAdmissionBlocked ? (
+            <div
+              style={{
+                fontSize: 11,
+                color: "#B45309",
+                backgroundColor: "#FFFBEB",
+                border: "1px solid #FDE68A",
+                borderRadius: 8,
+                padding: "6px 8px",
+              }}
+            >
+              价格尚未与红人确认（固定费 / 佣金），系统正在继续跟进，暂不进入待审核价格。
+            </div>
+          ) : null}
           <ExecutionProgressCollapsibleRow
             label="画像分析"
             text={profileAnalysis}
@@ -2725,11 +2739,24 @@ function ExecutionProgressRow({
             useMarkdown
           />
           {labelRow(
-            `${item.quoteOrigin === "commerce_profile_estimate" ? "系统建议价" : "红人最新报价"} (${item.currency || "USD"})`,
+            `${item.quoteOrigin === "commerce_profile_estimate" ? "系统建议价" : "固定费"} (${item.currency || "USD"})`,
             flatUsd != null && flatUsd !== ""
               ? `${Number(flatUsd)} ${item.currency || "USD"}`
               : "—"
           )}
+          {labelRow(
+            "佣金",
+            item.commissionPercent != null && Number.isFinite(Number(item.commissionPercent))
+              ? `${Number(item.commissionPercent)}%`
+              : "—"
+          )}
+          {canApproveReject &&
+          (flatUsd == null || flatUsd === "") &&
+          item.outreachEmail?.pricingMode !== "commission_only" ? (
+            <div style={{ fontSize: 11, color: "#B45309" }}>
+              固定费与佣金尚未与红人确认，暂不可同意；请先与红人确认价格。
+            </div>
+          ) : null}
           {item.quoteOrigin === "commerce_profile_estimate" && item.systemQuote?.deliveryNote ? (
             <div
               style={{

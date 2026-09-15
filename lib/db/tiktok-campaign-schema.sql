@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS tiktok_campaign_execution (
 
   -- 商务/交付信息（可随流程逐步填写）
   flat_fee DECIMAL(10,2) NULL COMMENT '当前最新报价金额（数值，币种见 currency）',
+  commission_percent DECIMAL(5,2) NULL COMMENT '本条执行谈定的佣金百分比（0-100）；NULL=未谈定',
   currency VARCHAR(8) NOT NULL DEFAULT 'USD' COMMENT '报价币种 ISO 4217，如 USD、EUR',
   quote_negotiation JSON NULL COMMENT '报价/砍价时间线：[{role,amount,currency,reason,at,source}]',
   quote_origin VARCHAR(32) NULL COMMENT 'creator_quote|commerce_profile_estimate',

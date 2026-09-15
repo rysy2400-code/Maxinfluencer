@@ -30,14 +30,55 @@ const draftApproved = {
   draftApprovedAt: "2026-06-01T00:00:00.000Z",
 };
 
-// 允许的阶段跳转
+const agreedTerms = { fixedFeeUsd: 500, commissionPercent: 3 };
+
+// 允许的阶段跳转（价格已确认：固定费 + 佣金都明确）
 assert(
   resolveInfluencerAgentUpdate({
     currentStage: EXECUTION_STAGES.PENDING_QUOTE,
     requestedStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
     lastEventRaw: {},
+    agreedTerms,
   }).effectiveStage === EXECUTION_STAGES.QUOTE_SUBMITTED,
-  "pending_quote → quote_submitted"
+  "pending_quote → quote_submitted（条款已确认）"
+);
+
+// 硬准入：价格未确认时不得进入待审核价格
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.PENDING_QUOTE,
+    requestedStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
+    lastEventRaw: {},
+    agreedTerms: { fixedFeeUsd: null, commissionPercent: 10 },
+  }).effectiveStage === EXECUTION_STAGES.PENDING_QUOTE,
+  "固定费未确认 → 保持 pending_quote"
+);
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.PENDING_QUOTE,
+    requestedStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
+    lastEventRaw: {},
+    agreedTerms: { fixedFeeUsd: 500, commissionPercent: null },
+  }).effectiveStage === EXECUTION_STAGES.PENDING_QUOTE,
+  "佣金未确认 → 保持 pending_quote"
+);
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.PENDING_QUOTE,
+    requestedStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
+    lastEventRaw: {},
+    agreedTerms: { fixedFeeUsd: 0, commissionPercent: 0 },
+  }).effectiveStage === EXECUTION_STAGES.QUOTE_SUBMITTED,
+  "纯佣金/纯置换（0 固定费 + 0 佣金）可进入待审核价格"
+);
+assert(
+  resolveInfluencerAgentUpdate({
+    currentStage: EXECUTION_STAGES.QUOTE_REJECTED,
+    requestedStage: EXECUTION_STAGES.QUOTE_SUBMITTED,
+    lastEventRaw: {},
+    agreedTerms: { fixedFeeUsd: null, commissionPercent: null },
+  }).effectiveStage === EXECUTION_STAGES.QUOTE_REJECTED,
+  "拒绝后重新报价但未给价格 → 保持 quote_rejected"
 );
 
 assert(

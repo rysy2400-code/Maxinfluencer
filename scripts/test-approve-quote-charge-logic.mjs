@@ -52,16 +52,61 @@ const nullFeeRow = { flat_fee: null, currency: "USD", source: "web_search" };
 const nullFeeCharge = resolveQuoteApproveCharge(campaign, nullFeeRow);
 assert(!nullFeeCharge.ok, "null quote blocked in non-commission mode");
 
-// 报价为空：纯佣金模式仍允许（无固定费用，仅佣金）
+// 报价为空：只认「这条红人自己当初按纯佣金口径邀约」的执行行（不再看 campaign 当前模式）
+const campaignNowAskQuote = { campaignInfo: { influencerPricing: { mode: "ask_creator_quote" } } };
+const commissionOnlyInviteRow = {
+  flat_fee: null,
+  currency: "USD",
+  source: "web_search",
+  last_event: { outreachEmail: { pricingMode: "commission_only" } },
+};
+const nullFeeCommissionCharge = resolveQuoteApproveCharge(
+  campaignNowAskQuote,
+  commissionOnlyInviteRow
+);
+assert(nullFeeCommissionCharge.ok, "commission_only 邀约的行报价为空仍可同意");
+assert(nullFeeCommissionCharge.chargeAmount === 0, "null quote commission charge 0");
+
+// campaign 模式是 commission_only，但这条执行行是按 ask_creator_quote 邀约、且没给价 → 仍拦截
 const commissionOnlyCampaign = {
   campaignInfo: { influencerPricing: { mode: "commission_only" } },
 };
-const nullFeeCommissionRow = { flat_fee: null, currency: "USD", source: "web_search" };
-const nullFeeCommissionCharge = resolveQuoteApproveCharge(
-  commissionOnlyCampaign,
-  nullFeeCommissionRow
+const askQuoteInviteRow = {
+  flat_fee: null,
+  currency: "USD",
+  source: "web_search",
+  last_event: { outreachEmail: { pricingMode: "ask_creator_quote" } },
+};
+assert(
+  !resolveQuoteApproveCharge(commissionOnlyCampaign, askQuoteInviteRow).ok,
+  "按询价口径邀约但未给价 → 拦截"
 );
-assert(nullFeeCommissionCharge.ok, "null quote ok in commission-only mode");
-assert(nullFeeCommissionCharge.chargeAmount === 0, "null quote commission charge 0");
+
+// 执行级条款 0 固定费 + 佣金：允许，且不扣款
+const agreedTermsRow = {
+  flat_fee: 0,
+  commission_percent: 10,
+  currency: "USD",
+  source: "web_search",
+  last_event: { outreachEmail: { pricingMode: "commission_only" } },
+};
+const agreedTermsCharge = resolveQuoteApproveCharge(campaignNowAskQuote, agreedTermsRow);
+assert(agreedTermsCharge.ok, "0 固定费 + 10% 佣金可同意");
+assert(agreedTermsCharge.chargeAmount === 0, "0 固定费不扣款");
+assert(agreedTermsCharge.commissionPercent === 10, "回传佣金口径");
+
+// 有固定费 + 佣金：佣金不影响扣款金额
+const feePlusCommissionRow = {
+  flat_fee: 1000,
+  commission_percent: 10,
+  currency: "USD",
+  source: "web_search",
+};
+const feePlusCommissionCharge = resolveQuoteApproveCharge(
+  campaignNowAskQuote,
+  feePlusCommissionRow
+);
+assert(feePlusCommissionCharge.chargeAmount === 1050, "固定费 1000 → 扣 1050");
+assert(feePlusCommissionCharge.commissionPercent === 10, "回传佣金口径（有固定费）");
 
 console.log("✅ test-approve-quote-charge-logic.mjs passed");

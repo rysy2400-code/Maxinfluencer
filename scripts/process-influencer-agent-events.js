@@ -931,6 +931,8 @@ async function handleSendContractEmail(eventRow, payload) {
       clauses = buildContractClauses({
         deliverablesText: null,
         feeAmount: execRow?.flat_fee ?? null,
+        commissionPercent:
+          execRow?.commission_percent ?? execRow?.lastEvent?.approvedTerms?.commissionPercent ?? null,
         currency: execRow?.currency || "USD",
         sectionOverrides: le.contractSectionOverrides || null,
         additionalTerms: le.contractAdditionalTerms || null,

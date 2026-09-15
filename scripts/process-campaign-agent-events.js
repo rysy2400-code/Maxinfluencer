@@ -25,6 +25,10 @@ import {
   buildTraceIdFromInboundMessageId,
 } from "../lib/utils/timeline-ids.js";
 import { resolveInfluencerAgentUpdate } from "../lib/execution/stage-transition.js";
+import {
+  normalizeCommissionPercent,
+  resolveExecutionAgreedTerms,
+} from "../lib/execution/agreed-terms.js";
 import { influencerEntryDelta } from "../lib/execution/influencer-entry-seq.js";
 import {
   isCompleteShippingInfo,
@@ -102,6 +106,56 @@ function parseQuoteNegotiationColumn(raw) {
   return [];
 }
 
+/** campaign 侧条款上下文：佣金兜底与首封邀约口径都要用 */
+async function fetchCampaignTermsContext(campaignId) {
+  if (!campaignId) return null;
+  try {
+    const rows = await queryTikTok(
+      "SELECT campaign_info, commission FROM tiktok_campaign WHERE id = ? LIMIT 1",
+      [campaignId]
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    return {
+      commission: row.commission,
+      campaignInfo: parseJsonOrObject(row.campaign_info),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 「本次更新之后」的执行级条款：用于判断能否进入待审核价格。
+ * 固定费取本次上报值，其次取已谈定的最新红人报价；佣金取本次上报值，其次取执行行，最后回落 campaign 配置。
+ */
+function buildAgreedTermsAfterUpdate({
+  campaign,
+  currentRow,
+  flatFee,
+  commissionPercent,
+}) {
+  const existingNegotiation = parseQuoteNegotiationColumn(currentRow?.quote_negotiation);
+  const nextNegotiation =
+    flatFee != null && Number.isFinite(Number(flatFee))
+      ? [
+          ...existingNegotiation,
+          {
+            role: "influencer",
+            amount: Number(flatFee),
+            currency: normalizeCurrencyCode(currentRow?.currency, "USD"),
+          },
+        ]
+      : existingNegotiation;
+  return resolveExecutionAgreedTerms(campaign, {
+    ...(currentRow || {}),
+    flat_fee: flatFee != null ? flatFee : currentRow?.flat_fee,
+    quote_negotiation: nextNegotiation,
+    commission_percent:
+      commissionPercent != null ? commissionPercent : currentRow?.commission_percent,
+  });
+}
+
 /** Campaign 主投放平台：用于挑选 publishedVideos 的主链接（查不到返回 null） */
 async function resolveCampaignMainPlatform(campaignId) {
   if (!campaignId) return null;
@@ -168,6 +222,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       : payload.flatFeeUSD && !Number.isNaN(Number(payload.flatFeeUSD))
       ? Number(payload.flatFeeUSD)
       : null;
+  // 佣金（百分比）：与固定费同等级的执行级条款，0 表示「明确谈定为零」
+  let commissionPercent = normalizeCommissionPercent(payload.commissionPercent);
 
   let videoLink =
     typeof payload.videoLink === "string" && payload.videoLink.trim()
@@ -188,7 +244,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
 
   const execRows = await queryTikTok(
     `
-    SELECT stage, flat_fee, currency, quote_negotiation, quote_origin, last_event, shipping_info
+    SELECT stage, flat_fee, currency, commission_percent, quote_negotiation, quote_origin, last_event, shipping_info
     FROM tiktok_campaign_execution
     WHERE campaign_id = ? AND ${SQL_EXECUTION_CREATOR_MATCH}
   `,
@@ -200,11 +256,20 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
   const cur = execRows[0];
   const currentStage = cur.stage || "pending_quote";
 
+  const campaignTermsContext = await fetchCampaignTermsContext(campaignId);
+  const agreedTerms = buildAgreedTermsAfterUpdate({
+    campaign: campaignTermsContext,
+    currentRow: cur,
+    flatFee,
+    commissionPercent,
+  });
+
   const resolved = resolveInfluencerAgentUpdate({
     currentStage,
     requestedStage,
     lastEventRaw: cur.last_event,
     payload,
+    agreedTerms,
   });
 
   let { effectiveStage, skippedStageReason, draftLinkOnly } = resolved;
@@ -237,6 +302,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         role,
         amount: Number(flatFee),
         currency: nextCurrency,
+        ...(commissionPercent != null ? { commissionPercent } : {}),
         reason:
           typeof payload.quoteReason === "string" && payload.quoteReason.trim()
             ? payload.quoteReason.trim()
@@ -250,6 +316,10 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     ];
   } else if (flatFee != null) {
     flatFee = null;
+  }
+  // 佣金与固定费同规则：只在报价阶段可写
+  if (!resolved.allowFlatFeeUpdate) {
+    commissionPercent = null;
   }
 
   if (!resolved.allowShippingInfoUpdate) {
@@ -442,6 +512,11 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     mergedLastEvent.deliverablesTimeline = deliverablesTimeline;
   }
 
+  // 离开待报价阶段后，「报价阶段追问次数」不再需要，归零。
+  if (effectiveStage !== "pending_quote") {
+    mergedLastEvent.quoteFollowUpCount = 0;
+  }
+
   mergedLastEvent = {
     ...mergedLastEvent,
     campaignAgentDecision: {
@@ -456,7 +531,11 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
       effectiveStage,
       draftLinkOnly: draftLinkOnly || false,
       skippedStageReason: draftLinkOnly ? null : skippedStageReason || null,
+      // 价格未确认被拦在「待报价」：UI 据此提示广告主，而不是把空价格卡片推进待审核
+      quoteAdmissionBlocked:
+        requestedStage === "quote_submitted" && !agreedTerms.isQuoteReady,
       flatFeeUSD: flatFee,
+      commissionPercent: agreedTerms.commissionPercent ?? null,
       videoLink,
       publishedVideos: mergedLastEvent.publishedVideos || null,
       draftLink,
@@ -475,6 +554,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     UPDATE tiktok_campaign_execution
     SET stage = ?,
         flat_fee = COALESCE(?, flat_fee),
+        commission_percent = COALESCE(?, commission_percent),
         currency = ?,
         quote_negotiation = ?,
         quote_origin = ?,
@@ -488,6 +568,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     [
       effectiveStage,
       flatFee,
+      commissionPercent,
       nextCurrency,
       JSON.stringify(negotiation),
       nextQuoteOrigin,
