@@ -72,7 +72,15 @@ function applyTiktokLiteProductionDefaults() {
 
 /** 任务失败冷却：只对“搜索经换 IP 重试仍失败”生效，30min，持久化到 config（worker 重启后仍生效） */
 function workerPortSuffix() {
-  return String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+  const explicit = String(process.env.SEARCH_WORKER_ID_SUFFIX || "").trim();
+  if (explicit) return explicit;
+  // 无显式后缀时用本机 IP 兜底：此前该变量在 Linux 爬虫机上未配置，
+  // 导致冷却文件路径为空、setWorkerCooldown 静默失效，坏机器会连续数小时
+  // 100% 失败地一直认领任务（2026-09 U1 连续 216 个任务失败）。
+  const token = String(CURRENT_WORKER_IP || process.env.SEARCH_WORKER_HOST || "local")
+    .replace(/[^0-9a-zA-Z]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return token || "local";
 }
 function workerCooldownFile() {
   const suffix = workerPortSuffix();
@@ -101,6 +109,7 @@ function setWorkerCooldown(reason, taskId, minutes = 30) {
       taskId,
       setAt: new Date().toISOString(),
     };
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
     fs.writeFileSync(fp, JSON.stringify(cd, null, 2), "utf8");
     console.warn(
       `[worker-influencer-search] 写入失败冷却 ${minutes}min（${fp}）reason=${reason} task=${taskId}`
@@ -149,9 +158,45 @@ async function rotateTkIpForSearchRetry(label) {
 
 /** 判断异常是否属于搜索阶段（避免 enrich/国家环节的异常也触发换 IP 重试） */
 function isSearchStageFailureMsg(msg) {
-  return /未获取到数据|general search|search\/general\/full|EMPTY|CDP timeout|Runtime\.evaluate|Failed to fetch|tiktok_api_session_unavailable|无结果/i.test(
+  return /未获取到数据|general search|search\/general\/full|EMPTY|CDP timeout|Runtime\.evaluate|Failed to fetch|tiktok_api_session_unavailable|无结果|innertube|首屏失败|会话不可用/i.test(
     String(msg || "")
   );
+}
+
+/**
+ * 搜索阶段失败后的会话恢复。
+ * YouTube Lite 搜索复用 9222 常驻 innertube tab：tab 坏掉时（页内 fetch 挂死/失败）
+ * 「轮换 IP」在无 tk-ip 配置的机器上是 no-op，坏 tab 会被一直复用，
+ * 直接造成整台机器连续数小时 100% 任务失败。这里按平台做真实恢复：
+ *   level 0：关掉 youtube tab（下一次 acquire 全新渲染上下文）
+ *   level 1：重启 9222 Chrome 并等待 CDP 恢复
+ * 其它平台保持原有换 IP 行为。
+ *
+ * @param {string} label
+ * @param {string} platformSlug
+ * @param {number} attempt
+ */
+async function recoverSearchSessionForRetry(label, platformSlug, attempt = 0) {
+  let recovered = false;
+  if (platformSlug === "youtube") {
+    try {
+      const { recoverYoutubeSearchSession } = await import(
+        "../lib/tools/influencer-functions/youtube/innertube-direct-fetch.js"
+      );
+      const level = attempt >= 1 ? 1 : 0;
+      const res = await recoverYoutubeSearchSession({ level, reason: label });
+      recovered = true;
+      console.warn(
+        `[worker-influencer-search] ${label}：YouTube 会话恢复 level=${level} ${JSON.stringify(res)}`
+      );
+    } catch (e) {
+      console.warn(
+        `[worker-influencer-search] ${label}：YouTube 会话恢复异常 ${e?.message || e}`
+      );
+    }
+  }
+  const rotated = await rotateTkIpForSearchRetry(label);
+  return recovered || rotated;
 }
 
 function detectWorkerIp() {
@@ -941,7 +986,7 @@ async function processTask(task, platformSlug) {
         console.warn(
           `[worker-influencer-search] 搜索异常（${String(searchErr?.message || searchErr).slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
         );
-        await rotateTkIpForSearchRetry("搜索异常重试");
+        await recoverSearchSessionForRetry("搜索异常重试", taskPlatformSlug, attempt);
         await sleep(3000);
         continue;
       }
@@ -953,7 +998,7 @@ async function processTask(task, platformSlug) {
       console.warn(
         `[worker-influencer-search] 搜索未成功（${String(result?.error || "no_data").slice(0, 140)}），轮换 IP 重试 ${attempt + 1}/${maxSearchIpRetries}`
       );
-      await rotateTkIpForSearchRetry("搜索空结果重试");
+      await recoverSearchSessionForRetry("搜索空结果重试", taskPlatformSlug, attempt);
       await sleep(3000);
     }
   } catch (err) {
