@@ -19,6 +19,7 @@
     "test:agreed-terms": "node scripts/test-execution-agreed-terms.mjs",
     "test:stage-transition": "node scripts/test-stage-transition.mjs",
     "test:approve-quote": "node scripts/test-approve-quote-charge-logic.mjs",
+    "test:approve-quote-flow": "node scripts/test-approve-quote-charge-flow.mjs",
     "migrate:execution-commission": "node scripts/add-execution-commission-percent.js",
     "migrate:influencer-language": "node scripts/add-influencer-language-table.js",
     "backfill:influencer-language": "node scripts/backfill-influencer-language.mjs",

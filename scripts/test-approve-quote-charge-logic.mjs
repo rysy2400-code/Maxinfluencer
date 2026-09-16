@@ -2,7 +2,10 @@
  * 同意报价扣款逻辑（无 DB）
  * node scripts/test-approve-quote-charge-logic.mjs
  */
-import { resolveQuoteApproveCharge } from "../lib/billing/approve-quote-charge.js";
+import {
+  buildApprovedTermsSnapshot,
+  resolveQuoteApproveCharge,
+} from "../lib/billing/approve-quote-charge.js";
 import { INFLUENCER_SOURCE_USER } from "../lib/influencer/influencer-source.js";
 
 function assert(cond, msg) {
@@ -108,5 +111,22 @@ const feePlusCommissionCharge = resolveQuoteApproveCharge(
 );
 assert(feePlusCommissionCharge.chargeAmount === 1050, "固定费 1000 → 扣 1050");
 assert(feePlusCommissionCharge.commissionPercent === 10, "回传佣金口径（有固定费）");
+
+// 回归：同意时写入 last_event.approvedTerms 的条款快照必须带币种
+// （此前 approveQuoteWithCharge 直接引用只存在于 resolveQuoteApproveCharge 内的
+//   currency 变量，导致点击「同意」抛 ReferenceError: currency is not defined）
+const zeroFeeSnapshot = buildApprovedTermsSnapshot(agreedTermsCharge, 0);
+assert(zeroFeeSnapshot.currency === "USD", "0 固定费快照币种为 USD");
+assert(zeroFeeSnapshot.fixedFeeUsd === 0, "0 固定费快照固定费为 0");
+assert(zeroFeeSnapshot.commissionPercent === 10, "0 固定费快照佣金 10%");
+assert(zeroFeeSnapshot.chargedAmount === 0, "0 固定费快照扣款 0");
+
+const feeSnapshot = buildApprovedTermsSnapshot(feePlusCommissionCharge, -1050);
+assert(feeSnapshot.currency === "USD", "有固定费快照币种为 USD");
+assert(feeSnapshot.fixedFeeUsd === 1000, "有固定费快照固定费 1000");
+assert(feeSnapshot.chargedAmount === 1050, "扣款金额取绝对值");
+
+const fallbackCurrencySnapshot = buildApprovedTermsSnapshot({ fixedFeeUsd: 0 }, 0);
+assert(fallbackCurrencySnapshot.currency === "USD", "币种缺失时兜底 USD");
 
 console.log("✅ test-approve-quote-charge-logic.mjs passed");
