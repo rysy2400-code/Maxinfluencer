@@ -28,6 +28,7 @@ import {
 import {
   CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES,
 } from "../lib/execution/content-brief.js";
+import { normalizeDeliverables } from "../lib/execution/deliverables-resolution.js";
 import {
   getInfluencerById,
   listInfluencerPlatformIdentities,
@@ -325,6 +326,7 @@ async function reportDryRunDecision({ event, payload, decision }) {
 
     const returnedFlat = normalizeFixedFeeUsd(upd.flatFeeUSD);
     const returnedCommission = normalizeCommissionPercent(upd.commissionPercent);
+    const replayDeliverables = normalizeDeliverables(upd.deliverables);
     const existingNegotiation = Array.isArray(baseRow.quote_negotiation)
       ? baseRow.quote_negotiation
       : (() => {
@@ -345,9 +347,12 @@ async function reportDryRunDecision({ event, payload, decision }) {
               ...(returnedCommission != null
                 ? { commissionPercent: returnedCommission }
                 : {}),
+              ...(replayDeliverables ? { deliverables: replayDeliverables } : {}),
             },
           ]
-        : existingNegotiation;
+        : replayDeliverables
+          ? [...existingNegotiation, { role: "influencer", deliverables: replayDeliverables }]
+          : existingNegotiation;
     const terms = resolveExecutionAgreedTerms(
       { commission: ex?.campaignInfo?.commission, campaignInfo: ex?.campaignInfo },
       {
@@ -372,6 +377,7 @@ async function reportDryRunDecision({ event, payload, decision }) {
         "",
         `[回放结论] campaign=${upd.campaignId}`,
         `  LLM 返回：flatFeeUSD=${JSON.stringify(upd.flatFeeUSD)} commissionPercent=${JSON.stringify(upd.commissionPercent)} newStage=${upd.newStage}`,
+        `  交付结果：${replayDeliverables ? JSON.stringify(replayDeliverables) : "未变更"}`,
         `  解析后条款：固定费=${terms.fixedFeeUsd} 佣金=${terms.commissionPercent} 已谈定=${terms.isQuoteReady}`,
         `  硬准入：${admission.ready ? "通过" : "不通过 — " + admission.reason}`,
         `  状态机：${gate.allowed ? "允许 → " + (gate.dataOnly ? "仅数据更新" : upd.newStage) : "拦截 — " + gate.reason}`,
@@ -890,6 +896,19 @@ async function applyDecision(decision, event, executions) {
         : null;
     // 执行级佣金：与固定费同规则；0 = 明确谈定为零，null = 未谈定（禁止用 0 代替未谈定）
     let commissionPercent = normalizeCommissionPercent(upd.commissionPercent);
+    // 红人级「最新交付结果」：与最新报价同一条 quote_negotiation 记录，由本邮件内容归一化而来
+    const parsedDeliverables = normalizeDeliverables(upd.deliverables);
+    const deliverables = parsedDeliverables
+      ? {
+          ...parsedDeliverables,
+          confirmedAt:
+            parsedDeliverables.confirmedAt ||
+            (event.received_at
+              ? new Date(event.received_at).toISOString()
+              : new Date().toISOString()),
+          source: "influencer_email",
+        }
+      : null;
 
     let videoLink =
       typeof upd.videoLink === "string" && upd.videoLink.trim()
@@ -1050,6 +1069,7 @@ async function applyDecision(decision, event, executions) {
       note: note || "",
       flatFeeUSD: flatFee,
       commissionPercent,
+      deliverables,
       draftLink,
       videoLink,
       deliverable,
@@ -1067,6 +1087,7 @@ async function applyDecision(decision, event, executions) {
       parsedFromEmailBody: {
         flatFeeUSD: flatFee,
         commissionPercent,
+        deliverables,
         draftLink,
         videoLink,
         deliverable,
@@ -1450,6 +1471,14 @@ ${influencerAgentBasePrompt}
         "note": "简要中文说明你为什么这么做",
         "flatFeeUSD": 200,
         "commissionPercent": 10,
+        "deliverables": {
+          "platforms": ["TikTok", "Instagram", "YouTube", "Facebook"],
+          "videoCount": 1,
+          "bioLinkDays": 7,
+          "adCodeDays": 30,
+          "usageRightsDays": 90,
+          "note": "1 条视频在上述全部平台分发（可选补充说明）"
+        },
         "draftLink": "https://...（真实脚本/草稿链接；禁止填参考图链接，可选）",
         "videoLink": "https://www.tiktok.com/@xxx/video/456",
         "deliverable": {
@@ -1613,6 +1642,12 @@ ${influencerAgentBasePrompt}
   - note 中必须写明选中的档位、价格以及用于匹配的 Campaign 交付要求；
   - 如果上下文仍不足以判断具体交付形式，不得填写 flatFeeUSD，也不得创建报价 update。改为在 agentEvents 中返回 type="creator_replied_special_request"、specialRequestStatus="pending_brand"、clarificationType="delivery_requirement"，用 creatorMessage 完整列出红人的报价选项，并在 note 中明确询问广告主补充具体交付要求。
 - 红人明确接受广告主上一轮还价时，flatFeeUSD 填写红人明确接受的金额、commissionPercent 填写对应的佣金比例；该回复会成为新的红人有效报价。
+- **交付结果（deliverables）· 与最新报价同一更新口径**：只要红人在本轮邮件里提到、确认或变更了交付形式（平台、条数、bio link 天数、ad-code 天数、素材授权天数），就必须在本条 updates 里同时返回 deliverables 对象，系统会把它写进 quote_negotiation 中与本次报价同一条记录。
+  - platforms：红人明确确认的发布平台，用规范名（TikTok / Instagram / YouTube / Facebook）；范围可能多于或少于 Campaign 配置，以红人确认的为准。若邮件只涉及条数/时效、平台沿用之前已确认的范围，可以省略 platforms，但不得臆造。
+  - videoCount 视频条数；bioLinkDays bio link 保留天数；adCodeDays ad-code 有效天数；usageRightsDays 素材授权天数。缺失的项省略或填 null，不要用 0 表示未知。
+  - note：无法归入上述字段的交付约定（如「同一条视频多平台分发」「发布前需脚本审核」），用简明中文写。
+  - **禁止**把 Campaign 配置里的默认交付结果原样抄回来充数；只有红人来信带来新信息时才填写。
+  - 交付范围与 Campaign 配置不一致时，以红人明确确认的口径写入，并在 note 中说明与 Campaign 默认值的差异。
 - 当你将 newStage 设为 quote_submitted（红人接受邀约价或给出 counter 报价）时：
   - **必须**同时返回 outboundEmails，礼貌回复红人；
   - 正文必须说明：你已将其报价/意向**同步给品牌方**，**正在等待品牌确认**，确认后会再联系；请红人暂时**不要**开始制作素材；

@@ -34,6 +34,7 @@ import {
   inboundAttachmentDownloadUrl,
   inboundAttachmentPreviewUrl,
 } from "../lib/influencer/inbound-attachment-urls.js";
+import { formatDeliverablesSummary } from "../lib/execution/deliverables-resolution.js";
 import { InboundAttachmentCard } from "./inbound-attachment-card";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
@@ -2680,6 +2681,23 @@ function ExecutionProgressRow({
     </div>
   );
 
+  /**
+   * 交付结果（只读）：优先展示红人级「最新交付结果」（与最新报价同源的
+   * quote_negotiation[].deliverables），没有时回退 Campaign 默认交付结果。
+   * 品牌不可在本卡片直接修改。
+   */
+  const deliverablesRow = () => {
+    const latestText = item?.latestDeliverables
+      ? formatDeliverablesSummary(item.latestDeliverables)
+      : "";
+    if (latestText) return labelRow("交付结果（最新）", latestText);
+    const campaignText = item?.campaignDeliverables
+      ? String(item.campaignDeliverables).replace(/\n+/g, "；")
+      : "";
+    if (campaignText) return labelRow("交付结果", `${campaignText}（继承 Campaign 默认）`);
+    return null;
+  };
+
   return (
     <div id={rowDomId} style={cardStyle}>
       <ApproveQuoteContentBriefModal
@@ -2831,6 +2849,7 @@ function ExecutionProgressRow({
             </div>
           ) : null}
           {labelRow("eCPM", ecpmDisplay)}
+          {deliverablesRow()}
 
           {canApproveReject && (
             <div
@@ -3045,6 +3064,9 @@ function ExecutionProgressRow({
           </span>
         </div>
       )}
+      {(stageKey === "pendingShippingAddress" ||
+        stageKey === "pendingSample" ||
+        stageKey === "pendingDraft") && deliverablesRow()}
 
       {stageKey === "pendingSample" && needSample && (
         <>
@@ -3178,6 +3200,7 @@ function ExecutionProgressRow({
               ? `${Number(flatUsd)} ${item.currency || "USD"}${ecpmDisplay && ecpmDisplay !== "—" ? ` · eCPM ${ecpmDisplay}` : ""}`
               : "—"
           )}
+          {deliverablesRow()}
           <ExecutionProgressPublishedVideos item={item} />
         </>
       )}

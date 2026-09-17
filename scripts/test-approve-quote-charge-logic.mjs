@@ -129,4 +129,41 @@ assert(feeSnapshot.chargedAmount === 1050, "扣款金额取绝对值");
 const fallbackCurrencySnapshot = buildApprovedTermsSnapshot({ fixedFeeUsd: 0 }, 0);
 assert(fallbackCurrencySnapshot.currency === "USD", "币种缺失时兜底 USD");
 
+// 同意时的交付结果快照：取该执行行 quote_negotiation 上最新的 deliverables
+const snapshotWithDeliverables = buildApprovedTermsSnapshot(
+  feePlusCommissionCharge,
+  1050,
+  {
+    quote_negotiation: [
+      { role: "influencer", amount: 1000, currency: "USD" },
+      {
+        role: "influencer",
+        amount: 1000,
+        currency: "USD",
+        deliverables: {
+          platforms: ["TikTok", "Instagram", "YouTube", "Facebook"],
+          videoCount: 1,
+          bioLinkDays: 7,
+          adCodeDays: 30,
+          usageRightsDays: 90,
+        },
+      },
+    ],
+  }
+);
+assert(
+  snapshotWithDeliverables.deliverables?.platforms?.length === 4,
+  "approvedTerms 快照应带上交付结果（4 平台）"
+);
+assert(
+  snapshotWithDeliverables.deliverables?.usageRightsDays === 90,
+  "approvedTerms 快照应带上素材授权天数"
+);
+assert(
+  buildApprovedTermsSnapshot(feePlusCommissionCharge, 1050, {
+    quote_negotiation: [{ role: "influencer", amount: 1000 }],
+  }).deliverables === undefined,
+  "没有交付结果时不写 deliverables 字段"
+);
+
 console.log("✅ test-approve-quote-charge-logic.mjs passed");

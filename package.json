@@ -20,6 +20,7 @@
     "test:email-ops": "node scripts/run-esm-script.cjs scripts/test-email-delivery-classification.mjs",
     "test:published-videos": "node scripts/test-published-videos.mjs",
     "test:agreed-terms": "node scripts/test-execution-agreed-terms.mjs",
+    "test:deliverables": "node scripts/test-deliverables-resolution.mjs",
     "test:stage-transition": "node scripts/test-stage-transition.mjs",
     "test:approve-quote": "node scripts/test-approve-quote-charge-logic.mjs",
     "test:approve-quote-flow": "node scripts/test-approve-quote-charge-flow.mjs",

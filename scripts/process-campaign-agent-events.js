@@ -30,6 +30,7 @@ import {
   resolveExecutionAgreedTerms,
 } from "../lib/execution/agreed-terms.js";
 import { influencerEntryDelta } from "../lib/execution/influencer-entry-seq.js";
+import { normalizeDeliverables } from "../lib/execution/deliverables-resolution.js";
 import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
@@ -289,6 +290,12 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
   let negotiation = parseQuoteNegotiationColumn(cur.quote_negotiation);
   let mergedLastEvent = parseJsonOrObject(cur.last_event) || {};
 
+  // 红人级「最新交付结果」：与最新报价同源，写进 quote_negotiation 同一条记录。
+  // 报价阶段之外的 deliverables 变更不写入（与固定费/佣金同规则，后续变更走合同 R2）。
+  const nextDeliverables = resolved.allowFlatFeeUpdate
+    ? normalizeDeliverables(payload.deliverables)
+    : null;
+
   if (resolved.allowFlatFeeUpdate && flatFee != null && Number.isFinite(Number(flatFee))) {
     const role =
       payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
@@ -303,6 +310,7 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         amount: Number(flatFee),
         currency: nextCurrency,
         ...(commissionPercent != null ? { commissionPercent } : {}),
+        ...(nextDeliverables ? { deliverables: nextDeliverables } : {}),
         reason:
           typeof payload.quoteReason === "string" && payload.quoteReason.trim()
             ? payload.quoteReason.trim()
@@ -316,6 +324,31 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     ];
   } else if (flatFee != null) {
     flatFee = null;
+  }
+  // 只更新了交付范围、没有新报价时，单独追加一条不含金额的记录（不影响「最新报价」的解析）
+  if (
+    resolved.allowFlatFeeUpdate &&
+    nextDeliverables &&
+    !(flatFee != null && Number.isFinite(Number(flatFee)))
+  ) {
+    const role =
+      payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
+        ? "advertiser"
+        : "influencer";
+    negotiation = [
+      ...negotiation,
+      {
+        role,
+        ...(nextDeliverables ? { deliverables: nextDeliverables } : {}),
+        reason:
+          typeof payload.note === "string" && payload.note.trim()
+            ? payload.note.trim()
+            : null,
+        at: validIsoOrNow(payload.quoteAt),
+        source: "advertiser_agent_event",
+        sourceEventId: eventRow.id,
+      },
+    ];
   }
   // 佣金与固定费同规则：只在报价阶段可写
   if (!resolved.allowFlatFeeUpdate) {
