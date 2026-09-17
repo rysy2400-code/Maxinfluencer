@@ -27,6 +27,11 @@ tiktok-user-data-chrome/
 # local venv (if any)
 .venv/
 
+# 运行期数据：聊天附件（data/session-imports）、IG 轮换状态、备份与导出。
+# 必须在 .gitignore 里，否则部署脚本里的 `git clean -fd` 会把线上未入库的
+# 上传附件当垃圾删掉（2026-09-17 曾因此丢失全部聊天附件）。
+data/
+
 # 合同 PDF（运行期生成，含红人个人信息，不入库）
 storage/contracts/
 tmp-contract-preview/
