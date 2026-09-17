@@ -238,7 +238,12 @@ async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
   return rows || [];
 }
 
-/** 只认领并返回指定 id 的 pending 事件（用于人工定向补发，避免顺带消费其它事件） */
+/**
+ * 只认领并返回指定 id 的 pending 事件（用于人工定向补发，避免顺带消费其它事件）。
+ * --force-claim：接管已被置为 processing 的事件（人工补发前先 hold，避免其它 worker 抢先）。
+ */
+const ALLOW_FORCE_CLAIM = process.argv.includes("--force-claim");
+
 async function claimInfluencerAgentEventById(id) {
   const eventId = Number(id);
   if (!Number.isFinite(eventId) || eventId <= 0) return null;
@@ -247,10 +252,21 @@ async function claimInfluencerAgentEventById(id) {
     UPDATE tiktok_influencer_agent_event
     SET status = 'processing', updated_at = NOW()
     WHERE id = ? AND status = 'pending'
-  `,
+    `,
     [eventId]
   );
-  if (Number(upd?.affectedRows || 0) === 0) return null;
+  if (Number(upd?.affectedRows || 0) === 0) {
+    if (!ALLOW_FORCE_CLAIM) return null;
+    const takeover = await queryTikTok(
+      `
+      UPDATE tiktok_influencer_agent_event
+      SET status = 'processing', updated_at = NOW()
+      WHERE id = ?
+    `,
+      [eventId]
+    );
+    if (Number(takeover?.affectedRows || 0) === 0) return null;
+  }
   const rows = await queryTikTok(
     `SELECT * FROM tiktok_influencer_agent_event WHERE id = ? LIMIT 1`,
     [eventId]

@@ -18,10 +18,12 @@
  */
 import { getExecutionRow, updateExecutionStage } from "../lib/db/campaign-dao.js";
 import { enqueueContractEmail } from "../lib/contract/enqueue-contract-email.js";
+import { generateContractForExecution } from "../lib/contract/generate-contract.js";
 import {
   formatDeliverablesSummary,
   resolveLatestDeliverablesFromRow,
 } from "../lib/execution/deliverables-resolution.js";
+import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 
 function readArg(name) {
   const idx = process.argv.indexOf(`--${name}`);
@@ -31,6 +33,8 @@ function readArg(name) {
 }
 
 const apply = process.argv.includes("--apply");
+/** --hold：入队后立刻把事件置为 processing，避免其它 worker（可能还是旧代码）抢先消费 */
+const hold = process.argv.includes("--hold");
 const campaignId = String(readArg("campaign") || "").trim();
 const handle = String(readArg("handle") || "").replace(/^@/, "").trim();
 const revisionArg = Number(readArg("revision"));
@@ -100,7 +104,7 @@ console.log(
 
 if (!apply) {
   console.log(
-    "\n[dry-run] 未写库、未入队；确认 worker 已部署最新代码后，追加 --apply 执行。"
+    "\n[dry-run] 未写库、未入队。追加 --apply 执行；配合 --hold 可先在本地定向补发（避免旧代码 worker 抢先）。"
   );
   process.exit(0);
 }
@@ -112,13 +116,40 @@ await updateExecutionStage(campaignId, handle, {
   },
 });
 
+// 预生成合同：确保 PDF 与邮件摘要来自同一份、且用当前代码生成；worker 直接复用该文件
+const generated = await generateContractForExecution({
+  campaignId,
+  influencerHandle: row.tiktok_username || handle,
+  influencerId: row.influencer_id || null,
+  revision: nextRevision,
+});
+console.log("\n[generated] " + generated.contractNo);
+console.log("Deliverables: " + generated.deliverablesText);
+
 const { eventId } = await enqueueContractEmail({
   campaignId,
   influencerHandle: row.tiktok_username || handle,
   platformInfluencerId: row.influencer_id || null,
-  contract: { changeSummary },
+  contract: {
+    contractNo: generated.contractNo,
+    storageKey: generated.storageKey,
+    absPath: generated.absPath,
+    clauses: generated.clauses,
+    changeSummary,
+  },
 });
 
-console.log(
-  `\n[applied] 已写入 contractRevision=${nextRevision}，并已入队 send_contract_email（eventId=${eventId}）。worker 下一轮会生成 R${nextRevision} 合同并发送。`
-);
+if (hold) {
+  await queryTikTok(
+    `UPDATE tiktok_influencer_agent_event SET status = 'processing', updated_at = NOW() WHERE id = ?`,
+    [eventId]
+  );
+  console.log(
+    `\n[applied] contractRevision=${nextRevision}，事件 eventId=${eventId} 已入队并置为 processing（hold）。` +
+      `\n请在本机定向补发：node --experimental-default-type=module scripts/process-influencer-agent-events.js --mode=urgent --event-id ${eventId} --force-claim`
+  );
+} else {
+  console.log(
+    `\n[applied] 已写入 contractRevision=${nextRevision}，并已入队 send_contract_email（eventId=${eventId}）。worker 下一轮会发送 R${nextRevision} 合同。`
+  );
+}
