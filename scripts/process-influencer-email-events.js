@@ -17,6 +17,7 @@ import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { sendMail } from "../lib/email/enterprise-mail-client.js";
 import { logConversationMessage } from "../lib/db/influencer-conversation-dao.js";
 import { normalizeCanonicalInfluencerId } from "../lib/influencer/influencer-id-resolver.js";
+import { extractAttachmentText } from "../lib/influencer/extract-attachment-text.js";
 import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js";
 import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
@@ -470,41 +471,6 @@ function resolveCanonicalInfluencerId({ requestedInfluencerId, event, exec }) {
   }
 
   return execPlatformId || eventInfluencerId || requested || cleanId(exec?.influencerId);
-}
-
-async function extractAttachmentText(att) {
-  const contentType = String(att.content_type || "").toLowerCase();
-  const filename = att.filename || "";
-  const buf = att.content;
-  if (!buf || !Buffer.isBuffer(buf)) return null;
-
-  // PDF
-  if (contentType.includes("pdf") || filename.toLowerCase().endsWith(".pdf")) {
-    try {
-      const mod = await import("pdf-parse");
-      const pdfParse = mod.default || mod;
-      const data = await pdfParse(buf);
-      const text = (data?.text || "").trim();
-      return text ? { kind: "pdf_text", text } : null;
-    } catch (err) {
-      return { kind: "pdf_text_error", text: `PDF 解析失败: ${err?.message || String(err)}` };
-    }
-  }
-
-  // Image OCR
-  if (contentType.startsWith("image/")) {
-    try {
-      const mod = await import("tesseract.js");
-      const Tesseract = mod.default || mod;
-      const r = await Tesseract.recognize(buf, "eng");
-      const text = (r?.data?.text || "").trim();
-      return text ? { kind: "image_ocr_text", text } : null;
-    } catch (err) {
-      return { kind: "image_ocr_error", text: `图片 OCR 失败: ${err?.message || String(err)}` };
-    }
-  }
-
-  return null;
 }
 
 async function markEventStatus(id, status, errorMessage = null) {
