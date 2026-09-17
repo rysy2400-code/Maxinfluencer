@@ -38,7 +38,7 @@ import {
   upsertPublishedVideosFromUpdate,
 } from "../lib/execution/published-videos.js";
 import { listInboundAttachmentsByEmailEventId } from "../lib/db/influencer-inbound-attachments-dao.js";
-import { buildInboundImageMarkers } from "../lib/influencer/inbound-attachment-urls.js";
+import { buildInboundAttachmentMarkers } from "../lib/influencer/inbound-attachment-urls.js";
 import {
   formatExecInfluencerMention,
   isPlatformCreatorId,
@@ -685,7 +685,8 @@ async function applyCreatorRepliedSpecialRequest(eventRow, payload) {
           sourceEmailEventId && !Number.isNaN(sourceEmailEventId)
             ? await listInboundAttachmentsByEmailEventId(sourceEmailEventId)
             : [];
-        const attachmentMarkers = buildInboundImageMarkers(inboundAttachments);
+        const attachmentMarkers =
+          buildInboundAttachmentMarkers(inboundAttachments);
         const content =
           payload.clarificationType === "delivery_requirement"
             ? `【特殊请求 · 请补充交付要求】\n\n红人 ${handleHint} 提供了多个交付档位，但当前 Campaign 信息不足以判断应采用哪一档。\n\n红人报价：${creatorMessage}\n\n请明确具体交付形式后，Bin 将据此更新红人有效报价。\n\n执行侧摘要：${note}${attachmentMarkers}`

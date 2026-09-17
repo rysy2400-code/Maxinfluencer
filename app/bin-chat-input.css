@@ -217,3 +217,26 @@
   align-items: flex-end;
   gap: 6px;
 }
+
+/* 红人邮件附件卡片：文件名下方一行「打开 / 下载」 */
+.bin-inbound-attachment-card {
+  max-width: min(360px, 100%);
+}
+
+.bin-inbound-attachment-card__actions {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.bin-inbound-attachment-card__actions a {
+  color: #4f46e5;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.bin-inbound-attachment-card__actions a:hover {
+  text-decoration: underline;
+}

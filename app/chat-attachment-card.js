@@ -1,45 +1,9 @@
 "use client";
 
 import React from "react";
-import { ChatExcelFileIcon } from "./chat-excel-file-icon";
-import { ChatPdfFileIcon } from "./chat-pdf-file-icon";
-import { ChatDocFileIcon } from "./chat-doc-file-icon";
+import { ChatAttachmentIcon } from "./chat-attachment-icon";
 import { buildAttachmentMetaLine } from "./chat-file-utils";
-import {
-  attachmentKindForFileName,
-  fileExtension,
-} from "../lib/influencer/attachment-file-types.js";
-
-/** 图片附件：有可访问链接时直接显示缩略图。 */
-function AttachmentThumbnail({ fileName, href }) {
-  const [failed, setFailed] = React.useState(false);
-  if (!href || failed) {
-    return <ChatDocFileIcon size={36} kind="file" label={fileExtension(fileName).replace(".", "") || "IMG"} />;
-  }
-  return (
-    <img
-      className="bin-chat-attachment-card__thumb"
-      src={href}
-      alt={fileName}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
-/** 附件图标：PDF / Excel / Word / PPT / 图片缩略图。 */
-function AttachmentIcon({ attachment, downloadHref }) {
-  const fileName = String(attachment?.name || "");
-  const kind = attachmentKindForFileName(fileName);
-  if (kind === "image") {
-    return <AttachmentThumbnail fileName={fileName} href={downloadHref} />;
-  }
-  if (kind === "pdf") return <ChatPdfFileIcon size={36} />;
-  if (kind === "sheet") return <ChatExcelFileIcon size={36} />;
-  const ext = fileExtension(fileName).replace(".", "");
-  const iconKind = ext === "docx" || ext === "doc" ? "doc" : ext === "pptx" || ext === "ppt" ? "ppt" : "file";
-  return <ChatDocFileIcon size={36} kind={iconKind} label={ext || "FILE"} />;
-}
+import { attachmentKindForFileName } from "../lib/influencer/attachment-file-types.js";
 
 /**
  * DeepSeek 风格附件卡片
@@ -62,7 +26,10 @@ export function ChatAttachmentCard({
 
   const content = (
     <>
-      <AttachmentIcon attachment={attachment} downloadHref={downloadHref} />
+      <ChatAttachmentIcon
+        fileName={attachment?.name}
+        downloadHref={downloadHref}
+      />
       <div className="bin-chat-attachment-card__text">
         <div className="bin-chat-attachment-card__name">{fileName}</div>
         <div className="bin-chat-attachment-card__meta">{meta}</div>

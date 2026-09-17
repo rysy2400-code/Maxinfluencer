@@ -33,6 +33,7 @@ import {
   inboundAttachmentDownloadUrl,
   inboundAttachmentPreviewUrl,
 } from "../lib/influencer/inbound-attachment-urls.js";
+import { InboundAttachmentCard } from "./inbound-attachment-card";
 import "./bin-chat-input.css";
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import AccountBillingPanel from "./components/AccountBillingPanel";
@@ -1790,7 +1791,8 @@ function ExecutionProgressCommunicationSection({
                       {bodyText}
                     </div>
                   ) : null}
-                  {entry.emailSummary ? (
+                  {entry.emailSummary ||
+                  entry.emailReferences?.imageLinks?.length ? (
                     <div
                       style={{
                         marginTop: 4,
@@ -1799,30 +1801,61 @@ function ExecutionProgressCommunicationSection({
                         background: "rgba(79,70,229,0.05)",
                       }}
                     >
-                      <span style={{ fontWeight: 700, color: "#3730A3" }}>
-                        邮件摘要
-                      </span>
-                      {entry.emailSummary.original ? (
-                        <div style={{ marginTop: 2, color: "#374151" }}>
-                          <span style={{ color: "#6B7280" }}>原文摘要：</span>
-                          {entry.emailSummary.original}
-                        </div>
+                      {entry.emailSummary ? (
+                        <>
+                          <span style={{ fontWeight: 700, color: "#3730A3" }}>
+                            邮件摘要
+                          </span>
+                          {entry.emailSummary.original ? (
+                            <div style={{ marginTop: 2, color: "#374151" }}>
+                              <span style={{ color: "#6B7280" }}>原文摘要：</span>
+                              {entry.emailSummary.original}
+                            </div>
+                          ) : null}
+                          {entry.emailSummary.zh ? (
+                            <div
+                              style={{
+                                marginTop: 2,
+                                color: "#6B7280",
+                              }}
+                            >
+                              <span style={{ fontWeight: 600 }}>中文摘要：</span>
+                              {entry.emailSummary.zh}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
-                      {entry.emailSummary.zh ? (
+                      {(entry.emailReferences?.imageLinks || []).length ? (
                         <div
                           style={{
                             marginTop: 2,
-                            color: "#6B7280",
+                            color: "#374151",
+                            wordBreak: "break-word",
                           }}
                         >
-                          <span style={{ fontWeight: 600 }}>中文摘要：</span>
-                          {entry.emailSummary.zh}
+                          <span style={{ color: "#6B7280" }}>图片：</span>
+                          {(entry.emailReferences.imageLinks || []).map(
+                            (link, linkIdx) => (
+                              <a
+                                key={`img-link-${linkIdx}`}
+                                href={link}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  marginLeft: linkIdx ? 8 : 0,
+                                  color: "#4F46E5",
+                                  wordBreak: "break-all",
+                                }}
+                              >
+                                {link}
+                              </a>
+                            )
+                          )}
                         </div>
                       ) : null}
                     </div>
                   ) : null}
-                  {entry.emailReferences?.imageLinks?.length ||
-                  entry.emailReferences?.imageAttachments?.length ? (
+                  {entry.emailReferences?.attachments?.length ? (
                     <div
                       style={{
                         marginTop: 4,
@@ -1835,39 +1868,17 @@ function ExecutionProgressCommunicationSection({
                       }}
                     >
                       <span style={{ fontWeight: 700, color: "#047857" }}>
-                        邮件参考图
+                        红人邮件附件
                       </span>
-                      {(entry.emailReferences?.imageLinks || []).map(
-                        (link, linkIdx) => (
-                          <a
-                            key={`img-link-${linkIdx}`}
-                            href={link}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              color: "#4F46E5",
-                              wordBreak: "break-all",
-                            }}
-                          >
-                            {link}
-                          </a>
-                        )
-                      )}
-                      {(entry.emailReferences?.imageAttachments || []).map(
+                      {(entry.emailReferences?.attachments || []).map(
                         (att, attIdx) => {
-                          const previewHref = inboundAttachmentPreviewUrl(
-                            att.inboundAttachmentId
-                          );
                           return (
-                            <a
-                              key={`img-att-${attIdx}`}
-                              href={previewHref}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ color: "#4F46E5" }}
+                            <div
+                              key={`mail-att-${attIdx}`}
+                              style={{ marginTop: 2 }}
                             >
-                              {att.filename || `参考图 ${attIdx + 1}`}
-                            </a>
+                              <InboundAttachmentCard attachment={att} />
+                            </div>
                           );
                         }
                       )}
@@ -6967,6 +6978,8 @@ export default function HomePage() {
     // 同时匹配图片标记 [IMAGE:url]、Markdown 链接 [text](url) 和红人账户标记 [INFLUENCER:...]
     const imageRegex = /\[IMAGE:(.+?)\]/g;
     const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    // 红人邮件附件标记：[VIDEO:url|文件名] / [FILE:url|文件名]（文件名可省略）
+    const inboundAttachmentRegex = /\[(VIDEO|FILE):([^\]|]+)(?:\|([^\]]*))?\]/g;
     // 使用更宽松的正则，允许空值和特殊字符，使用非贪婪匹配
     // 格式: [INFLUENCER:avatar:url:platform:id:name:followers:views:reason:isRecommended:analysis]
     const influencerRegex = /\[INFLUENCER:([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^:]*?):([^\]]*?)\]/g;
@@ -6987,6 +7000,20 @@ export default function HomePage() {
         length: match[0].length,
         url: match[1],
         fullMatch: match[0]
+      });
+    }
+
+    // 匹配红人邮件附件（视频 / 文档）
+    inboundAttachmentRegex.lastIndex = 0;
+    while ((match = inboundAttachmentRegex.exec(content)) !== null) {
+      matches.push({
+        type: "inboundAttachment",
+        index: match.index,
+        length: match[0].length,
+        kind: match[1] === "VIDEO" ? "video" : "file",
+        url: match[2],
+        filename: match[3] || "",
+        fullMatch: match[0],
       });
     }
     
@@ -7186,6 +7213,51 @@ export default function HomePage() {
             @{match.username}
           </button>
         );
+      } else if (match.type === "inboundAttachment") {
+        if (match.kind === "video") {
+          parts.push(
+            <div
+              key={`inbound-video-${partIndex++}`}
+              style={{ marginTop: 12, marginBottom: 12 }}
+            >
+              <video
+                src={match.url}
+                controls
+                preload="metadata"
+                style={{
+                  display: "block",
+                  maxWidth: "100%",
+                  maxHeight: 420,
+                  borderRadius: 12,
+                  backgroundColor: "rgba(0,0,0,0.04)",
+                }}
+              />
+              {match.filename ? (
+                <div style={{ marginTop: 4, fontSize: 12, color: "#6B7280" }}>
+                  {match.filename}
+                </div>
+              ) : null}
+            </div>
+          );
+        } else {
+          const idMatch = String(match.url || "").match(
+            /\/inbound-attachments\/(\d+)/
+          );
+          const attachmentId = idMatch ? Number(idMatch[1]) : null;
+          parts.push(
+            <div
+              key={`inbound-file-${partIndex++}`}
+              style={{ marginTop: 8, marginBottom: 8, maxWidth: "100%" }}
+            >
+              <InboundAttachmentCard
+                attachment={{
+                  inboundAttachmentId: attachmentId,
+                  filename: match.filename || null,
+                }}
+              />
+            </div>
+          );
+        }
       }
       
       lastIndex = match.index + match.length;
