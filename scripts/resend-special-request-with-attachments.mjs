@@ -12,6 +12,8 @@
  *      node scripts/resend-special-request-with-attachments.mjs --from-event 70059 \
  *        --attachment "<storageKey>=<fileName>"
  *   2) 确认后正式入队：同上再加 --send
+ *      若原事件的 payload 里已经带附件，可省略 --attachment 直接复用：
+ *      node scripts/resend-special-request-with-attachments.mjs --from-event 70857 --send
  *   3) 触发 worker 发信：node scripts/process-influencer-agent-events.js --only-event <eventId>
  *
  * 参数：
@@ -102,6 +104,17 @@ async function loadFromEvent(eventId) {
     requestType: payload.requestType || "other",
     brandMessage: payload.brandMessage || "",
     sourceSpecialRequestId: payload.specialRequestId || null,
+    // 原事件里的附件元数据（fileName + storageKey），用于「重发同一条」场景
+    originalAttachments: (Array.isArray(payload.attachments)
+      ? payload.attachments
+      : []
+    )
+      .filter((a) => a?.storageKey && a?.fileName)
+      .map((a) => ({
+        storageKey: String(a.storageKey),
+        fileName: String(a.fileName),
+        contentType: a.contentType || "",
+      })),
   };
 }
 
@@ -117,6 +130,7 @@ async function main() {
   let requestType = args.requestType || "other";
   let brandMessage = args.message;
   let sourceSpecialRequestId = null;
+  let originalAttachments = [];
 
   if (args.fromEvent) {
     const fromEvent = await loadFromEvent(args.fromEvent);
@@ -125,6 +139,7 @@ async function main() {
     requestType = args.requestType || fromEvent.requestType;
     brandMessage = brandMessage || fromEvent.brandMessage;
     sourceSpecialRequestId = fromEvent.sourceSpecialRequestId;
+    originalAttachments = fromEvent.originalAttachments || [];
     console.log(
       `[resend] 复用事件 ${args.fromEvent}（原 specialRequestId: ${sourceSpecialRequestId || "无"}）`
     );
@@ -135,8 +150,18 @@ async function main() {
     throw new Error("缺少 campaignId / handle / brandMessage");
   }
 
+  // 没显式给 --attachment 时，直接复用原事件 payload 里的附件（重发同一条用）。
+  const rawAttachments = args.attachments.length
+    ? args.attachments
+    : originalAttachments.map((a) => `${a.storageKey}=${a.fileName}`);
+  if (!args.attachments.length && originalAttachments.length) {
+    console.log(
+      `[resend] 复用原事件的 ${originalAttachments.length} 个附件（无需再传 --attachment）`
+    );
+  }
+
   const attachments = [];
-  for (const raw of args.attachments) {
+  for (const raw of rawAttachments) {
     const parsed = parseAttachment(raw);
     if (!parsed) {
       throw new Error(`--attachment 格式应为 storageKey=fileName，收到：${raw}`);
@@ -150,13 +175,15 @@ async function main() {
     });
   }
 
-  // 附件文件必须先在本机 data/session-imports 里读得到，否则 worker 发信会失败。
+  // 附件文件必须先在本机 data/session-imports 里读得到。
+  // 注意：上传发生在 Web 机器，本脚本要在 Web 机器上跑；入队时会把附件内容写进
+  // tiktok_influencer_outbound_attachments，worker 从库里取，不再依赖同机文件。
   for (const att of attachments) {
     const buffer = readSessionImportFile(att.storageKey);
     if (!buffer?.length) {
       throw new Error(
         `附件「${att.fileName}」在本机读不到（storageKey=${att.storageKey}）。` +
-          "请确认该文件仍在 Web/worker 机器的 data/session-imports 下。"
+          "请在 Web 机器（C:\\maxinfluencer）上运行本脚本，并确认文件仍在 data/session-imports 下。"
       );
     }
     att.sizeBytes = buffer.length;

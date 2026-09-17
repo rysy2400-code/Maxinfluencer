@@ -29,6 +29,7 @@ import { getInfluencerHandoverMode } from "../lib/db/influencer-handover-dao.js"
 import { logDraftOutboundMessage } from "../lib/db/influencer-draft-dao.js";
 import {
   attachOutboundAttachmentsToConversationMessage,
+  getOutboundAttachmentById,
   insertOutboundAttachment,
 } from "../lib/db/influencer-outbound-attachments-dao.js";
 import { readSessionImportFile } from "../lib/influencer/session-import-storage.js";
@@ -602,11 +603,21 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
     const att = rawAttachments[idx] || {};
     const storageKey = String(att.storageKey || "").trim();
     const fileName = String(att.fileName || "").trim();
-    if (!storageKey || !fileName) continue;
-    const buffer = readSessionImportFile(storageKey);
+    const outboundAttachmentId = Number(att.outboundAttachmentId) || null;
+    if (!fileName || (!storageKey && !outboundAttachmentId)) continue;
+    // 附件内容优先从库里取：上传在 Web 机器，发信 worker 在另一台机器，
+    // 直接读本地 data/session-imports 会读不到（历史故障根源）。
+    let buffer = null;
+    if (outboundAttachmentId) {
+      const row = await getOutboundAttachmentById(outboundAttachmentId);
+      const content = row?.content;
+      if (Buffer.isBuffer(content)) buffer = content;
+      else if (content) buffer = Buffer.from(content);
+    }
+    if (!buffer?.length && storageKey) buffer = readSessionImportFile(storageKey);
     if (!buffer?.length) {
       throw new Error(
-        `ask_influencer_special_request 附件「${fileName}」不存在或读取失败（storageKey=${storageKey}）`
+        `ask_influencer_special_request 附件「${fileName}」不存在或读取失败（outboundAttachmentId=${outboundAttachmentId || "无"}，storageKey=${storageKey || "无"}）`
       );
     }
     const contentType = normalizeAttachmentContentType(fileName, att.contentType);
@@ -614,7 +625,16 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
       typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
         ? att.sizeBytes
         : buffer.length;
-    attachmentMetas.push({ fileName, storageKey, contentType, sizeBytes });
+    attachmentMetas.push({
+      fileName,
+      storageKey,
+      contentType,
+      sizeBytes,
+      ...(outboundAttachmentId ? { outboundAttachmentId } : {}),
+      ...(att.outboundDedupeKey
+        ? { outboundDedupeKey: String(att.outboundDedupeKey) }
+        : {}),
+    });
     nodemailerAttachments.push({ filename: fileName, contentType, content: buffer });
   }
   const attachmentNames = attachmentMetas.map((a) => a.fileName).filter(Boolean);
@@ -777,14 +797,21 @@ Please output ONLY the email body in ${outboundLanguageEn} (${outboundLanguage.l
   if (nodemailerAttachments.length) {
     for (let idx = 0; idx < attachmentMetas.length; idx++) {
       const a = attachmentMetas[idx];
-      const dedupeKey = `sr-att:${specialRequestId || eventRow.id}:${idx}`;
-      const attachmentId = await insertOutboundAttachment({
-        dedupeKey,
-        filename: a.fileName,
-        contentType: a.contentType,
-        sizeBytes: a.sizeBytes,
-        content: nodemailerAttachments[idx].content,
-      });
+      // 入队时（Web 侧）已经把附件写进 outbound_attachments 了，这里直接复用，
+      // 避免同一份文件存两遍；老事件没有这个键时再兜底插入。
+      const reusedDedupeKey = a.outboundDedupeKey || null;
+      const dedupeKey =
+        reusedDedupeKey || `sr-att:${specialRequestId || eventRow.id}:${idx}`;
+      let attachmentId = a.outboundAttachmentId || null;
+      if (!reusedDedupeKey) {
+        attachmentId = await insertOutboundAttachment({
+          dedupeKey,
+          filename: a.fileName,
+          contentType: a.contentType,
+          sizeBytes: a.sizeBytes,
+          content: nodemailerAttachments[idx].content,
+        });
+      }
       dedupeKeys.push(dedupeKey);
       a.attachmentId = attachmentId || null;
     }
