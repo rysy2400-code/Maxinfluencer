@@ -32,6 +32,7 @@ import {
   insertOutboundAttachment,
 } from "../lib/db/influencer-outbound-attachments-dao.js";
 import { readSessionImportFile } from "../lib/influencer/session-import-storage.js";
+import { normalizeAttachmentContentType } from "../lib/influencer/attachment-file-types.js";
 import { callDeepSeekLLM } from "../lib/utils/llm-client.js";
 import { influencerAgentBasePrompt } from "../lib/agents/influencer-agent-prompt.js";
 import {
@@ -593,7 +594,7 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
   const specialRequestStatus = payload.specialRequestStatus || "pending_creator";
   const brandMessage = payload.brandMessage || "";
 
-  // 解析随信 PDF 附件：storageKey 指向 data/session-imports（与 Web 同机，worker 可直接读取）
+  // 解析随信资料附件（PDF / Word / PPT / 图片）：storageKey 指向 data/session-imports（与 Web 同机，worker 可直接读取）
   const rawAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
   const attachmentMetas = [];
   const nodemailerAttachments = [];
@@ -608,7 +609,7 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
         `ask_influencer_special_request 附件「${fileName}」不存在或读取失败（storageKey=${storageKey}）`
       );
     }
-    const contentType = String(att.contentType || "").trim() || "application/pdf";
+    const contentType = normalizeAttachmentContentType(fileName, att.contentType);
     const sizeBytes =
       typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
         ? att.sizeBytes
@@ -688,7 +689,7 @@ ${influencerAgentBasePrompt}
 - specialRequestId 表示这一轮特殊请求会话的唯一 ID，你可以在心里当作标签，用于保持这轮沟通的一致性，但不需要在邮件里直接写出 ID。
 - 本轮对应的 campaignId 为 ${campaignId || "null"}；若 conversationHistory 涉及多个 campaign，你必须在正文中自然区分，避免混淆。
 - brandMessage 是品牌/执行侧给你的自然语言说明，你需要用自己的话把它转述给红人。
-- 随邮件附带的 PDF 资料：${attachmentNames.length ? attachmentNames.join("、") : "（无）"}。若有附件，正文必须自然提及（例如「请查收随附的 xxx.pdf」），并简要说明附件用途（按 brandMessage 提供的信息）；不要写「见附件」而没有文件名。
+- 随邮件附带的资料附件：${attachmentNames.length ? attachmentNames.join("、") : "（无）"}。若有附件，正文必须自然提及（例如「请查收随附的 xxx.pdf」「图片见附件」），并简要说明附件用途（按 brandMessage 提供的信息）；不要写「见附件」而没有文件名。
 - 语气：专业、友好、简洁，像一对一沟通，而不是群发模板。
 - 要清楚地告诉红人：品牌方希望他/她确认是否愿意按这个请求执行（例如改时间、改脚本、多加一条内容并增加预算等），并邀请红人表达自己的想法或修改意见。
 - 可以根据 conversationHistory 判断目前合作进展，适当提及之前的沟通，但不要重复上一封几乎一模一样的句子。

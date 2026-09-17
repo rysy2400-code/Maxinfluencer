@@ -9,21 +9,17 @@ import {
 } from "../../../../../lib/influencer/session-import-storage.js";
 import { resolveChatAttachmentBuffer } from "../../../../../lib/influencer/chat-attachment-resolver.js";
 import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
+import {
+  CHAT_UPLOAD_EXTENSIONS_LABEL,
+  contentTypeForFileName,
+  isChatUploadFileName,
+  isImageFileName,
+  isPdfFileName,
+  isVideoFileName,
+  maxBytesForFileName,
+} from "../../../../../lib/influencer/attachment-file-types.js";
 
 export const dynamic = "force-dynamic";
-
-const MAX_BYTES = 25 * 1024 * 1024;
-
-const SUPPORTED_EXTENSIONS = [".pdf", ".xlsx", ".xls", ".csv"];
-
-function isSupportedFileName(fileName) {
-  const lower = String(fileName || "").toLowerCase();
-  return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
-function isPdfFileName(fileName) {
-  return String(fileName || "").toLowerCase().endsWith(".pdf");
-}
 
 function looksLikePdf(buffer) {
   if (!buffer || buffer.length < 5) return false;
@@ -36,15 +32,35 @@ function looksLikePdf(buffer) {
   );
 }
 
-function contentTypeForFileName(fileName) {
-  const lower = String(fileName || "").toLowerCase();
-  if (lower.endsWith(".xlsx")) {
-    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  }
-  if (lower.endsWith(".xls")) return "application/vnd.ms-excel";
-  if (lower.endsWith(".csv")) return "text/csv; charset=utf-8";
-  if (lower.endsWith(".pdf")) return "application/pdf";
-  return "application/octet-stream";
+function looksLikePng(buffer) {
+  if (!buffer || buffer.length < 8) return false;
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  return sig.every((byte, i) => buffer[i] === byte);
+}
+
+function looksLikeJpeg(buffer) {
+  if (!buffer || buffer.length < 3) return false;
+  return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+}
+
+function extensionLower(fileName) {
+  const name = String(fileName || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot);
+}
+
+/** 图片按扩展名做一次魔数校验，避免改了后缀名的文件混进来。 */
+function looksLikeImage(buffer, fileName) {
+  const ext = extensionLower(fileName);
+  if (ext === ".png") return looksLikePng(buffer);
+  if (ext === ".jpg" || ext === ".jpeg") return looksLikeJpeg(buffer);
+  return true;
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return "0MB";
+  return `${Math.round(n / (1024 * 1024))}MB`;
 }
 
 function sanitizeDownloadFileName(name, fallback) {
@@ -141,15 +157,35 @@ export async function POST(req, { params }) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    if (buffer.length > MAX_BYTES) {
-      return NextResponse.json({ success: false, error: "文件过大（上限 15MB）" }, { status: 400 });
+    const fileName = String(file.name || "attachment.xlsx");
+
+    if (isVideoFileName(fileName)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "视频请改用链接方式：把视频上传到 YouTube / Google Drive / Dropbox 后，将链接粘贴在消息里发给红人。",
+        },
+        { status: 400 }
+      );
     }
 
-    const fileName = String(file.name || "attachment.xlsx");
-    const lower = fileName.toLowerCase();
-    if (!isSupportedFileName(fileName)) {
+    if (!isChatUploadFileName(fileName)) {
       return NextResponse.json(
-        { success: false, error: "仅支持 .pdf / .xlsx / .xls / .csv" },
+        { success: false, error: `仅支持 ${CHAT_UPLOAD_EXTENSIONS_LABEL}` },
+        { status: 400 }
+      );
+    }
+
+    const maxBytes = maxBytesForFileName(fileName);
+    if (buffer.length > maxBytes) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: isImageFileName(fileName)
+            ? `图片过大（单张上限 ${formatBytes(maxBytes)}）`
+            : `文件过大（上限 ${formatBytes(maxBytes)}）`,
+        },
         { status: 400 }
       );
     }
@@ -157,6 +193,13 @@ export async function POST(req, { params }) {
     if (isPdfFileName(fileName) && !looksLikePdf(buffer)) {
       return NextResponse.json(
         { success: false, error: "PDF 文件内容校验失败，请确认文件未损坏" },
+        { status: 400 }
+      );
+    }
+
+    if (isImageFileName(fileName) && !looksLikeImage(buffer, fileName)) {
+      return NextResponse.json(
+        { success: false, error: "图片文件内容校验失败，请确认文件未损坏" },
         { status: 400 }
       );
     }

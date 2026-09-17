@@ -18,8 +18,17 @@ import { ChatPaperclipIcon } from "./chat-paperclip-icon";
 import { ChatAttachmentCard } from "./chat-attachment-card";
 import {
   chatAttachmentDownloadHref,
+  formatFileSize,
   isAttachmentOnlyUserMessage,
 } from "./chat-file-utils";
+import {
+  CHAT_UPLOAD_EXTENSIONS_LABEL,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  isChatUploadFileName,
+  isImageFileName,
+  isVideoFileName,
+  maxBytesForFileName,
+} from "../lib/influencer/attachment-file-types.js";
 import {
   inboundAttachmentDownloadUrl,
   inboundAttachmentPreviewUrl,
@@ -6168,8 +6177,27 @@ export default function HomePage() {
     }
   }
 
-  async function uploadChatAttachmentFile(file) {
-    if (!file) return;
+  /** 上传前校验单个文件（类型 / 体积），返回错误文案或 null。 */
+  function validateChatAttachmentFile(file) {
+    const name = String(file?.name || "");
+    if (isVideoFileName(name)) {
+      return `${name}：视频请改用链接方式发送——先上传到 YouTube / Google Drive / Dropbox，再把链接粘贴到消息里。`;
+    }
+    if (!isChatUploadFileName(name)) {
+      return `${name}：仅支持 ${CHAT_UPLOAD_EXTENSIONS_LABEL}`;
+    }
+    const maxBytes = maxBytesForFileName(name);
+    if (typeof file.size === "number" && file.size > maxBytes) {
+      const label = isImageFileName(name) ? "图片" : "文件";
+      return `${name}：${label}超过 ${formatFileSize(maxBytes)} 上限`;
+    }
+    return null;
+  }
+
+  /** 批量上传聊天附件：单封最多 MAX_ATTACHMENTS_PER_MESSAGE 个，部分失败不影响已成功的。 */
+  async function uploadChatAttachmentFiles(rawFiles) {
+    const files = Array.from(rawFiles || []).filter(Boolean);
+    if (!files.length) return;
     if (!authUser) {
       setLoginOpen(true);
       return;
@@ -6178,48 +6206,69 @@ export default function HomePage() {
       window.alert("请在 Campaign 执行阶段上传附件。");
       return;
     }
-    const lower = String(file.name || "").toLowerCase();
-    if (
-      !lower.endsWith(".pdf") &&
-      !lower.endsWith(".xlsx") &&
-      !lower.endsWith(".xls") &&
-      !lower.endsWith(".csv")
-    ) {
-      window.alert("仅支持 .pdf / .xlsx / .xls / .csv");
+
+    const slots = MAX_ATTACHMENTS_PER_MESSAGE - pendingChatAttachments.length;
+    if (slots <= 0) {
+      window.alert(`单封消息最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件。`);
       return;
     }
-    setImportListUploading(true);
-    try {
-      const fd = new FormData();
-      fd.set("file", file);
-      const res = await fetch(
-        `/api/sessions/${encodeURIComponent(currentSessionId)}/chat-attachments`,
-        { method: "POST", body: fd, credentials: "include" }
-      );
-      const data = await res.json();
-      if (!data?.success) {
-        throw new Error(data?.error || "上传失败");
+
+    const accepted = [];
+    const rejected = [];
+    for (const file of files) {
+      const invalidReason = validateChatAttachmentFile(file);
+      if (invalidReason) {
+        rejected.push(invalidReason);
+        continue;
       }
-      setPendingChatAttachments((prev) => [
-        ...prev,
-        {
+      if (accepted.length >= slots) {
+        rejected.push(
+          `${file.name}：单封最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件，已超出`
+        );
+        continue;
+      }
+      accepted.push(file);
+    }
+    if (rejected.length) window.alert(rejected.join("\n"));
+    if (!accepted.length) return;
+
+    setImportListUploading(true);
+    const uploaded = [];
+    try {
+      for (const file of accepted) {
+        const fd = new FormData();
+        fd.set("file", file);
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(currentSessionId)}/chat-attachments`,
+          { method: "POST", body: fd, credentials: "include" }
+        );
+        const data = await res.json();
+        if (!data?.success) {
+          throw new Error(`${file.name}：${data?.error || "上传失败"}`);
+        }
+        uploaded.push({
           type: "chat_attachment",
           name: data.fileName || file.name,
           storageKey: data.storageKey,
           sizeBytes: file.size ?? data.sizeBytes,
-        },
-      ]);
+        });
+      }
     } catch (err) {
       window.alert(err?.message || String(err));
     } finally {
+      if (uploaded.length) {
+        setPendingChatAttachments((prev) =>
+          [...prev, ...uploaded].slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
+        );
+      }
       setImportListUploading(false);
     }
   }
 
   async function handleInfluencerListFileChange(e) {
-    const file = e.target.files?.[0];
+    const files = e.target.files;
     e.target.value = "";
-    await uploadChatAttachmentFile(file);
+    await uploadChatAttachmentFiles(files);
   }
 
   function handleChatComposerDragOver(e) {
@@ -6230,8 +6279,7 @@ export default function HomePage() {
   async function handleChatComposerDrop(e) {
     e.preventDefault();
     e.stopPropagation();
-    const file = e.dataTransfer?.files?.[0];
-    await uploadChatAttachmentFile(file);
+    await uploadChatAttachmentFiles(e.dataTransfer?.files);
   }
 
   async function runChatSend(trimmedContent, attachments) {
@@ -9264,6 +9312,10 @@ export default function HomePage() {
                           key={`${att.storageKey}-${idx}`}
                           attachment={att}
                           variant="composer"
+                          downloadHref={chatAttachmentDownloadHref(
+                            currentSessionId,
+                            att
+                          )}
                           onRemove={() =>
                             setPendingChatAttachments((prev) =>
                               prev.filter((_, i) => i !== idx)
@@ -9297,7 +9349,11 @@ export default function HomePage() {
                           <input
                             ref={importListFileInputRef}
                             type="file"
-                            accept=".pdf,.xlsx,.xls,.csv"
+                            multiple
+                            accept={CHAT_UPLOAD_EXTENSIONS_LABEL.replace(
+                              /\s*\/\s*/g,
+                              ","
+                            )}
                             style={{ display: "none" }}
                             onChange={handleInfluencerListFileChange}
                           />
@@ -9306,7 +9362,7 @@ export default function HomePage() {
                             className="bin-chat-composer__icon-btn"
                             disabled={importListUploading || loading}
                             onClick={() => importListFileInputRef.current?.click()}
-                            title="上传附件（PDF/Excel/CSV）"
+                            title={`上传附件（${CHAT_UPLOAD_EXTENSIONS_LABEL}，最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个；视频请发链接）`}
                             aria-label="上传附件"
                           >
                             {importListUploading ? (

@@ -189,6 +189,129 @@ async function run() {
     ok("批量参数归一化（去重/默认类型/单红人兼容）");
   }
 
+  // 回归：单红人 + 顶层 attachments 曾被丢弃，导致「随信附上资料」却收不到附件。
+  console.log("【3e】normalizeAskSpecialRequestItems：单红人附件不丢失");
+  {
+    const pdf = {
+      fileName: "WorkBuddy·Brief（中英双语）.pdf",
+      storageKey: "sess-1/PENDING-1.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 1151526,
+    };
+    const docx = {
+      fileName: "合作说明.docx",
+      storageKey: "sess-1/PENDING-2.docx",
+      contentType: "",
+      sizeBytes: 2048,
+    };
+    const png = {
+      fileName: "参考图.png",
+      storageKey: "sess-1/PENDING-3.png",
+      contentType: "",
+      sizeBytes: 4096,
+    };
+
+    const single = normalizeAskSpecialRequestItems({
+      influencerId: "@devshree.17",
+      requestType: "other",
+      requestDetail: "询问达人这是我们的brief，是否感兴趣",
+      attachments: [pdf],
+    });
+    assert.equal(single.length, 1);
+    assert.equal(single[0].attachments.length, 1);
+    assert.equal(single[0].attachments[0].storageKey, "sess-1/PENDING-1.pdf");
+    ok("单红人顶层 attachments 保留");
+
+    // 多红人：requests 未带附件时回退顶层 attachments；带了则保留自己的。
+    const multi = normalizeAskSpecialRequestItems({
+      requests: [
+        { influencerId: "alice", requestType: "other", requestDetail: "A" },
+        { influencerId: "bob", requestType: "other", requestDetail: "B" },
+      ],
+      attachments: [pdf],
+    });
+    assert.equal(multi[0].attachments.length, 1);
+    assert.equal(multi[1].attachments.length, 1);
+
+    // MIME 按扩展名校正（浏览器常传空 type）。
+    const multiMixed = normalizeAskSpecialRequestItems({
+      influencerId: "carol",
+      requestType: "other",
+      requestDetail: "C",
+      attachments: [docx, png],
+    });
+    assert.equal(
+      multiMixed[0].attachments[0].contentType,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    assert.equal(multiMixed[0].attachments[1].contentType, "image/png");
+    ok("批量附件回退与 MIME 校正");
+
+    // 单封最多 5 个。
+    const many = normalizeAskSpecialRequestItems({
+      influencerId: "dave",
+      requestType: "other",
+      requestDetail: "D",
+      attachments: Array.from({ length: 8 }, (_, i) => ({
+        fileName: `f${i}.pdf`,
+        storageKey: `sess-1/PENDING-${i}.pdf`,
+      })),
+    });
+    assert.equal(many[0].attachments.length, 5);
+    ok("单封附件数量上限 5");
+  }
+
+  // 端到端（不触网）：上传资料附件 → 调度器兜底注入 → 归一化后仍在，可进事件 payload。
+  console.log("【3f】附件全链路：单红人发资料附件不丢");
+  {
+    const attachment = {
+      storageKey: "sess-1/PENDING-brief.pdf",
+      name: "WorkBuddy·Brief（中英双语）.pdf",
+      sizeBytes: 1151526,
+    };
+    const { decision } = await decideExecutionSchedulerTurn(
+      {
+        ...BASE_INPUT,
+        lastMessage: "@devshree.17 询问达人这是我们的brief，可以先看看",
+        messages: [
+          {
+            role: "user",
+            content: "@devshree.17 询问达人这是我们的brief，可以先看看",
+            attachments: [attachment],
+          },
+        ],
+        attachmentsForImport: [attachment],
+      },
+      {
+        // LLM 只给 params，漏了 attachments —— 由调度器兜底补全。
+        callLlm: stubLlm({
+          needTool: true,
+          toolName: "ask_influencer_special_request",
+          params: {
+            influencerId: "@devshree.17",
+            requestType: "other",
+            requestDetail: "询问达人这是我们的brief，可以先看看",
+          },
+        }),
+      }
+    );
+    assert.equal(decision.needTool, true);
+    assert.equal(decision.params.attachments?.length, 1);
+    assert.equal(
+      decision.params.attachments[0].storageKey,
+      "sess-1/PENDING-brief.pdf"
+    );
+
+    const items = normalizeAskSpecialRequestItems(decision.params);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].attachments.length, 1);
+    assert.equal(
+      items[0].attachments[0].fileName,
+      "WorkBuddy·Brief（中英双语）.pdf"
+    );
+    ok("调度器兜底注入 + 归一化保留附件");
+  }
+
   console.log("【3d】调度器流式调用：chunk 累积 + 进度回调");
   {
     const chunks = [
