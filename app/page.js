@@ -1139,10 +1139,12 @@ function ExecutionProgressPublishedVideos({ item }) {
 
   if (!videos.length) {
     return (
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-        <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>已发布视频</span>
-        <span style={{ flex: 1 }}>—</span>
-      </div>
+      <>
+        <div style={{ color: "#6B7280" }}>已发布视频</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+          <span style={{ color: "#6B7280" }}>—</span>
+        </div>
+      </>
     );
   }
 
@@ -1161,104 +1163,101 @@ function ExecutionProgressPublishedVideos({ item }) {
 
   return (
     <>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-        <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>
-          已发布视频
-        </span>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-          {ordered.map((entry, idx) => {
-            const meta =
-              PUBLISHED_PLATFORM_META[entry.platform] ||
-              {
-                label: entry.platform && entry.platform !== "unknown" ? entry.platform : "其他平台",
-                bg: "#F3F4F6",
-                fg: "#374151",
-                border: "#D1D5DB",
-              };
-            const metrics = entry.metrics || {};
-            const hasMetrics =
-              metrics.views != null ||
-              metrics.likes != null ||
-              metrics.comments != null;
-            const failed = !hasMetrics && entry.metricsError;
-            const updatedAt = formatPublishedUpdatedAt(metrics.updatedAt);
-            return (
+      <div style={{ color: "#6B7280" }}>已发布视频</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+        {ordered.map((entry, idx) => {
+          const meta =
+            PUBLISHED_PLATFORM_META[entry.platform] ||
+            {
+              label: entry.platform && entry.platform !== "unknown" ? entry.platform : "其他平台",
+              bg: "#F3F4F6",
+              fg: "#374151",
+              border: "#D1D5DB",
+            };
+          const metrics = entry.metrics || {};
+          const hasMetrics =
+            metrics.views != null ||
+            metrics.likes != null ||
+            metrics.comments != null;
+          const failed = !hasMetrics && entry.metricsError;
+          const updatedAt = formatPublishedUpdatedAt(metrics.updatedAt);
+          return (
+            <div
+              key={`${entry.platform}-${entry.url || idx}`}
+              style={{
+                border: "1px solid #EEF0F3",
+                borderRadius: 8,
+                backgroundColor: "#FAFAFB",
+                padding: "7px 9px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 3,
+                minWidth: 0,
+              }}
+            >
               <div
-                key={`${entry.platform}-${entry.url || idx}`}
                 style={{
-                  border: "1px solid #EEF0F3",
-                  borderRadius: 8,
-                  backgroundColor: "#FAFAFB",
-                  padding: "7px 9px",
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 3,
+                  gap: 6,
+                  alignItems: "baseline",
+                  minWidth: 0,
                 }}
               >
-                <div
+                <span
                   style={{
-                    display: "flex",
-                    gap: 6,
-                    alignItems: "center",
-                    minWidth: 0,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "1px 6px",
+                    borderRadius: 999,
+                    backgroundColor: meta.bg,
+                    color: meta.fg,
+                    border: `1px solid ${meta.border}`,
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
                   }}
                 >
-                  <span
+                  {meta.label}
+                </span>
+                {entry.url ? (
+                  <a
+                    href={entry.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={entry.url}
                     style={{
-                      fontSize: 10,
-                      fontWeight: 600,
-                      padding: "1px 6px",
-                      borderRadius: 999,
-                      backgroundColor: meta.bg,
-                      color: meta.fg,
-                      border: `1px solid ${meta.border}`,
-                      whiteSpace: "nowrap",
-                      flexShrink: 0,
+                      color: "#4F46E5",
+                      flex: "1 1 0",
+                      minWidth: 0,
+                      wordBreak: "break-all",
+                      overflowWrap: "anywhere",
+                      lineHeight: 1.45,
+                      textDecoration: "none",
                     }}
                   >
-                    {meta.label}
-                  </span>
-                  {entry.url ? (
-                    <a
-                      href={entry.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={entry.url}
-                      style={{
-                        color: "#4F46E5",
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        textDecoration: "none",
-                      }}
-                    >
-                      {entry.url}
-                    </a>
-                  ) : (
-                    <span style={{ flex: 1, color: "#6B7280" }}>—</span>
-                  )}
-                </div>
-                <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
-                  投流码: {entry.promoCode || "—"}
-                </div>
-                <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
-                  {failed ? (
-                    <>播放 — · 赞 — · 评 — · 数据抓取失败（将重试）</>
-                  ) : (
-                    <>
-                      播放 {formatInfluencerStat(metrics.viewsDisplay ?? metrics.views)}
-                      {" · "}赞 {formatInfluencerStat(metrics.likesDisplay ?? metrics.likes)}
-                      {" · "}评 {formatInfluencerStat(metrics.commentsDisplay ?? metrics.comments)}
-                      {updatedAt ? ` · ${updatedAt} 更新` : ""}
-                    </>
-                  )}
-                </div>
+                    {entry.url}
+                  </a>
+                ) : (
+                  <span style={{ flex: "1 1 0", minWidth: 0, color: "#6B7280" }}>—</span>
+                )}
               </div>
-            );
-          })}
-        </div>
+              <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
+                投流码: {entry.promoCode || "—"}
+              </div>
+              <div style={{ color: "#6B7280", lineHeight: 1.5 }}>
+                {failed ? (
+                  <>播放 — · 赞 — · 评 — · 数据抓取失败（将重试）</>
+                ) : (
+                  <>
+                    播放 {formatInfluencerStat(metrics.viewsDisplay ?? metrics.views)}
+                    {" · "}赞 {formatInfluencerStat(metrics.likesDisplay ?? metrics.likes)}
+                    {" · "}评 {formatInfluencerStat(metrics.commentsDisplay ?? metrics.comments)}
+                    {updatedAt ? ` · ${updatedAt} 更新` : ""}
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合计 CPM</span>
