@@ -1,5 +1,21 @@
 /** 聊天附件展示：扩展名与大小格式化 */
 
+/**
+ * 把 input[type=file].files / DataTransfer.files 快照成普通数组。
+ *
+ * 必须快照后再清空 input.value：`input.files` 是实时列表，一旦清空输入框，
+ * 之前拿到的引用也会变空，导致「选完文件没反应」——不报错、不提示、也不上传。
+ * 返回的是独立副本，之后源列表怎么变都不受影响。
+ *
+ * @param {FileList|File[]|null|undefined} fileList
+ * @returns {File[]}
+ */
+export function snapshotPickedFiles(fileList) {
+  if (Array.isArray(fileList)) return fileList.filter(Boolean);
+  if (!fileList) return [];
+  return Array.from(fileList).filter(Boolean);
+}
+
 export function getFileExtensionLabel(fileName) {
   const name = String(fileName || "").trim();
   const dot = name.lastIndexOf(".");

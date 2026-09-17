@@ -20,6 +20,7 @@ import {
   chatAttachmentDownloadHref,
   formatFileSize,
   isAttachmentOnlyUserMessage,
+  snapshotPickedFiles,
 } from "./chat-file-utils";
 import {
   CHAT_UPLOAD_EXTENSIONS_LABEL,
@@ -6207,7 +6208,9 @@ export default function HomePage() {
 
   /** 批量上传聊天附件：单封最多 MAX_ATTACHMENTS_PER_MESSAGE 个，部分失败不影响已成功的。 */
   async function uploadChatAttachmentFiles(rawFiles) {
-    const files = Array.from(rawFiles || []).filter(Boolean);
+    // 必须先快照成普通数组：input.files / dataTransfer.files 是实时列表，
+    // 调用方一旦清空 input.value 就会把它一起清空（历史 bug：选完文件没反应）。
+    const files = snapshotPickedFiles(rawFiles);
     if (!files.length) return;
     if (!authUser) {
       setLoginOpen(true);
@@ -6277,7 +6280,8 @@ export default function HomePage() {
   }
 
   async function handleInfluencerListFileChange(e) {
-    const files = e.target.files;
+    // 先取数组再清空 input，否则清空会同时清掉这份实时 FileList
+    const files = snapshotPickedFiles(e.target.files);
     e.target.value = "";
     await uploadChatAttachmentFiles(files);
   }
@@ -6290,7 +6294,8 @@ export default function HomePage() {
   async function handleChatComposerDrop(e) {
     e.preventDefault();
     e.stopPropagation();
-    await uploadChatAttachmentFiles(e.dataTransfer?.files);
+    const files = snapshotPickedFiles(e.dataTransfer?.files);
+    await uploadChatAttachmentFiles(files);
   }
 
   async function runChatSend(trimmedContent, attachments) {
