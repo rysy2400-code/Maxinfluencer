@@ -15,7 +15,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
-import { getInfluencerById } from "../lib/db/influencer-dao.js";
+import {
+  getInfluencerById,
+  getInfluencerByHandle,
+} from "../lib/db/influencer-dao.js";
 import { getCampaignById, getExecutionRow } from "../lib/db/campaign-dao.js";
 import {
   sendOutreach,
@@ -317,6 +320,80 @@ async function resolvePlatformInfluencerIdForAgentEvent(campaignId, eventRow, pa
     );
   }
   return null;
+}
+
+/**
+ * 解析事件对应的主档身份，三级回退：influencer_id → (platform, handle) → handle。
+ *
+ * 背景：历史脏数据里 execution.influencer_id 与主档 influencer_id 可能不一致
+ * （跨平台同 handle 曾被旧唯一键覆盖合并）。广告主触发类事件（同意报价/合同/
+ * 特殊请求）此前直接 getInfluencerById，命中不到就永久 failed；这里统一回退，
+ * 并把最终身份返回给调用方，保证对话、线程、发信都挂在同一 identity 上。
+ */
+async function resolveInfluencerForAgentEvent({
+  campaignId,
+  eventRow,
+  payload,
+  platformInfluencerId = null,
+}) {
+  const pid =
+    platformInfluencerId != null ? String(platformInfluencerId).trim() : "";
+  if (pid) {
+    const byId = await getInfluencerById(pid);
+    if (byId) return { influencer: byId, influencerId: pid, matchedBy: "id" };
+  }
+
+  const handle = String(
+    payload?.tiktokUsername ||
+      payload?.influencerHandle ||
+      payload?.influencerId ||
+      ""
+  )
+    .replace(/^@/, "")
+    .trim();
+  if (!handle) {
+    return { influencer: null, influencerId: pid || null, matchedBy: null };
+  }
+
+  // 执行行的 platform 是最可靠的平台线索；优先按 (platform, handle) 命中，
+  // 避免同 handle 跨平台时随机拿到另一个平台的主档。
+  let platformHint = null;
+  if (campaignId) {
+    const rows = await queryTikTok(
+      `SELECT platform
+       FROM tiktok_campaign_execution
+       WHERE campaign_id = ? AND tiktok_username = ?
+       LIMIT 1`,
+      [campaignId, handle]
+    );
+    platformHint = rows?.[0]?.platform
+      ? String(rows[0].platform).trim().toLowerCase()
+      : null;
+  }
+  if (platformHint) {
+    const byPlatformHandle = await getInfluencerByHandle({
+      platform: platformHint,
+      username: handle,
+    });
+    if (byPlatformHandle) {
+      return {
+        influencer: byPlatformHandle,
+        influencerId: String(byPlatformHandle.influencerId),
+        matchedBy: "platform_handle",
+      };
+    }
+  }
+
+  const byHandle = await getInfluencerByHandle({ username: handle });
+  if (byHandle) {
+    return {
+      influencer: byHandle,
+      influencerId: String(byHandle.influencerId),
+      matchedBy: "handle",
+    };
+  }
+
+  return { influencer: null, influencerId: pid || null, matchedBy: null };
 }
 
 async function markInfluencerAgentEventStatus(
@@ -655,7 +732,7 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
   }
   const attachmentNames = attachmentMetas.map((a) => a.fileName).filter(Boolean);
 
-  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+  let platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
     campaignId,
     eventRow,
     payload
@@ -666,11 +743,26 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
     );
   }
 
-  const influencer = await getInfluencerById(platformInfluencerId);
+  const resolvedIdentity = await resolveInfluencerForAgentEvent({
+    campaignId,
+    eventRow,
+    payload,
+    platformInfluencerId,
+  });
+  const influencer = resolvedIdentity.influencer;
   if (!influencer) {
     throw new Error(
       `ask_influencer_special_request 主档不存在红人 influencer_id=${platformInfluencerId}`
     );
+  }
+  if (
+    resolvedIdentity.influencerId &&
+    resolvedIdentity.influencerId !== platformInfluencerId
+  ) {
+    console.warn(
+      `[ProcessInfluencerAgentEvents] ask_influencer_special_request 身份回退（${resolvedIdentity.matchedBy}）：${platformInfluencerId} -> ${resolvedIdentity.influencerId}`
+    );
+    platformInfluencerId = resolvedIdentity.influencerId;
   }
 
   const toEmail =
@@ -932,7 +1024,7 @@ async function handleSendContractEmail(eventRow, payload) {
     .replace(/^@/, "")
     .trim();
 
-  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+  let platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
     campaignId,
     eventRow,
     payload
@@ -943,11 +1035,26 @@ async function handleSendContractEmail(eventRow, payload) {
     );
   }
 
-  const influencer = await getInfluencerById(platformInfluencerId);
+  const resolvedIdentity = await resolveInfluencerForAgentEvent({
+    campaignId,
+    eventRow,
+    payload,
+    platformInfluencerId,
+  });
+  const influencer = resolvedIdentity.influencer;
   if (!influencer) {
     throw new Error(
       `send_contract_email 主档不存在红人 influencer_id=${platformInfluencerId}`
     );
+  }
+  if (
+    resolvedIdentity.influencerId &&
+    resolvedIdentity.influencerId !== platformInfluencerId
+  ) {
+    console.warn(
+      `[ProcessInfluencerAgentEvents] send_contract_email 身份回退（${resolvedIdentity.matchedBy}）：${platformInfluencerId} -> ${resolvedIdentity.influencerId}`
+    );
+    platformInfluencerId = resolvedIdentity.influencerId;
   }
 
   const toEmail =
@@ -1180,7 +1287,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     throw new Error("advertiser_execution_followup 缺少 action");
   }
 
-  const platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
+  let platformInfluencerId = await resolvePlatformInfluencerIdForAgentEvent(
     campaignId,
     eventRow,
     payload
@@ -1191,11 +1298,26 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     );
   }
 
-  const influencer = await getInfluencerById(platformInfluencerId);
+  const resolvedIdentity = await resolveInfluencerForAgentEvent({
+    campaignId,
+    eventRow,
+    payload,
+    platformInfluencerId,
+  });
+  const influencer = resolvedIdentity.influencer;
   if (!influencer) {
     throw new Error(
       `advertiser_execution_followup 主档不存在红人 influencer_id=${platformInfluencerId}`
     );
+  }
+  if (
+    resolvedIdentity.influencerId &&
+    resolvedIdentity.influencerId !== platformInfluencerId
+  ) {
+    console.warn(
+      `[ProcessInfluencerAgentEvents] advertiser_execution_followup 身份回退（${resolvedIdentity.matchedBy}）：${platformInfluencerId} -> ${resolvedIdentity.influencerId}`
+    );
+    platformInfluencerId = resolvedIdentity.influencerId;
   }
 
   const toEmail =
