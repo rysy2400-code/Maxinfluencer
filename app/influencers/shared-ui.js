@@ -14,12 +14,18 @@ export function formatInfluencerInitials(inf) {
   return (source || "?").slice(0, 2).toUpperCase();
 }
 
+/** 前端时间统一按北京时间展示（Asia/Shanghai），与访问者浏览器时区无关 */
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
+
 export function formatTime(v) {
   if (!v) return "";
   try {
     const d = new Date(v);
     if (Number.isNaN(d.getTime())) return String(v);
-    return d.toLocaleString();
+    return d.toLocaleString("zh-CN", {
+      timeZone: BEIJING_TIME_ZONE,
+      hour12: false,
+    });
   } catch {
     return String(v);
   }

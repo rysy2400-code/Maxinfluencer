@@ -53,7 +53,7 @@ function formatTime(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "-"
-    : date.toLocaleString("zh-CN", { hour12: false });
+    : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
 }
 
 function shortSha(value) {

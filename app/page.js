@@ -713,31 +713,60 @@ const UNREAD_POLL_MS = 60_000;
 /** 微信式灰条：相邻有时间的消息间隔 ≥5 分钟或跨自然日 */
 const CHAT_TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
+/** 时间统一按北京时间（Asia/Shanghai）展示：与访问者浏览器/服务器时区无关 */
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
+
+/** 北京时间的自然日键（YYYY-MM-DD），用于跨时区判断同日与「今天/昨天」 */
+function beijingDateKey(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: BEIJING_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** 北京时间的年月日与时:分，供消息分隔条/工作笔记使用 */
+function beijingDateParts(date) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: BEIJING_TIME_ZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour") === "24" ? "00" : get("hour"),
+    minute: get("minute"),
+  };
+}
+
 function isSameCalendarDay(a, b) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
+  return beijingDateKey(a) === beijingDateKey(b);
 }
 
 function formatChatSeparatorTime(date) {
   const now = new Date();
   const d = date instanceof Date ? date : new Date(date);
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  const timeStr = `${hours}:${minutes}`;
+  const p = beijingDateParts(d);
+  const timeStr = `${p.hour}:${p.minute}`;
 
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const targetStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const diffDays = Math.round((todayStart - targetStart) / 86400000);
+  const diffDays = Math.round(
+    (Date.parse(beijingDateKey(now)) - Date.parse(beijingDateKey(d))) / 86400000
+  );
 
   if (diffDays === 0) return `今天 ${timeStr}`;
   if (diffDays === 1) return `昨天 ${timeStr}`;
-  if (d.getFullYear() === now.getFullYear()) {
-    return `${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+  if (p.year === beijingDateParts(now).year) {
+    return `${Number(p.month)}月${Number(p.day)}日 ${timeStr}`;
   }
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+  return `${p.year}年${Number(p.month)}月${Number(p.day)}日 ${timeStr}`;
 }
 
 function shouldShowChatTimeSeparator(prevTime, nextTime) {
@@ -880,21 +909,22 @@ function formatWorkNoteDateTime(isoTime) {
   const d = new Date(isoTime);
   if (Number.isNaN(d.getTime())) return "—";
   const now = new Date();
-  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
-  const diffDays = Math.floor(
-    (dayStart(now).getTime() - dayStart(d).getTime()) / 86400000
+  const diffDays = Math.round(
+    (Date.parse(beijingDateKey(now)) - Date.parse(beijingDateKey(d))) / 86400000
   );
   let dayPart;
   if (diffDays === 0) dayPart = "今天";
   else if (diffDays === 1) dayPart = "昨天";
   else {
     dayPart = d.toLocaleDateString("zh-CN", {
+      timeZone: BEIJING_TIME_ZONE,
       year: "numeric",
       month: "numeric",
       day: "numeric",
     });
   }
   const timePart = d.toLocaleTimeString("zh-CN", {
+    timeZone: BEIJING_TIME_ZONE,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -1108,6 +1138,7 @@ function formatPublishedUpdatedAt(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleString("zh-CN", {
+    timeZone: BEIJING_TIME_ZONE,
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -2495,6 +2526,7 @@ function ExecutionProgressRow({
           <div style={{ fontSize: 11, color: "#6B7280" }}>
             分析时间{" "}
             {new Date(item.analyzedAt).toLocaleString("zh-CN", {
+              timeZone: BEIJING_TIME_ZONE,
               year: "numeric",
               month: "2-digit",
               day: "2-digit",
@@ -2746,6 +2778,7 @@ function ExecutionProgressRow({
         <div style={{ fontSize: 11, color: "#6B7280" }}>
           进入执行{" "}
           {new Date(item.executionCreatedAt).toLocaleString("zh-CN", {
+            timeZone: BEIJING_TIME_ZONE,
             year: "numeric",
             month: "2-digit",
             day: "2-digit",
@@ -8718,6 +8751,7 @@ export default function HomePage() {
                                 >
                             {session.updatedAt 
                                     ? new Date(session.updatedAt).toLocaleString("zh-CN", {
+                                        timeZone: BEIJING_TIME_ZONE,
                                         month: "short",
                                         day: "numeric",
                                         hour: "2-digit",
@@ -8942,6 +8976,7 @@ export default function HomePage() {
                             }}
                           >
                             {new Date(session.updatedAt).toLocaleString("zh-CN", {
+                              timeZone: BEIJING_TIME_ZONE,
                               month: "short",
                               day: "numeric",
                               hour: "2-digit",

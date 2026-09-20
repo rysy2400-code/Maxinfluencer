@@ -25,10 +25,14 @@ function money(value) {
   return `$${(Number(value) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function todayLocal() {
-  const now = new Date();
-  const shifted = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  return shifted.toISOString().slice(0, 10);
+/** 默认到账日期按北京时间（Asia/Shanghai）取当天 */
+function todayBeijing() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 export default function AdminAccountPanel({ open, initialTab = "create", onClose, onAccountCreated, onBalanceChanged }) {
@@ -124,7 +128,7 @@ function CompanySelect({ companies, query, onQuery, selectedId, onSelect, loadin
 }
 
 function TopUp({ companies, companyQuery, onCompanyQuery, loading, onCompleted }) {
-  const [form, setForm] = useState({ advertiserId: "", amountUsd: "", receivedAt: todayLocal(), bankReference: "", noBankReference: false, note: "" });
+  const [form, setForm] = useState({ advertiserId: "", amountUsd: "", receivedAt: todayBeijing(), bankReference: "", noBankReference: false, note: "" });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
   const selected = companies.find((c) => String(c.advertiserId) === String(form.advertiserId));

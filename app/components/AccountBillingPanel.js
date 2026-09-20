@@ -22,7 +22,10 @@ function fmtUsd(n) {
 function fmtDate(v) {
   if (!v) return "—";
   try {
-    return new Date(v).toLocaleString("zh-CN", { hour12: false });
+    return new Date(v).toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      hour12: false,
+    });
   } catch {
     return String(v);
   }
