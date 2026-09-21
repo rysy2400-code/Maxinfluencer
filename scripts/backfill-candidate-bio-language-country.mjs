@@ -63,7 +63,7 @@ async function fillLanguageTable() {
            COUNT(DISTINCT c.influencer_id) AS distinct_ids
     FROM tiktok_campaign_influencer_candidates c
     LEFT JOIN TikTok_influencer i ON i.influencer_id = c.influencer_id
-    LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id
+    LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
     WHERE ${PLATFORM_SQL}
       AND c.influencer_id IS NOT NULL AND c.influencer_id <> ''
       AND l.bio_language IS NULL
@@ -117,7 +117,7 @@ async function fillLanguageTable() {
              COALESCE(NULLIF(i.bio, ''), JSON_UNQUOTE(JSON_EXTRACT(c.influencer_snapshot, '$.bio'))) AS bio
       FROM tiktok_campaign_influencer_candidates c
       LEFT JOIN TikTok_influencer i ON i.influencer_id = c.influencer_id
-      LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id
+      LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
       WHERE c.id > ? AND ${PLATFORM_SQL}
         AND c.influencer_id IS NOT NULL AND c.influencer_id <> ''
         AND l.bio_language IS NULL
@@ -226,7 +226,7 @@ async function backfillSnapshot() {
         const res = await queryTikTok(
           `
           UPDATE tiktok_campaign_influencer_candidates c
-          JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id
+          JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
           SET c.influencer_snapshot = JSON_SET(c.influencer_snapshot,
                 '$.bioLanguage', l.bio_language,
                 '$.bioLanguageConfidence', l.bio_language_confidence,
@@ -243,7 +243,7 @@ async function backfillSnapshot() {
           `
           SELECT COUNT(*) AS n
           FROM tiktok_campaign_influencer_candidates c
-          JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id
+          JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
           WHERE c.id > ? AND c.id <= ? AND ${PLATFORM_SQL}
             AND JSON_CONTAINS_PATH(c.influencer_snapshot,'one','$.bioLanguage') = 0
             AND l.bio_language IS NOT NULL AND l.bio_language <> ''
