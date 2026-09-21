@@ -45,6 +45,10 @@ import {
 } from "../lib/influencer/infer-bio-language.js";
 import { languageDisplayName } from "../lib/influencer/country-primary-language.js";
 import { getInfluencerLanguage } from "../lib/influencer/influencer-language-store.js";
+import {
+  buildReplyLanguageRule,
+  buildReplyLanguageTail,
+} from "../lib/influencer/reply-language-prompt.js";
 import { generateAdvertiserExecutionFollowupEmailBody } from "../lib/agents/advertiser-execution-followup-email.js";
 import {
   SHIPPING_MENTION_ACTIONS,
@@ -813,7 +817,13 @@ ${influencerAgentBasePrompt}
 
 【当前任务：向红人转达品牌的「特殊请求」，并询问红人是否接受】
 - 你现在要给指定红人写一封邮件，内容是转达品牌方/执行侧的一个「特殊请求」。
-- **发信语言（必须）**：用${outboundLanguageZh}（${outboundLanguageEn}）写正文；这是该红人的沟通语言（来源：${outboundLanguage.source === "reply" ? "红人最近一次回复语言" : outboundLanguage.source === "bio" ? "红人主页简介语言" : "默认英语"}）。品牌名、产品名、链接、文件名保留原文。
+${buildReplyLanguageRule({
+  language: outboundLanguage.language,
+  languageName: outboundLanguageZh,
+  languageEn: outboundLanguageEn,
+  source: outboundLanguage.source,
+  label: "邮件正文",
+})}
 - specialRequestId 表示这一轮特殊请求会话的唯一 ID，你可以在心里当作标签，用于保持这轮沟通的一致性，但不需要在邮件里直接写出 ID。
 - 本轮对应的 campaignId 为 ${campaignId || "null"}；若 conversationHistory 涉及多个 campaign，你必须在正文中自然区分，避免混淆。
 - brandMessage 是品牌/执行侧给你的自然语言说明，你需要用自己的话把它转述给红人。
@@ -821,7 +831,7 @@ ${influencerAgentBasePrompt}
 - 语气：专业、友好、简洁，像一对一沟通，而不是群发模板。
 - 要清楚地告诉红人：品牌方希望他/她确认是否愿意按这个请求执行（例如改时间、改脚本、多加一条内容并增加预算等），并邀请红人表达自己的想法或修改意见。
 - 可以根据 conversationHistory 判断目前合作进展，适当提及之前的沟通，但不要重复上一封几乎一模一样的句子。
-- 只输出${outboundLanguageEn}邮件正文（纯文本，不要 markdown，不要 JSON，不要额外解释）。`;
+- ${buildReplyLanguageTail({ languageEn: outboundLanguageEn, label: "email body" })}`;
 
   const payloadForLLM = {
     influencer: {
@@ -849,7 +859,8 @@ Below is the context for a special request that the brand wants to discuss with 
 JSON input:
 ${JSON.stringify(payloadForLLM, null, 2)}
 
-Please output ONLY the email body in ${outboundLanguageEn} (${outboundLanguage.language}), plain text, no JSON, no extra commentary.`;
+${buildReplyLanguageTail({ languageEn: outboundLanguageEn, label: "email body" })}
+No JSON, no extra commentary.`;
 
   const raw = await callDeepSeekLLM(
     [{ role: "user", content: userContent }],
@@ -1391,6 +1402,7 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     conversationHistory,
     outboundLanguage: followupLanguage.language,
     outboundLanguageName: languageDisplayName(followupLanguage.language),
+    outboundLanguageSource: followupLanguage.source || null,
     influencer,
   });
 
