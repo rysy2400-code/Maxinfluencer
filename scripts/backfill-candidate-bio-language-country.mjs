@@ -18,6 +18,7 @@
  *   node --experimental-default-type=module scripts/backfill-candidate-bio-language-country.mjs --apply
  * 可选参数：
  *   --platform=tiktok|all   默认 tiktok
+ *   --platforms=a,b,c       指定平台集合（与 --platform 二选一，优先级更高）
  *   --batch=5000            每批处理行数
  *   --sleep=150             每批之间休眠毫秒数（降压）
  *   --limit=N               最多处理 N 行（调试用，0=不限）
@@ -32,17 +33,27 @@ const argOf = (name, dflt) => {
   const hit = args.find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.split("=").slice(1).join("=") : dflt;
 };
-const PLATFORM = String(argOf("platform", "tiktok")).toLowerCase();
+const PLATFORM_LIST = String(argOf("platforms", ""))
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const PLATFORM = PLATFORM_LIST.length
+  ? PLATFORM_LIST.join(",")
+  : String(argOf("platform", "tiktok")).toLowerCase();
 const BATCH = Math.max(100, Number(argOf("batch", 5000)) || 5000);
 const SLEEP = Math.max(0, Number(argOf("sleep", 150)) || 0);
 const LIMIT = Math.max(0, Number(argOf("limit", 0)) || 0);
 const ONLY = String(argOf("only", "")).toUpperCase();
 const want = (seg) => !ONLY || ONLY.includes(seg);
 
+const PLATFORM_VALUES = PLATFORM === "all" ? [] : PLATFORM.split(",");
 const PLATFORM_SQL =
-  PLATFORM === "all" ? "1=1" : "LOWER(COALESCE(c.platform,'')) = ?";
-const platformParams = (extra = []) =>
-  PLATFORM === "all" ? extra : extra.concat([PLATFORM]);
+  PLATFORM_VALUES.length === 0
+    ? "1=1"
+    : PLATFORM_VALUES.length === 1
+      ? "LOWER(COALESCE(c.platform,'')) = ?"
+      : `LOWER(COALESCE(c.platform,'')) IN (${PLATFORM_VALUES.map(() => "?").join(",")})`;
+const platformParams = (extra = []) => extra.concat(PLATFORM_VALUES);
 
 const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : null);
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
@@ -195,7 +206,7 @@ async function backfillSnapshot() {
             AND JSON_CONTAINS_PATH(c.influencer_snapshot,'one','$.accountCountry') = 0
             AND ${ACCT_VALUE} IS NOT NULL
           `,
-          [from, to].concat(PLATFORM === "all" ? [] : [PLATFORM])
+          platformParams([from, to])
         );
         acctRows += Number(res?.affectedRows || 0);
       } else {
@@ -208,7 +219,7 @@ async function backfillSnapshot() {
             AND JSON_CONTAINS_PATH(c.influencer_snapshot,'one','$.accountCountry') = 0
             AND ${ACCT_VALUE} IS NOT NULL
           `,
-          [from, to].concat(PLATFORM === "all" ? [] : [PLATFORM])
+          platformParams([from, to])
         );
         acctRows += Number(cnt?.[0]?.n || 0);
       }
@@ -227,7 +238,7 @@ async function backfillSnapshot() {
             AND JSON_CONTAINS_PATH(c.influencer_snapshot,'one','$.bioLanguage') = 0
             AND l.bio_language IS NOT NULL AND l.bio_language <> ''
           `,
-          [from, to].concat(PLATFORM === "all" ? [] : [PLATFORM])
+          platformParams([from, to])
         );
         langRows += Number(res?.affectedRows || 0);
       } else {
@@ -240,7 +251,7 @@ async function backfillSnapshot() {
             AND JSON_CONTAINS_PATH(c.influencer_snapshot,'one','$.bioLanguage') = 0
             AND l.bio_language IS NOT NULL AND l.bio_language <> ''
           `,
-          [from, to].concat(PLATFORM === "all" ? [] : [PLATFORM])
+          platformParams([from, to])
         );
         langRows += Number(cnt?.[0]?.n || 0);
       }
