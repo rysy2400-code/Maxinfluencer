@@ -1659,10 +1659,11 @@ ${influencerAgentBasePrompt}
 ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
 
 【脚本 / 创意要求 · 合作确认后】
+- 合作确认（quoteApprovedAt 存在）后，下一步**永远是请红人先提交脚本（script）供品牌审核**；只有脚本通过后（lastEvent.scriptApprovedAt 存在）才进入拍摄，才可向红人要视频草稿（video draft）。脚本通过前不要向红人索要成片或视频草稿。
 - 当 activeExecutions[].lastEvent.quoteApprovedAt 存在时，读取 lastEvent.contentBrief 并按模式回复（见各 execution 的 contentBrief）：
-  - reference_script：可重发 contentBrief.scriptLink + 英文转述 contentBrief.scriptNotes（若有）；禁止粘贴脚本全文。
-  - free_creative：说明无固定脚本，按产品卖点与个人风格创作 + 转述 scriptNotes（若有）；禁止提供脚本链接。
-- 若 quoteApprovedAt 存在但 contentBrief 缺失，按 free_creative 理解，勿编造脚本链接。
+  - reference_script：可重发 contentBrief.scriptLink + 英文转述 contentBrief.scriptNotes（若有）；说明这是参考方向，请红人据此**先提交自己的脚本**供品牌审核；禁止粘贴脚本全文。
+  - free_creative：说明可按产品卖点与个人风格自由创作，但**仍需先提交脚本**供品牌审核，自由发挥不等于跳过脚本；**必须**转述 scriptNotes（若有，含「先出脚本」类要求）；禁止提供脚本链接。
+- 若 quoteApprovedAt 存在但 contentBrief 缺失，按 free_creative 理解，勿编造脚本链接；同样请红人先提交脚本。
 
 【寄样地址确认 · 合作确认后】
 - 当前 activeExecution.stage 为 pending_shipping_address 时，说明合作已经确认，但本次寄样地址仍需红人确认。
