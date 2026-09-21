@@ -56,28 +56,32 @@ log(
  * A. 语言旁路表补齐（按 influencer_id 从 bio 推断）
  * ------------------------------------------------------------------ */
 async function fillLanguageTable() {
-  const target = await queryTikTok(
+  // 候选表里出现过的红人 id（去重）——一次取完，避免逐行 join 语言表（满负载库上 join + COLLATE 会退化成全表扫描）
+  const idRows = await queryTikTok(
     `
-    SELECT COUNT(*) AS rows_need_language,
-           SUM(i.bio IS NOT NULL AND i.bio <> '') AS master_bio_ready,
-           COUNT(DISTINCT c.influencer_id) AS distinct_ids
+    SELECT DISTINCT c.influencer_id AS pid
     FROM tiktok_campaign_influencer_candidates c
-    LEFT JOIN TikTok_influencer i ON i.influencer_id = c.influencer_id
-    LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
-    WHERE ${PLATFORM_SQL}
-      AND c.influencer_id IS NOT NULL AND c.influencer_id <> ''
-      AND l.bio_language IS NULL
+    WHERE ${PLATFORM_SQL} AND c.influencer_id IS NOT NULL AND c.influencer_id <> ''
     `,
     platformParams()
   );
-  const t = target?.[0] || {};
-  log(
-    `A: 需要补语言的候选行 ${fmt(t.rows_need_language)}（去重红人 ${fmt(t.distinct_ids)}，主档有 bio ${fmt(t.master_bio_ready)}）`
-  );
-  if (!APPLY) return { scanned: Number(t.rows_need_language || 0), written: 0, detected: 0, no_bio: 0 };
+  const candidateIds = (idRows || []).map((r) => String(r.pid || "").trim()).filter(Boolean);
+  log(`A: 候选涉及红人 ${fmt(candidateIds.length)} 个`);
 
-  let lastId = 0;
-  let scanned = 0;
+  // 语言旁路表里已经有 bio_language 的红人（一次载入，内存比对）
+  const haveRows = await queryTikTok(
+    `SELECT influencer_id AS pid FROM tiktok_influencer_language WHERE bio_language IS NOT NULL AND bio_language <> ''`
+  );
+  const haveLang = new Set((haveRows || []).map((r) => String(r.pid || "").trim()));
+  log(`A: 语言表已有 ${fmt(haveLang.size)} 个红人，其中候选命中 ${fmt(candidateIds.filter((id) => haveLang.has(id)).length)} 个`);
+
+  const todo = candidateIds.filter((id) => !haveLang.has(id));
+  log(`A: 待补语言红人 ${fmt(todo.length)} 个`);
+  if (!APPLY) {
+    return { scanned: candidateIds.length, todo: todo.length, written: 0, detected: 0, no_bio: 0 };
+  }
+
+  let scanned = candidateIds.length;
   let detected = 0;
   let noBio = 0;
   let written = 0;
@@ -110,44 +114,32 @@ async function fillLanguageTable() {
     pending.clear();
   };
 
-  for (;;) {
+  const ID_CHUNK = 500;
+  for (let i = 0; i < todo.length; i += ID_CHUNK) {
+    const chunk = todo.slice(i, i + ID_CHUNK);
     const rows = await queryTikTok(
-      `
-      SELECT c.id, c.influencer_id,
-             COALESCE(NULLIF(i.bio, ''), JSON_UNQUOTE(JSON_EXTRACT(c.influencer_snapshot, '$.bio'))) AS bio
-      FROM tiktok_campaign_influencer_candidates c
-      LEFT JOIN TikTok_influencer i ON i.influencer_id = c.influencer_id
-      LEFT JOIN tiktok_influencer_language l ON l.influencer_id = c.influencer_id COLLATE utf8mb4_0900_ai_ci
-      WHERE c.id > ? AND ${PLATFORM_SQL}
-        AND c.influencer_id IS NOT NULL AND c.influencer_id <> ''
-        AND l.bio_language IS NULL
-      ORDER BY c.id
-      LIMIT ?
-      `,
-      [lastId].concat(PLATFORM === "all" ? [] : [PLATFORM]).concat([BATCH])
+      `SELECT influencer_id AS pid, bio FROM TikTok_influencer
+       WHERE influencer_id IN (${chunk.map(() => "?").join(",")})`,
+      chunk
     );
-    if (!rows?.length) break;
-    lastId = rows[rows.length - 1].id;
-    scanned += rows.length;
-
-    for (const r of rows) {
-      const pid = String(r.influencer_id || "").trim();
-      if (!pid || pending.has(pid)) continue;
-      const hit = detectBioLanguageProfile(r.bio);
+    const bioById = new Map(
+      (rows || []).map((r) => [String(r.pid || "").trim(), r.bio])
+    );
+    for (const id of chunk) {
+      const hit = detectBioLanguageProfile(bioById.get(id));
       if (!hit.language) {
         noBio += 1;
         continue;
       }
-      pending.set(pid, hit);
+      pending.set(id, hit);
       detected += 1;
     }
     if (pending.size >= 1000) await flush();
-
-    if (scanned % (BATCH * 5) === 0) {
-      log(`A: scanned=${fmt(scanned)} detected=${fmt(detected)} written=${fmt(written)} no_bio=${fmt(noBio)}`);
+    if ((i / ID_CHUNK) % 20 === 0) {
+      log(`A: ${fmt(i + chunk.length)}/${fmt(todo.length)} detected=${fmt(detected)} written=${fmt(written)} no_bio=${fmt(noBio)}`);
     }
-    if (LIMIT && scanned >= LIMIT) break;
-    await sleep(SLEEP);
+    if (LIMIT && i + chunk.length >= LIMIT) break;
+    if (SLEEP) await sleep(SLEEP);
   }
   await flush();
   log(`A done: scanned=${fmt(scanned)} detected=${fmt(detected)} written=${fmt(written)} no_bio=${fmt(noBio)}`);
