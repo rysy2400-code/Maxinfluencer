@@ -124,7 +124,7 @@ async function fillLanguageTable() {
       ORDER BY c.id
       LIMIT ?
       `,
-      platformParams([lastId, BATCH])
+      [lastId].concat(PLATFORM === "all" ? [] : [PLATFORM]).concat([BATCH])
     );
     if (!rows?.length) break;
     lastId = rows[rows.length - 1].id;
