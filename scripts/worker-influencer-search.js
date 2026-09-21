@@ -1329,15 +1329,29 @@ async function reclaimStuckProcessingImportTasks() {
     24 * 60,
     Math.max(1, Number(process.env.IMPORT_TASK_STUCK_RECLAIM_MINUTES) || 12)
   );
+  // 同搜索任务：仅回收本 worker / 本机名下的导入任务，避免跨机器误杀。
+  const importScopeClause = [];
+  const importScopeParams = [];
+  if (IMPORT_WORKER_ID) {
+    importScopeClause.push("worker_id = ?");
+    importScopeParams.push(IMPORT_WORKER_ID);
+  }
+  if (CURRENT_WORKER_IP) {
+    importScopeClause.push("worker_ip = ?");
+    importScopeParams.push(String(CURRENT_WORKER_IP).trim());
+  }
+  if (!importScopeClause.length) return 0;
+  const importScopeSql = `(${importScopeClause.join(" OR ")})`;
   const stuckRows = await queryTikTok(
     `
     SELECT id, campaign_id, session_id, batch_group_id
     FROM tiktok_influencer_import_task
     WHERE status = 'processing'
+      AND ${importScopeSql}
       AND last_progress_at IS NOT NULL
       AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
-    []
+    [...importScopeParams]
   );
   if (!stuckRows?.length) return 0;
   const errorMessage = `stuck_reclaimed(import_last_progress>${stuckMinutes}m)`;
@@ -1349,10 +1363,11 @@ async function reclaimStuckProcessingImportTasks() {
         error_message = ?,
         updated_at = NOW()
     WHERE status = 'processing'
+      AND ${importScopeSql}
       AND last_progress_at IS NOT NULL
       AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
-    [errorMessage]
+    [errorMessage, ...importScopeParams]
   );
   for (const r of stuckRows) {
     await notifyImportBatchOrSession({ task: r, fallbackSummary: null }).catch((e) => {
@@ -1431,12 +1446,31 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function reclaimStuckProcessingTasks() {
+async function reclaimStuckProcessingTasks(platformWorkerId = null) {
   const stuckMinutes = Math.min(
     24 * 60,
-    Math.max(1, Number(process.env.SEARCH_TASK_STUCK_RECLAIM_MINUTES) || 7)
+    Math.max(1, Number(process.env.SEARCH_TASK_STUCK_RECLAIM_MINUTES) || 20)
   );
-  // 仅按 last_progress_at 判断：超过 N 分钟无推进则回收（默认 7 分钟）
+  // 仅按 last_progress_at 判断：超过 N 分钟无推进则回收（默认 20 分钟）
+  // 作用域限定为本 worker（worker_id）或本机（worker_ip），
+  // 避免「某台机器阈值偏小 → 把全队其它机器正常推进中的任务判失败」。
+  const scopedWorkerId = platformWorkerId
+    ? String(platformWorkerId).trim()
+    : null;
+  const scopedWorkerIp = CURRENT_WORKER_IP
+    ? String(CURRENT_WORKER_IP).trim()
+    : null;
+  const scopeClause = [];
+  const scopeParams = [];
+  if (scopedWorkerId) {
+    scopeClause.push("worker_id = ?");
+    scopeParams.push(scopedWorkerId);
+  }
+  if (scopedWorkerIp) {
+    scopeClause.push("worker_ip = ?");
+    scopeParams.push(scopedWorkerIp);
+  }
+  if (!scopeClause.length) return 0;
   const rows = await queryTikTok(
     `
     UPDATE tiktok_influencer_search_task
@@ -1445,10 +1479,11 @@ async function reclaimStuckProcessingTasks() {
         error_message = ?,
         updated_at = NOW()
     WHERE status = 'processing'
+      AND (${scopeClause.join(" OR ")})
       AND last_progress_at IS NOT NULL
       AND last_progress_at < DATE_SUB(NOW(), INTERVAL ${stuckMinutes} MINUTE)
   `,
-    [`stuck_reclaimed(last_progress_at>${stuckMinutes}m)`]
+    [`stuck_reclaimed(last_progress_at>${stuckMinutes}m)`, ...scopeParams]
   );
   return Number(rows?.affectedRows || 0);
 }
@@ -1500,7 +1535,7 @@ async function platformLoop(platformSlug) {
 
       if (Date.now() - lastReclaimMs > 60_000) {
         lastReclaimMs = Date.now();
-        const n = await reclaimStuckProcessingTasks();
+        const n = await reclaimStuckProcessingTasks(platformWorkerId);
         if (n > 0) {
           console.warn(
             `[worker-influencer-search] reclaimed stuck processing tasks: ${n}`
