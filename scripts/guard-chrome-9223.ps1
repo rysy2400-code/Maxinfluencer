@@ -1,4 +1,4 @@
-# Guard Chrome 9223 CDP：TikTok Enrich 专用（不登录 profile + 代理）
+# Guard Chrome 9223 CDP: Instagram metrics (logged-in profile, proxy mode from env)
 $ErrorActionPreference = "SilentlyContinue"
 
 $chrome = $env:CHROME_EXE
@@ -18,18 +18,25 @@ if ($env:CHROME_9223_VISIBLE) {
 }
 $launchUrl = if ($env:CHROME_9223_URL) { "$($env:CHROME_9223_URL)" } else { "https://www.tiktok.com" }
 $proxyServer = if ($env:CHROME_9223_PROXY_SERVER) { "$($env:CHROME_9223_PROXY_SERVER)" } else { "http://127.0.0.1:7897" }
+$proxyMode = if ($env:CHROME_9223_PROXY_MODE) { "$($env:CHROME_9223_PROXY_MODE)".ToLowerInvariant() } else { "" }
+$proxyDirect = ($proxyMode -eq "direct" -or $proxyMode -eq "none" -or $proxyMode -eq "off")
 $chromeArgList = @(
   "--disable-quic",
+  "--disable-ipv6",
   "--disable-extensions",
   "--disable-component-extensions-with-background-pages",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=9223",
   "--user-data-dir=$chromeDir",
-  "--proxy-server=$proxyServer",
   "--no-first-run",
-  "--no-default-browser-check",
-  $launchUrl
+  "--no-default-browser-check"
 )
+if ($proxyDirect) {
+  $chromeArgList += "--no-proxy-server"
+} else {
+  $chromeArgList += "--proxy-server=$proxyServer"
+}
+$chromeArgList += $launchUrl
 if (-not $visible) {
   $chromeArgList = @("--headless=new", "--disable-gpu") + $chromeArgList
 } else {
@@ -99,7 +106,7 @@ while ($true) {
       Start-Chrome9223
       Start-Sleep -Seconds 10
     } elseif ($lastStartAt -and (((Get-Date) - $lastStartAt).TotalSeconds -lt $startGraceSec)) {
-      # 启动宽限期
+      # startup grace period
     } elseif (-not $unhealthySince) {
       $unhealthySince = Get-Date
     } elseif (((Get-Date) - $unhealthySince).TotalSeconds -ge 120) {

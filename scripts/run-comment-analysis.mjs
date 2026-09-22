@@ -248,11 +248,31 @@ async function main() {
 
   // 流水线：采集顺序执行（尊重风控），LLM 并发在飞（I/O 等待，不阻塞下一条采集）
   const concurrency = Math.max(1, Number(process.env.COMMENT_ANALYSIS_LLM_CONCURRENCY || 4));
-  console.log(`[comment-analysis] LLM 并发=${concurrency}（采集仍为顺序执行）`);
+  console.log(
+    `[comment-analysis] LLM 并发=${concurrency}（采集顺序执行；每完成 1 个立刻落库）`
+  );
+
+  let persisted = 0;
+  const persistOne = async (rec) => {
+    if (rec?.status !== "ok") return;
+    try {
+      const { updated, missing } = await upsertCommentAnalysisToMaster([rec]);
+      const snap = await syncCommentAnalysisToSnapshots([rec]);
+      persisted += updated;
+      console.log(
+        `    [db] @${rec.username} 主档=${updated}${missing.length ? "(主档缺失)" : ""} 快照:候选${snap.candidate}/执行${snap.execution}`
+      );
+    } catch (e) {
+      console.log(`    [db] @${rec.username} 落库失败: ${String(e?.message || e).slice(0, 140)}`);
+    }
+  };
+
   const inflight = [];
   const drainOldest = async () => {
     const job = inflight.shift();
-    records.push(await job);
+    const rec = await job;
+    records.push(rec);
+    await persistOne(rec);
   };
 
   for (const r of queue) {
@@ -303,12 +323,7 @@ async function main() {
   await igSession?.dispose?.().catch(() => {});
 
   const okRecords = records.filter((r) => r.status === "ok");
-  const { updated, missing } = await upsertCommentAnalysisToMaster(okRecords);
-  const snap = await syncCommentAnalysisToSnapshots(okRecords);
-  console.log(
-    `[comment-analysis] 主档写入 ${updated} 条${missing.length ? `（${missing.length} 条主档缺失: ${missing.slice(0, 3).join(", ")}）` : ""}` +
-      `｜快照同步 候选表 ${snap.candidate} 行 / 执行表 ${snap.execution} 行`
-  );
+  console.log(`[comment-analysis] 完成 ${okRecords.length} 条，主档已增量写入 ${persisted} 条`);
   const failed = records.filter((r) => r.status !== "ok");
   if (failed.length) {
     console.log(

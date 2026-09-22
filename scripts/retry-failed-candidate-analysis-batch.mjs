@@ -171,7 +171,7 @@ async function loadTikTokInfluencer(username) {
             followers_count, followers_display, avg_views, views_display,
             avg_likes, avg_comments, posts_count, video_publish_country,
             profile_data, search_video_data
-     FROM TikTok_influencer WHERE LOWER(username) = LOWER(?) LIMIT 1`,
+     FROM TikTok_influencer WHERE username = ? LIMIT 1`,
     [u]
   );
   return rows?.[0] || null;
@@ -188,7 +188,7 @@ async function loadGlobalInfluencer(username, influencerId) {
   const u = String(username || "").replace(/^@/, "").trim();
   if (!u) return null;
   const rows = await queryTikTok(
-    `SELECT influencer_id, username, influencer_email FROM tiktok_influencer WHERE LOWER(username) = LOWER(?) LIMIT 1`,
+    `SELECT influencer_id, username, influencer_email FROM tiktok_influencer WHERE username = ? LIMIT 1`,
     [u]
   );
   return rows?.[0] || null;

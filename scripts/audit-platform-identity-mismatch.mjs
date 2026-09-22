@@ -49,6 +49,10 @@ const IS_YT_ID = `(influencer_id LIKE 'UC%')`;
 const URL_YT = `(url_platform = 'youtube')`;
 const URL_NON_YT = `(url_platform IN ('tiktok','instagram','x'))`;
 const ID_MATCH_URL = `((${URL_YT} AND ${IS_YT_ID}) OR (${URL_NON_YT} AND NOT ${IS_YT_ID}))`;
+// 没有 influencer_id 的行（历史脏数据）：NULL 比较会让上面所有条件变成 NULL，
+// 从而既不算 healthy 也不算 conflict。这类行没有 id 可矛盾，以 profile_url 域名为准。
+const HAS_ID = `(influencer_id IS NOT NULL AND influencer_id <> '')`;
+const RELABEL_MATCH = `((${ID_MATCH_URL}) OR NOT ${HAS_ID})`;
 
 function argValue(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -62,9 +66,10 @@ async function audit() {
     SELECT
       COUNT(*) AS total,
       SUM(url_platform IS NULL) AS unknown_cnt,
-      SUM(url_platform IS NOT NULL AND NOT ${ID_MATCH_URL}) AS conflict_cnt,
-      SUM(url_platform IS NOT NULL AND ${ID_MATCH_URL} AND platform = url_platform) AS healthy_cnt,
-      SUM(url_platform IS NOT NULL AND ${ID_MATCH_URL} AND (platform IS NULL OR platform <> url_platform)) AS relabel_cnt
+      SUM(url_platform IS NOT NULL AND NOT ${RELABEL_MATCH}) AS conflict_cnt,
+      SUM(url_platform IS NOT NULL AND ${RELABEL_MATCH} AND platform = url_platform) AS healthy_cnt,
+      SUM(url_platform IS NOT NULL AND ${RELABEL_MATCH} AND (platform IS NULL OR platform <> url_platform)) AS relabel_cnt,
+      SUM(NOT ${HAS_ID}) AS null_id_cnt
     FROM (
       SELECT influencer_id, platform, LOWER(platform) AS platform_lc, ${URL_PLATFORM_SQL} AS url_platform
       FROM tiktok_influencer
@@ -99,7 +104,7 @@ async function sampleConflict(limit = 15) {
       SELECT influencer_id, platform, username, profile_url, ${URL_PLATFORM_SQL} AS url_platform
       FROM tiktok_influencer
     ) t
-    WHERE url_platform IS NOT NULL AND NOT ${ID_MATCH_URL}
+    WHERE url_platform IS NOT NULL AND NOT ${RELABEL_MATCH}
     LIMIT ${Number(limit)}
   `
   );
@@ -113,7 +118,7 @@ async function exportConflictCsv(limit = 50000) {
       SELECT influencer_id, platform, username, profile_url, followers_count, created_at, ${URL_PLATFORM_SQL} AS url_platform
       FROM tiktok_influencer
     ) t
-    WHERE url_platform IS NOT NULL AND NOT ${ID_MATCH_URL}
+    WHERE url_platform IS NOT NULL AND NOT ${RELABEL_MATCH}
     LIMIT ${Number(limit)}
   `
   );
@@ -140,51 +145,88 @@ async function exportConflictCsv(limit = 50000) {
   return { out, rows: (rows || []).length };
 }
 
-/** 只修正 relabel：id 形态与 profile_url 域名一致、仅 platform 字段写错的行。 */
-async function applyRelabel({ batch, sleepMs }) {
-  let lastId = 0;
-  let updated = 0;
-  for (;;) {
-    const rows = await queryTikTok(
-      `
-      SELECT id, influencer_id, username, platform, url_platform
-      FROM (
-        SELECT id, influencer_id, username, platform, profile_url, ${URL_PLATFORM_SQL} AS url_platform
-        FROM tiktok_influencer
-        WHERE id > ? AND profile_url IS NOT NULL
-      ) t
-      WHERE ${ID_MATCH_URL}
-        AND (platform IS NULL OR platform <> url_platform)
-      ORDER BY id ASC
-      LIMIT ${Number(batch)}
-      `,
-      [lastId]
+/** 导出 before-image：修复前把受影响行的原值落盘，便于回滚。 */
+async function exportRelabelBeforeImage() {
+  const rows = await queryTikTok(`
+    SELECT id, influencer_id, username, platform, url_platform
+    FROM (
+      SELECT id, influencer_id, username, platform, profile_url, ${URL_PLATFORM_SQL} AS url_platform
+      FROM tiktok_influencer
+      WHERE profile_url IS NOT NULL
+    ) t
+    WHERE ${RELABEL_MATCH}
+      AND (platform IS NULL OR platform <> url_platform)
+  `);
+  const out = path.join(root, "exports", `platform-relabel-before-${Date.now()}.csv`);
+  const lines = ["id,influencer_id,username,old_platform,new_platform"];
+  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  for (const r of rows || []) {
+    lines.push(
+      [r.id, r.influencer_id, r.username, r.platform, r.url_platform].map(esc).join(",")
     );
-    if (!rows?.length) break;
-    lastId = rows[rows.length - 1].id;
-
-    // 逐条更新：避免批量 UPDATE 锁太久；同时逐条校验不会撞 uk_platform_username
-    for (const r of rows) {
-      const clash = await queryTikTok(
-        `SELECT id FROM tiktok_influencer WHERE platform = ? AND username = ? AND id <> ? LIMIT 1`,
-        [r.url_platform, r.username, r.id]
-      );
-      if (clash?.length) {
-        console.warn(
-          `[audit] 跳过（目标键已存在）id=${r.id} @${r.username} -> ${r.url_platform}`
-        );
-        continue;
-      }
-      await queryTikTok(`UPDATE tiktok_influencer SET platform = ? WHERE id = ?`, [
-        r.url_platform,
-        r.id,
-      ]);
-      updated += 1;
-    }
-    console.log(`[audit] 已处理到 id=${lastId}，累计修正 ${updated}`);
-    if (sleepMs > 0) await sleep(sleepMs);
   }
-  return updated;
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, lines.join("\n"), "utf8");
+  return { out, rows: (rows || []).length };
+}
+
+/**
+ * 只修正 relabel：id 形态与 profile_url 域名一致（或没有 id）、仅 platform 字段写错的行。
+ *
+ * 先一次性把候选 id 捞出来（一次全表扫描），再按平台分组、按 id 分块 UPDATE
+ * （走主键）。某块撞唯一键就退化为逐行，逐行再撞就跳过并记录。
+ */
+async function applyRelabel({ batch, sleepMs }) {
+  const rows = await queryTikTok(`
+    SELECT id, url_platform FROM (
+      SELECT id, influencer_id, username, platform, profile_url, ${URL_PLATFORM_SQL} AS url_platform
+      FROM tiktok_influencer
+    ) t
+    WHERE url_platform IS NOT NULL AND ${RELABEL_MATCH}
+      AND (platform IS NULL OR platform <> url_platform)
+    ORDER BY id
+  `);
+  const byPlatform = new Map();
+  for (const r of rows || []) {
+    const key = String(r.url_platform);
+    if (!byPlatform.has(key)) byPlatform.set(key, []);
+    byPlatform.get(key).push(r.id);
+  }
+  let updated = 0;
+  const skipped = [];
+  for (const [platform, ids] of byPlatform) {
+    for (let i = 0; i < ids.length; i += Number(batch)) {
+      const chunk = ids.slice(i, i + Number(batch));
+      const list = chunk.join(",");
+      try {
+        const res = await queryTikTok(
+          `UPDATE tiktok_influencer t SET t.platform = ?
+            WHERE t.id IN (${list}) AND profile_url IS NOT NULL
+              AND (t.platform IS NULL OR t.platform <> ?)`,
+          [platform, platform]
+        );
+        updated += Number(res?.affectedRows || 0);
+      } catch (err) {
+        if (err?.code !== "ER_DUP_ENTRY") throw err;
+        console.warn(`[audit] ${platform} 分块 ${chunk[0]}-${chunk[chunk.length - 1]} 撞唯一键，逐行处理`);
+        for (const id of chunk) {
+          try {
+            await queryTikTok(
+              `UPDATE tiktok_influencer SET platform = ? WHERE id = ? AND (platform IS NULL OR platform <> ?)`,
+              [platform, id, platform]
+            );
+            updated += 1;
+          } catch (rowErr) {
+            skipped.push({ id, target: platform });
+            console.warn(`[audit] 跳过 id=${id} -> ${platform}: ${rowErr.message}`);
+          }
+        }
+      }
+      console.log(`[audit] ${platform} 已处理 ${Math.min(i + chunk.length, ids.length)}/${ids.length}，累计修正 ${updated}`);
+      if (sleepMs > 0) await sleep(sleepMs);
+    }
+  }
+  return { updated, skipped };
 }
 
 async function main() {
@@ -196,7 +238,7 @@ async function main() {
   const summary = await audit();
   console.log("[audit] 主档 platform / influencer_id 审计：");
   console.log(
-    `  total=${summary.total}  healthy=${summary.healthy_cnt}  relabel=${summary.relabel_cnt}  conflict=${summary.conflict_cnt}  unknown=${summary.unknown_cnt}`
+    `  total=${summary.total}  healthy=${summary.healthy_cnt}  relabel=${summary.relabel_cnt}  conflict=${summary.conflict_cnt}  unknown=${summary.unknown_cnt}  null_id=${summary.null_id_cnt}`
   );
   console.log("\n[audit] 错配明细（前 25 组）：");
   console.table(await breakdown());
@@ -209,9 +251,24 @@ async function main() {
   }
 
   if (apply) {
+    const before = await exportRelabelBeforeImage();
+    console.log(
+      `\n[audit] before-image 已导出：${before.out}（${before.rows} 行，可用于回滚）`
+    );
     console.log(`\n[audit] 开始修正 relabel（batch=${batch}, sleep=${sleepMs}ms）…`);
-    const updated = await applyRelabel({ batch, sleepMs });
-    console.log(`[audit] relabel 修正完成，共 ${updated} 行`);
+    const { updated, skipped } = await applyRelabel({ batch, sleepMs });
+    console.log(
+      `[audit] relabel 修正完成，共 ${updated} 行${skipped.length ? `，跳过 ${skipped.length} 行（撞唯一键）` : ""}`
+    );
+    if (skipped.length) {
+      const out = path.join(root, "exports", `platform-relabel-skipped-${Date.now()}.csv`);
+      fs.writeFileSync(
+        out,
+        ["id,influencer_id,username,target_platform", ...skipped.map((s) => `${s.id},${s.influencer_id || ""},${s.username},${s.target}`)].join("\n"),
+        "utf8"
+      );
+      console.log(`[audit] 跳过清单：${out}`);
+    }
     const after = await audit();
     console.log(
       `[audit] 修正后：healthy=${after.healthy_cnt} relabel=${after.relabel_cnt} conflict=${after.conflict_cnt} unknown=${after.unknown_cnt}`

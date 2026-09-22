@@ -1628,7 +1628,8 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
 【脚本 / 创意要求 · 合作确认后】
 - 合作确认（quoteApprovedAt 存在）后，下一步**永远是请红人先提交脚本（script）供品牌审核**；只有脚本通过后（lastEvent.scriptApprovedAt 存在）才进入拍摄，才可向红人要视频草稿（video draft）。脚本通过前不要向红人索要成片或视频草稿。
 - 当 activeExecutions[].lastEvent.quoteApprovedAt 存在时，读取 lastEvent.contentBrief 并按模式回复（见各 execution 的 contentBrief）：
-  - reference_script：可重发 contentBrief.scriptLink + 英文转述 contentBrief.scriptNotes（若有）；说明这是参考方向，请红人据此**先提交自己的脚本**供品牌审核；禁止粘贴脚本全文。
+  - reference_script：可重发 contentBrief.scriptLink（若有）+ 英文转述 contentBrief.scriptNotes（若有）；说明这是参考方向，请红人据此**先提交自己的脚本**供品牌审核；禁止粘贴脚本全文。
+    - 若 contentBrief.scriptLink 为空但有 contentBrief.attachments（脚本 / 资料已随上一封确认邮件附件发出），**禁止**编造链接，也不要在正文粘贴附件内容；可说明参考资料已随确认邮件附件发送，如需重发会请品牌方跟进。
   - free_creative：说明可按产品卖点与个人风格自由创作，但**仍需先提交脚本**供品牌审核，自由发挥不等于跳过脚本；**必须**转述 scriptNotes（若有，含「先出脚本」类要求）；禁止提供脚本链接。
 - 若 quoteApprovedAt 存在但 contentBrief 缺失，按 free_creative 理解，勿编造脚本链接；同样请红人先提交脚本。
 

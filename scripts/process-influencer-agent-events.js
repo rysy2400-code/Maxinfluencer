@@ -692,7 +692,7 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
   const specialRequestStatus = payload.specialRequestStatus || "pending_creator";
   const brandMessage = payload.brandMessage || "";
 
-  // 解析随信资料附件（PDF / Word / PPT / 图片）：storageKey 指向 data/session-imports（与 Web 同机，worker 可直接读取）
+  // 解析随信资料附件（PDF / Word / PPT / 图片 / 视频）：storageKey 指向 data/session-imports（与 Web 同机，worker 可直接读取）
   const rawAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
   const attachmentMetas = [];
   const nodemailerAttachments = [];
@@ -1412,6 +1412,53 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
   const fromAccount = ctx.fromAccount;
   const subject = ctx.subjectForSend;
 
+  // contentBrief 附件（严格参考脚本模式下随确认邮件发给红人的脚本 / 资料）。
+  const briefAttachments = Array.isArray(payload.contentBrief?.attachments)
+    ? payload.contentBrief.attachments
+    : [];
+  const attachmentMetas = [];
+  const nodemailerAttachments = [];
+  for (let idx = 0; idx < briefAttachments.length; idx++) {
+    const att = briefAttachments[idx] || {};
+    const fileName = String(att.fileName || "").trim();
+    const storageKey = String(att.storageKey || "").trim();
+    const outboundAttachmentId = Number(att.outboundAttachmentId) || null;
+    if (!fileName || (!storageKey && !outboundAttachmentId)) continue;
+    // 附件内容优先从库里取：上传在 Web 机器，发信 worker 在另一台机器。
+    let buffer = null;
+    if (outboundAttachmentId) {
+      const row = await getOutboundAttachmentById(outboundAttachmentId);
+      const content = row?.content;
+      if (Buffer.isBuffer(content)) buffer = content;
+      else if (content) buffer = Buffer.from(content);
+    }
+    if (!buffer?.length && storageKey) buffer = readSessionImportFile(storageKey);
+    if (!buffer?.length) {
+      throw new Error(
+        `advertiser_execution_followup 附件「${fileName}」不存在或读取失败（outboundAttachmentId=${outboundAttachmentId || "无"}，storageKey=${storageKey || "无"}）`
+      );
+    }
+    const contentType = normalizeAttachmentContentType(fileName, att.contentType);
+    const sizeBytes =
+      typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
+        ? att.sizeBytes
+        : buffer.length;
+    attachmentMetas.push({
+      fileName,
+      storageKey,
+      contentType,
+      sizeBytes,
+      // attachmentId 供广告主时间线预览 / 下载（Web 侧已落库，这里复用同一行）。
+      ...(outboundAttachmentId
+        ? { outboundAttachmentId, attachmentId: outboundAttachmentId }
+        : {}),
+      ...(att.outboundDedupeKey
+        ? { outboundDedupeKey: String(att.outboundDedupeKey) }
+        : {}),
+    });
+    nodemailerAttachments.push({ filename: fileName, contentType, content: buffer });
+  }
+
   const headers = {
     "X-Maxin-Influencer-Id": platformInfluencerId || "",
     "X-Maxin-Campaign-Id": campaignId || "",
@@ -1450,6 +1497,8 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
         shippingInfo: payload.shippingInfo || null,
       },
     },
+    attachments: nodemailerAttachments,
+    attachmentMetas,
   });
   if (delivery.drafted) return;
   const { result, sendErr, fromEmail } = delivery;
@@ -1492,6 +1541,14 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
           subject,
           messageId: result?.messageId || null,
         },
+        ...(attachmentMetas.length
+          ? {
+              attachments: {
+                source: "outbound_attachments",
+                items: attachmentMetas,
+              },
+            }
+          : {}),
         source: {
           eventTable: "tiktok_influencer_agent_event",
           eventId: eventRow.id,
@@ -1503,6 +1560,37 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
       "[ProcessInfluencerAgentEvents] 写入广告主跟进邮件到对话表失败:",
       err
     );
+  }
+
+  // 发送成功后把附件与这条对话消息关联，时间线即可预览 / 下载。
+  const dedupeKeys = attachmentMetas
+    .map((a) => a.outboundDedupeKey)
+    .filter(Boolean);
+  if (dedupeKeys.length && result?.messageId) {
+    try {
+      const rows = await queryTikTok(
+        `
+        SELECT id
+        FROM tiktok_influencer_conversation_messages
+        WHERE influencer_id = ? AND message_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+        [platformInfluencerId, result.messageId]
+      );
+      const conversationMessageId = rows?.[0]?.id || null;
+      if (conversationMessageId) {
+        await attachOutboundAttachmentsToConversationMessage({
+          conversationMessageId,
+          dedupeKeys,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        "[ProcessInfluencerAgentEvents] 关联广告主跟进邮件附件失败:",
+        err?.message || err
+      );
+    }
   }
 
   if (sendErr) {

@@ -10,6 +10,10 @@ import {
 import { resolveChatAttachmentBuffer } from "../../../../../lib/influencer/chat-attachment-resolver.js";
 import { buildContentDisposition } from "../../../../../lib/http/content-disposition.js";
 import {
+  looksLikeImage,
+  looksLikePdf,
+} from "../../../../../lib/influencer/attachment-content-checks.js";
+import {
   CHAT_UPLOAD_EXTENSIONS_LABEL,
   contentTypeForFileName,
   isChatUploadFileName,
@@ -20,42 +24,6 @@ import {
 } from "../../../../../lib/influencer/attachment-file-types.js";
 
 export const dynamic = "force-dynamic";
-
-function looksLikePdf(buffer) {
-  if (!buffer || buffer.length < 5) return false;
-  return (
-    buffer[0] === 0x25 && // %
-    buffer[1] === 0x50 && // P
-    buffer[2] === 0x44 && // D
-    buffer[3] === 0x46 && // F
-    buffer[4] === 0x2d    // -
-  );
-}
-
-function looksLikePng(buffer) {
-  if (!buffer || buffer.length < 8) return false;
-  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  return sig.every((byte, i) => buffer[i] === byte);
-}
-
-function looksLikeJpeg(buffer) {
-  if (!buffer || buffer.length < 3) return false;
-  return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-}
-
-function extensionLower(fileName) {
-  const name = String(fileName || "").toLowerCase();
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot);
-}
-
-/** 图片按扩展名做一次魔数校验，避免改了后缀名的文件混进来。 */
-function looksLikeImage(buffer, fileName) {
-  const ext = extensionLower(fileName);
-  if (ext === ".png") return looksLikePng(buffer);
-  if (ext === ".jpg" || ext === ".jpeg") return looksLikeJpeg(buffer);
-  return true;
-}
 
 function formatBytes(bytes) {
   const n = Number(bytes);
@@ -112,12 +80,15 @@ export async function GET(req, { params }) {
     const storageFallback = storageKey.split("/").pop() || "attachment.xlsx";
     const requestedName = searchParams.get("fileName");
     const fileName = sanitizeDownloadFileName(requestedName, storageFallback);
+    // 图片 / 视频用 inline：点击即可在浏览器里查看、播放（与微信聊天一致）；
+    // 文档类仍强制下载，避免浏览器直接打开 Office / PDF 造成困扰。
+    const inlineViewable = isImageFileName(fileName) || isVideoFileName(fileName);
     return new Response(buffer, {
       status: 200,
       headers: {
         "Content-Type": contentTypeForFileName(fileName),
         "Content-Length": String(buffer.length),
-        "Content-Disposition": buildContentDisposition(fileName, true),
+        "Content-Disposition": buildContentDisposition(fileName, !inlineViewable),
         "Cache-Control": "private, max-age=60",
       },
     });
@@ -159,17 +130,6 @@ export async function POST(req, { params }) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileName = String(file.name || "attachment.xlsx");
 
-    if (isVideoFileName(fileName)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "视频请改用链接方式：把视频上传到 YouTube / Google Drive / Dropbox 后，将链接粘贴在消息里发给红人。",
-        },
-        { status: 400 }
-      );
-    }
-
     if (!isChatUploadFileName(fileName)) {
       return NextResponse.json(
         { success: false, error: `仅支持 ${CHAT_UPLOAD_EXTENSIONS_LABEL}` },
@@ -180,12 +140,7 @@ export async function POST(req, { params }) {
     const maxBytes = maxBytesForFileName(fileName);
     if (buffer.length > maxBytes) {
       return NextResponse.json(
-        {
-          success: false,
-          error: isImageFileName(fileName)
-            ? `图片过大（单张上限 ${formatBytes(maxBytes)}）`
-            : `文件过大（上限 ${formatBytes(maxBytes)}）`,
-        },
+        { success: false, error: `文件过大（单文件上限 ${formatBytes(maxBytes)}）` },
         { status: 400 }
       );
     }

@@ -18,17 +18,19 @@ import { ChatPaperclipIcon } from "./chat-paperclip-icon";
 import { ChatAttachmentCard } from "./chat-attachment-card";
 import {
   chatAttachmentDownloadHref,
-  formatFileSize,
   isAttachmentOnlyUserMessage,
   snapshotPickedFiles,
 } from "./chat-file-utils";
 import {
+  MAX_CHAT_ATTACHMENTS,
+  pickAcceptableAttachments,
+  uploadCampaignExecutionAttachment,
+  uploadChatAttachmentFile,
+} from "./chat-attachment-upload";
+import {
+  CHAT_UPLOAD_FRIENDLY_LABEL,
   CHAT_UPLOAD_EXTENSIONS_LABEL,
   MAX_ATTACHMENTS_PER_MESSAGE,
-  isChatUploadFileName,
-  isImageFileName,
-  isVideoFileName,
-  maxBytesForFileName,
 } from "../lib/influencer/attachment-file-types.js";
 import {
   inboundAttachmentDownloadUrl,
@@ -44,6 +46,7 @@ import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analys
 import {
   avgViewsFromSnapshot,
   formatEcpmFromFlatAndViews,
+  medianViewsFromSnapshot,
 } from "../lib/influencer/avg-views.js";
 import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
 import { formatAdvertiserBalance } from "../lib/utils/advertiser-balance.js";
@@ -56,6 +59,7 @@ import {
   isUnknownCountryValue,
 } from "../lib/influencer/campaign-country-codes.js";
 import { languageDisplayName } from "../lib/influencer/country-primary-language.js";
+import { formatLanguageMix, formatPercent } from "../lib/influencer/display-labels.js";
 import { partitionPendingPriceItems } from "../lib/execution/pending-price-items.js";
 import { formatUsdAmount } from "../lib/billing/balance-messages.js";
 import { resolveLatestInfluencerQuote } from "../lib/execution/quote-resolution.js";
@@ -69,6 +73,9 @@ import {
   stripForeignCampaignBlocks,
   trimMessagesBeforeSessionCreated,
 } from "../lib/chat/session-messages.js";
+
+/** 附件选择框 accept 属性（把 "a / b" 文案转成 "a,b"）。 */
+const CHAT_UPLOAD_ACCEPT = CHAT_UPLOAD_EXTENSIONS_LABEL.replace(/\s*\/\s*/g, ",");
 
 // Bin Logo 组件 - 使用创始人名字 "Bin"，纯 CSS 圆形徽标，避免 SVG 抗锯齿导致的未完全填充问题
 function BinLogo({ size = 24 }) {
@@ -1064,6 +1071,13 @@ function ExecutionProgressPlatformBadge({ platform }) {
   );
 }
 
+/** 从评论分析 map 里取该红人的分析结果（key: platform:username，username 小写） */
+function resolveCommentAnalysis(analysisMap, item) {
+  if (!analysisMap || !item?.id) return null;
+  const platform = resolveInfluencerPlatform(item) === "Instagram" ? "instagram" : "tiktok";
+  return analysisMap[`${platform}:${String(item.id).toLowerCase()}`] || null;
+}
+
 /** 红人来源标签：用户导入 vs 平台发现 */
 function ExecutionProgressSourceLabel({ source }) {
   const isUser = source === "user_upload";
@@ -1390,8 +1404,14 @@ function ExecutionProgressLastReplyTime({ at }) {
   );
 }
 
-/** 执行进度卡片：账号国家 · 居住国家 · 语言 · 粉丝 · 播放 · GMV */
-function ExecutionProgressMetricsLine({ item }) {
+/**
+ * 执行进度卡片数据行：
+ *   账号国家 · 居住国家 · 语言
+ *   粉丝 · 播放(平均数) · 播放(中位数) · GMV
+ *   点赞率 · 评论率 · 高质量互动评论 · 购买意愿互动评论   （待审核价格）
+ *   受众语言                                             （待审核价格）
+ */
+function ExecutionProgressMetricsLine({ item, commentAnalysis = null, showCommentMetrics = false }) {
   const accountCountryRaw = resolveAccountCountry(item);
   const accountCountry =
     formatCountryForDisplay(accountCountryRaw) ??
@@ -1410,15 +1430,37 @@ function ExecutionProgressMetricsLine({ item }) {
     item?.avg_views ?? item?.avgViews ?? item?.views
   );
   const gmv = formatGmvStat(item);
+  // 优先用带 K/M 的展示串（与「播放(平均数)」同一格式），其次回退到数值
+  const medianViews = formatInfluencerStat(
+    item?.medianViewsDisplay ??
+      item?.median_views_display ??
+      item?.views?.medianDisplay ??
+      item?.medianViews ??
+      item?.median_views
+  );
+  const likeRate = formatPercent(item?.likeRate ?? item?.like_rate);
+  const commentRate = formatPercent(item?.commentRate ?? item?.comment_rate);
+  const audienceLanguage = formatLanguageMix(commentAnalysis?.languageMix);
   return (
     <>
       <div style={{ fontSize: 11, color: "#6B7280" }}>
         账号国家 {accountCountry} · 居住国家 {residenceCountry} · 语言 {language}
       </div>
       <div style={{ fontSize: 11, color: "#6B7280" }}>
-        粉丝 {followers} · 播放 {views}
-        {` · GMV ${gmv}`}
+        粉丝 {followers} · 播放(平均数) {views} · 播放(中位数) {medianViews} · GMV {gmv}
       </div>
+      {showCommentMetrics ? (
+        <>
+          <div style={{ fontSize: 11, color: "#6B7280" }}>
+            点赞率 {likeRate} · 评论率 {commentRate} · 高质量评论{" "}
+            {formatPercent(commentAnalysis?.qualityCommentRatio)} · 购买意愿评论{" "}
+            {formatPercent(commentAnalysis?.purchaseIntentRatio)}
+          </div>
+          <div style={{ fontSize: 11, color: "#6B7280" }}>
+            受众语言 {audienceLanguage || "—"}
+          </div>
+        </>
+      ) : null}
     </>
   );
 }
@@ -2077,6 +2119,7 @@ function ExecutionProgressCollapsibleRow({
 /** 同意报价：选择内容指引模式 */
 function ApproveQuoteContentBriefModal({
   open,
+  campaignId,
   influencerLabel,
   busy,
   chargePreview,
@@ -2086,12 +2129,17 @@ function ApproveQuoteContentBriefModal({
   const [mode, setMode] = React.useState(null);
   const [scriptLink, setScriptLink] = React.useState("");
   const [scriptNotes, setScriptNotes] = React.useState("");
+  const [attachments, setAttachments] = React.useState([]);
+  const [uploading, setUploading] = React.useState(false);
+  const briefFileInputRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!open) {
       setMode(null);
       setScriptLink("");
       setScriptNotes("");
+      setAttachments([]);
+      setUploading(false);
     }
   }, [open]);
 
@@ -2099,28 +2147,74 @@ function ApproveQuoteContentBriefModal({
 
   const canSubmit =
     mode === "free_creative" ||
-    (mode === "reference_script" && /^https:\/\/.+/i.test(scriptLink.trim()));
+    (mode === "reference_script" &&
+      (attachments.length > 0 || /^https:\/\/.+/i.test(scriptLink.trim())));
+
+  /** 上传脚本 / 资料附件：白名单与体积限制和聊天框完全一致。 */
+  const handlePickBriefFiles = async (e) => {
+    const files = snapshotPickedFiles(e.target.files);
+    e.target.value = "";
+    if (!files.length) return;
+    if (!campaignId) {
+      window.alert("缺少 Campaign 信息，暂时无法上传附件。");
+      return;
+    }
+    const { accepted, rejected } = pickAcceptableAttachments(
+      files,
+      attachments,
+      MAX_CHAT_ATTACHMENTS
+    );
+    if (rejected.length) window.alert(rejected.join("\n"));
+    if (!accepted.length) return;
+
+    setUploading(true);
+    try {
+      for (const file of accepted) {
+        const meta = await uploadCampaignExecutionAttachment(campaignId, file);
+        setAttachments((prev) =>
+          [...prev, meta].slice(0, MAX_CHAT_ATTACHMENTS)
+        );
+      }
+    } catch (err) {
+      window.alert(err?.message || String(err));
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSubmit = () => {
     if (!mode) {
       window.alert("请选择内容指引方式");
       return;
     }
+    if (uploading) {
+      window.alert("附件还在上传中，请稍候再提交");
+      return;
+    }
     const link = scriptLink.trim();
     if (mode === "reference_script") {
-      if (!link) {
-        window.alert("请填写脚本链接");
+      if (!link && !attachments.length) {
+        window.alert("请填写脚本链接，或上传脚本附件（两者至少一个）");
         return;
       }
-      if (!/^https:\/\/.+/i.test(link)) {
+      if (link && !/^https:\/\/.+/i.test(link)) {
         window.alert("脚本链接须以 https:// 开头");
         return;
       }
     }
     onConfirm({
       contentBriefMode: mode,
-      scriptLink: mode === "reference_script" ? link : undefined,
+      scriptLink: mode === "reference_script" && link ? link : undefined,
       scriptNotes: scriptNotes.trim() || undefined,
+      attachments:
+        mode === "reference_script" && attachments.length
+          ? attachments.map((att) => ({
+              fileName: att.name,
+              storageKey: att.storageKey,
+              contentType: att.contentType,
+              sizeBytes: att.sizeBytes,
+            }))
+          : undefined,
     });
   };
 
@@ -2215,28 +2309,84 @@ function ApproveQuoteContentBriefModal({
             style={optionStyle(mode === "reference_script")}
           >
             <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 4 }}>
-              A · 严格参考脚本链接
+              A · 严格参考脚本（链接或附件）
             </div>
             <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.45 }}>
-              向红人同步脚本链接；备注选填。
+              向红人同步脚本链接或脚本附件（至少提供一项）；备注选填。
             </div>
           </button>
           {mode === "reference_script" ? (
-            <input
-              type="url"
-              placeholder="https://..."
-              value={scriptLink}
-              onChange={(e) => setScriptLink(e.target.value)}
-              disabled={busy}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                fontSize: 13,
-                borderRadius: 8,
-                border: "1px solid #D1D5DB",
-                boxSizing: "border-box",
-              }}
-            />
+            <>
+              <input
+                type="url"
+                placeholder="脚本链接 https://...（选填，与附件至少一项）"
+                value={scriptLink}
+                onChange={(e) => setScriptLink(e.target.value)}
+                disabled={busy}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  borderRadius: 8,
+                  border: "1px solid #D1D5DB",
+                  boxSizing: "border-box",
+                }}
+              />
+              <input
+                ref={briefFileInputRef}
+                type="file"
+                multiple
+                accept={CHAT_UPLOAD_ACCEPT}
+                style={{ display: "none" }}
+                onChange={handlePickBriefFiles}
+              />
+              <button
+                type="button"
+                disabled={busy || uploading}
+                onClick={() => briefFileInputRef.current?.click()}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  borderRadius: 8,
+                  border: "1px dashed #C7D2FE",
+                  background: "#F5F7FF",
+                  color: "#4338CA",
+                  cursor: busy || uploading ? "not-allowed" : "pointer",
+                }}
+              >
+                {uploading
+                  ? "附件上传中…"
+                  : `上传脚本附件（选填，已选 ${attachments.length}/${MAX_CHAT_ATTACHMENTS}）`}
+              </button>
+              <div style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.45 }}>
+                {CHAT_UPLOAD_FRIENDLY_LABEL}，单个文件≤25MB、单封合计≤25MB，
+                最多 {MAX_CHAT_ATTACHMENTS} 个；确认后随邮件发给红人。
+              </div>
+              {attachments.length > 0 ? (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    marginTop: 2,
+                  }}
+                >
+                  {attachments.map((att, idx) => (
+                    <ChatAttachmentCard
+                      key={`${att.storageKey}-${idx}`}
+                      attachment={att}
+                      variant="composer"
+                      onRemove={() =>
+                        setAttachments((prev) =>
+                          prev.filter((_, i) => i !== idx)
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <button
@@ -2330,12 +2480,14 @@ function ExecutionProgressRow({
   precheckApproveQuote,
   executionUsernameSet,
   highlightUsername,
+  commentAnalysis = null,
 }) {
   const [scriptContentExpanded, setScriptContentExpanded] = React.useState(false);
   const [communicationExpanded, setCommunicationExpanded] = React.useState(false);
   const [contactProfileExpanded, setContactProfileExpanded] = React.useState(false);
   const [contactReasonExpanded, setContactReasonExpanded] = React.useState(true);
   const [pendingReasonExpanded, setPendingReasonExpanded] = React.useState(true);
+  const [commentAnalysisExpanded, setCommentAnalysisExpanded] = React.useState(true);
   const [counterAmount, setCounterAmount] = React.useState("");
   const [counterCurrency, setCounterCurrency] = React.useState("USD");
   const [counterReason, setCounterReason] = React.useState("");
@@ -2577,14 +2729,18 @@ function ExecutionProgressRow({
     fallbackCurrency: item.currency,
   })?.amount ?? null;
   const viewsNumForEcpm = avgViewsFromSnapshot(item);
-  const ecpmDisplay =
+  const medianViewsNumForEcpm = medianViewsFromSnapshot(item);
+  const currencyForEcpm = item.currency || "USD";
+  // 两个 eCPM：平均数侧历史字段 item.ecpm 优先（老数据保证口径不变），中位数侧恒按中位播放计算
+  const ecpmAvgDisplay =
     item.ecpm != null && item.ecpm !== ""
       ? String(item.ecpm)
-      : formatEcpmFromFlatAndViews(
-          flatUsd,
-          viewsNumForEcpm,
-          item.currency || "USD"
-        );
+      : formatEcpmFromFlatAndViews(flatUsd, viewsNumForEcpm, currencyForEcpm);
+  const ecpmMedianDisplay = formatEcpmFromFlatAndViews(
+    flatUsd,
+    medianViewsNumForEcpm,
+    currencyForEcpm
+  );
 
   const quoteNegotiation = Array.isArray(item.quoteNegotiation)
     ? item.quoteNegotiation
@@ -2734,6 +2890,7 @@ function ExecutionProgressRow({
     <div id={rowDomId} style={cardStyle}>
       <ApproveQuoteContentBriefModal
         open={approveBriefOpen}
+        campaignId={campaignId}
         influencerLabel={username ? `@${String(username).replace(/^@/, "")}` : ""}
         busy={busy}
         chargePreview={approveChargePreview}
@@ -2792,7 +2949,11 @@ function ExecutionProgressRow({
         <ExecutionProgressLastReplyTime at={item.lastInboundReplyAt} />
       ) : null}
 
-      <ExecutionProgressMetricsLine item={item} />
+      <ExecutionProgressMetricsLine
+        item={item}
+        commentAnalysis={commentAnalysis}
+        showCommentMetrics={stageKey === "pendingPrice"}
+      />
 
       {stageKey === "contacted" && (
         <>
@@ -2843,6 +3004,15 @@ function ExecutionProgressRow({
             onToggle={setPendingReasonExpanded}
             useMarkdown
           />
+          {commentAnalysis?.analysisSummary ? (
+            <ExecutionProgressCollapsibleRow
+              label="评论数据分析"
+              text={commentAnalysis.analysisSummary}
+              expanded={commentAnalysisExpanded}
+              onToggle={setCommentAnalysisExpanded}
+              useMarkdown
+            />
+          ) : null}
           {labelRow(
             `${item.quoteOrigin === "commerce_profile_estimate" ? "系统建议价" : "固定费"} (${item.currency || "USD"})`,
             flatUsd != null && flatUsd !== ""
@@ -2881,7 +3051,8 @@ function ExecutionProgressRow({
               品牌已同意并扣款，等待红人确认本次合作和价格。
             </div>
           ) : null}
-          {labelRow("eCPM", ecpmDisplay)}
+          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
+          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
           {deliverablesRow()}
 
           {canApproveReject && (
@@ -3088,14 +3259,18 @@ function ExecutionProgressRow({
       {(stageKey === "pendingShippingAddress" ||
         stageKey === "pendingSample" ||
         stageKey === "pendingDraft") && (
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合作价格</span>
-          <span style={{ flex: 1, wordBreak: "break-word" }}>
-            {flatUsd != null && flatUsd !== ""
-              ? `${Number(flatUsd)} ${item.currency || "USD"}${ecpmDisplay && ecpmDisplay !== "—" ? ` · eCPM ${ecpmDisplay}` : ""}`
-              : "—"}
-          </span>
-        </div>
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合作价格</span>
+            <span style={{ flex: 1, wordBreak: "break-word" }}>
+              {flatUsd != null && flatUsd !== ""
+                ? `${Number(flatUsd)} ${item.currency || "USD"}`
+                : "—"}
+            </span>
+          </div>
+          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
+          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
+        </>
       )}
       {(stageKey === "pendingShippingAddress" ||
         stageKey === "pendingSample" ||
@@ -3230,9 +3405,11 @@ function ExecutionProgressRow({
           {labelRow(
             "合作价格",
             flatUsd != null && flatUsd !== ""
-              ? `${Number(flatUsd)} ${item.currency || "USD"}${ecpmDisplay && ecpmDisplay !== "—" ? ` · eCPM ${ecpmDisplay}` : ""}`
+              ? `${Number(flatUsd)} ${item.currency || "USD"}`
               : "—"
           )}
+          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
+          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
           {deliverablesRow()}
           <ExecutionProgressPublishedVideos item={item} />
         </>
@@ -3347,6 +3524,8 @@ export default function HomePage() {
   const [pendingPriceSearchBusy, setPendingPriceSearchBusy] = useState(false);
   const [pendingPriceSearchMessage, setPendingPriceSearchMessage] = useState("");
   const pendingPriceSearchInputRef = React.useRef(null);
+  // 评论数据分析（LLM）：key = "platform:username"
+  const [commentAnalysisMap, setCommentAnalysisMap] = useState({});
   const pendingFocusExecutionUsernameRef = useRef(null);
   const [executionLocateState, setExecutionLocateState] = useState(null); // { status, handle, message? }：点击特殊请求红人后的定位状态
   const executionLocateStageRef = useRef(null); // 定位中正在加载的阶段；期间跳过正常首屏/翻页加载，避免并发覆盖
@@ -4337,6 +4516,39 @@ export default function HomePage() {
       executionCampaignSessionRef.current = currentSessionId;
     }
   }, [resolvedCampaignId, currentSessionId]);
+
+  // 评论数据分析：随 campaign 切换拉取一次（只读，缺失时不显示）
+  useEffect(() => {
+    if (!resolvedCampaignId) {
+      setCommentAnalysisMap({});
+      return;
+    }
+    const cid = resolvedCampaignId;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${cid}/comment-analysis`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (controller.signal.aborted || resolvedCampaignIdRef.current !== cid) return;
+        if (!res.ok || !data?.success) return;
+        const map = {};
+        for (const [platform, byUser] of Object.entries(data.analyses || {})) {
+          for (const [name, analysis] of Object.entries(byUser || {})) {
+            map[`${platform}:${String(name).toLowerCase()}`] = analysis;
+          }
+        }
+        setCommentAnalysisMap(map);
+      } catch (e) {
+        if (e?.name !== "AbortError") {
+          console.warn("[HomePage] 获取评论数据分析失败:", e?.message || e);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [resolvedCampaignId]);
 
   useEffect(() => {
     if (!resolvedCampaignId) return;
@@ -6245,23 +6457,6 @@ export default function HomePage() {
     }
   }
 
-  /** 上传前校验单个文件（类型 / 体积），返回错误文案或 null。 */
-  function validateChatAttachmentFile(file) {
-    const name = String(file?.name || "");
-    if (isVideoFileName(name)) {
-      return `${name}：视频请改用链接方式发送——先上传到 YouTube / Google Drive / Dropbox，再把链接粘贴到消息里。`;
-    }
-    if (!isChatUploadFileName(name)) {
-      return `${name}：仅支持 ${CHAT_UPLOAD_EXTENSIONS_LABEL}`;
-    }
-    const maxBytes = maxBytesForFileName(name);
-    if (typeof file.size === "number" && file.size > maxBytes) {
-      const label = isImageFileName(name) ? "图片" : "文件";
-      return `${name}：${label}超过 ${formatFileSize(maxBytes)} 上限`;
-    }
-    return null;
-  }
-
   /** 批量上传聊天附件：单封最多 MAX_ATTACHMENTS_PER_MESSAGE 个，部分失败不影响已成功的。 */
   async function uploadChatAttachmentFiles(rawFiles) {
     // 必须先快照成普通数组：input.files / dataTransfer.files 是实时列表，
@@ -6277,28 +6472,11 @@ export default function HomePage() {
       return;
     }
 
-    const slots = MAX_ATTACHMENTS_PER_MESSAGE - pendingChatAttachments.length;
-    if (slots <= 0) {
-      window.alert(`单封消息最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件。`);
-      return;
-    }
-
-    const accepted = [];
-    const rejected = [];
-    for (const file of files) {
-      const invalidReason = validateChatAttachmentFile(file);
-      if (invalidReason) {
-        rejected.push(invalidReason);
-        continue;
-      }
-      if (accepted.length >= slots) {
-        rejected.push(
-          `${file.name}：单封最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件，已超出`
-        );
-        continue;
-      }
-      accepted.push(file);
-    }
+    const { accepted, rejected } = pickAcceptableAttachments(
+      files,
+      pendingChatAttachments,
+      MAX_ATTACHMENTS_PER_MESSAGE
+    );
     if (rejected.length) window.alert(rejected.join("\n"));
     if (!accepted.length) return;
 
@@ -6306,22 +6484,7 @@ export default function HomePage() {
     const uploaded = [];
     try {
       for (const file of accepted) {
-        const fd = new FormData();
-        fd.set("file", file);
-        const res = await fetch(
-          `/api/sessions/${encodeURIComponent(currentSessionId)}/chat-attachments`,
-          { method: "POST", body: fd, credentials: "include" }
-        );
-        const data = await res.json();
-        if (!data?.success) {
-          throw new Error(`${file.name}：${data?.error || "上传失败"}`);
-        }
-        uploaded.push({
-          type: "chat_attachment",
-          name: data.fileName || file.name,
-          storageKey: data.storageKey,
-          sizeBytes: file.size ?? data.sizeBytes,
-        });
+        uploaded.push(await uploadChatAttachmentFile(currentSessionId, file));
       }
     } catch (err) {
       window.alert(err?.message || String(err));
@@ -9485,10 +9648,7 @@ export default function HomePage() {
                             ref={importListFileInputRef}
                             type="file"
                             multiple
-                            accept={CHAT_UPLOAD_EXTENSIONS_LABEL.replace(
-                              /\s*\/\s*/g,
-                              ","
-                            )}
+                            accept={CHAT_UPLOAD_ACCEPT}
                             style={{ display: "none" }}
                             onChange={handleInfluencerListFileChange}
                           />
@@ -9497,7 +9657,7 @@ export default function HomePage() {
                             className="bin-chat-composer__icon-btn"
                             disabled={importListUploading || loading}
                             onClick={() => importListFileInputRef.current?.click()}
-                            title={`上传附件（${CHAT_UPLOAD_EXTENSIONS_LABEL}，最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个；视频请发链接）`}
+                            title={`上传附件（${CHAT_UPLOAD_FRIENDLY_LABEL}，最多 ${MAX_CHAT_ATTACHMENTS} 个；单文件≤25MB、单封合计≤25MB）`}
                             aria-label="上传附件"
                           >
                             {importListUploading ? (
@@ -10390,6 +10550,7 @@ export default function HomePage() {
                                             executionUsernameSet={executionUsernameSet}
                                             highlightUsername={highlightExecutionUsername}
                                             unreadCount={unreadCardCount(item)}
+                                            commentAnalysis={resolveCommentAnalysis(commentAnalysisMap, item)}
                                           />
                                         ))
                                       )
@@ -10410,6 +10571,7 @@ export default function HomePage() {
                                           executionUsernameSet={executionUsernameSet}
                                           highlightUsername={highlightExecutionUsername}
                                           unreadCount={unreadCardCount(item)}
+                                          commentAnalysis={resolveCommentAnalysis(commentAnalysisMap, item)}
                                         />
                                       ))
                                     )}
