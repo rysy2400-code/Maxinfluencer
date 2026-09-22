@@ -805,7 +805,6 @@ async function handleAskInfluencerSpecialRequest(eventRow, payload) {
     }
   );
   const outboundLanguage = resolveCommunicationLanguage({
-    replyLanguage: languageRecord?.communicationLanguage || null,
     bioLanguage: languageRecord?.bioLanguage || null,
     bioLanguageConfidence: languageRecord?.bioLanguageConfidence ?? null,
   });
@@ -1377,7 +1376,6 @@ async function handleAdvertiserExecutionFollowup(eventRow, payload) {
     platformInfluencerId
   ).catch(() => null);
   const followupLanguage = resolveCommunicationLanguage({
-    replyLanguage: followupLanguageRecord?.communicationLanguage || null,
     bioLanguage: followupLanguageRecord?.bioLanguage || null,
     bioLanguageConfidence: followupLanguageRecord?.bioLanguageConfidence ?? null,
   });
