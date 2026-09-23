@@ -148,6 +148,10 @@ async function finalizeOne({ platform, username, sample }) {
   });
   const llm = normalizeLlmResult(llmRaw);
   if (!llm) return { status: "failed", error: "llm_parse_failed", videos, comments, stats };
+  // 双保险：归一化后仍无有效内容则判失败（不写主档，下轮重试）
+  if (llm.qualityCommentRatio == null && !String(llm.summary || "").trim()) {
+    return { status: "failed", error: "llm_empty_result", videos, comments, stats };
+  }
   if (llm.languageCounts) {
     const sum = Object.values(llm.languageCounts).reduce((s, n) => s + n, 0);
     const promptSize = llmSampleComments(comments).length;
