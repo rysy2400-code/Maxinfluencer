@@ -271,6 +271,8 @@ function SidebarAccountMenu({
   showBillingMenu,
   onRecharge,
   onLogout,
+  showAboutMenu,
+  onAbout,
   onCreateAccount,
   onTopUp,
   switchPanelOpen,
@@ -604,6 +606,30 @@ function SidebarAccountMenu({
           >
             充值
           </button>
+          {showAboutMenu ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAbout();
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                width: "100%",
+                padding: "8px 12px",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                textAlign: "left",
+                color: "#111827",
+                fontSize: 13,
+              }}
+            >
+              关于我们
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -3620,6 +3646,7 @@ export default function HomePage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [rechargeModalOpen, setRechargeModalOpen] = useState(false);
+  const [aboutModalOpen, setAboutModalOpen] = useState(false);
   const [billingPanelOpen, setBillingPanelOpen] = useState(false);
   const [adminAccountPanelOpen, setAdminAccountPanelOpen] = useState(false);
   const [adminAccountPanelTab, setAdminAccountPanelTab] = useState("create");
@@ -9186,6 +9213,11 @@ export default function HomePage() {
                 setAccountMenuOpen(false);
                 setRechargeModalOpen(true);
               }}
+              showAboutMenu={!!authUser?.isAdmin}
+              onAbout={() => {
+                setAccountMenuOpen(false);
+                setAboutModalOpen(true);
+              }}
               onLogout={() => {
                 setAccountMenuOpen(false);
                 void handleLogout();
@@ -11177,6 +11209,110 @@ export default function HomePage() {
       )}
 
       <AccountBillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} />
+      {aboutModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(255, 255, 255, 0.65)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+          onClick={() => setAboutModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-labelledby="about-modal-title"
+            style={{
+              width: "100%",
+              maxWidth: 460,
+              background: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+              borderRadius: 14,
+              padding: "28px 24px",
+              boxShadow:
+                "0 0 0 1px rgba(15, 23, 42, 0.04), 0 12px 40px rgba(15, 23, 42, 0.08)",
+              boxSizing: "border-box",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              id="about-modal-title"
+              style={{
+                color: "#111827",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 18,
+                letterSpacing: "-0.02em",
+              }}
+            >
+              关于我们
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {[
+                { label: "公司名字", value: "深圳市咩嘻科技有限公司" },
+                {
+                  label: "公司业务",
+                  value: "基于ai agent帮助广告主实现红人营销业务全自动化",
+                },
+                {
+                  label: "公司注册地址",
+                  value:
+                    "深圳市南山区粤海街道科技园社区科苑路8号讯美科技广场3号楼14195",
+                },
+                { label: "公司纳税识别号", value: "91440300MAEUTDFL0Y" },
+              ].map((item) => (
+                <div key={item.label}>
+                  <div
+                    style={{
+                      color: "#9CA3AF",
+                      fontSize: 12,
+                      marginBottom: 4,
+                      letterSpacing: "0.02em",
+                    }}
+                  >
+                    {item.label}
+                  </div>
+                  <div
+                    style={{
+                      color: "#111827",
+                      fontSize: 14,
+                      lineHeight: 1.55,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {item.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setAboutModalOpen(false)}
+              style={{
+                width: "100%",
+                marginTop: 24,
+                padding: "11px 12px",
+                borderRadius: 10,
+                border: "1px solid #E5E7EB",
+                background: "#FFFFFF",
+                color: "#111827",
+                fontSize: 14,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
       <AdminAccountPanel
         open={adminAccountPanelOpen && !!authUser?.isAdmin}
         initialTab={adminAccountPanelTab}
