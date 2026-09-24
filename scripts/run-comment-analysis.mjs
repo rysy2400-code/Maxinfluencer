@@ -55,6 +55,47 @@ const TT_ENDPOINT = process.env.CDP_ENDPOINT_TIKTOK || "http://127.0.0.1:9222";
 const IG_ENDPOINT = process.env.CDP_ENDPOINT_INSTAGRAM || "http://127.0.0.1:9223";
 const PLATFORMS = platformFilter.length ? platformFilter : ["tiktok", "instagram"];
 
+// 请求节流 + 软限流冷却
+// TikTok 连续请求约 60-80 次后会返回空（软限流），需要放慢并自动冷却。
+const TT_GAP_MS = Math.max(0, Number(process.env.COMMENT_ANALYSIS_TT_GAP_MS || 900));
+const IG_GAP_MS = Math.max(0, Number(process.env.COMMENT_ANALYSIS_IG_GAP_MS || 600));
+const TT_COOLDOWN_MS = Math.max(0, Number(process.env.COMMENT_ANALYSIS_TT_COOLDOWN_MS || 120_000));
+const IG_COOLDOWN_MS = Math.max(0, Number(process.env.COMMENT_ANALYSIS_IG_COOLDOWN_MS || 600_000));
+
+/** 判定失败是否属于"被限流"（据 symptom 判定，便于自动冷却） */
+function isRateLimited(platform, error) {
+  const e = String(error || "");
+  if (platform === "instagram") {
+    return /http_400|请登录|限流|rate.?limit|clips\/user/i.test(e);
+  }
+  return /no_comments_collected|signed fetch empty|items=0|0 视频/i.test(e);
+}
+
+/**
+ * 浏览器层资源拦截：abort 掉 image/media/font，直接省流量。
+ * 覆盖代理规则拦不到的场景（直连端口、未列入规则的 CDN 域名）。
+ */
+async function installResourceBlocking(page) {
+  if (!page) return;
+  try {
+    if (typeof page.enableLiteResourceBlocker === "function") {
+      await page.enableLiteResourceBlocker(["image", "media", "font"]);
+      return;
+    }
+    if (typeof page.route === "function") {
+      await page.route("**/*", (route) => {
+        const t = route.request()?.resourceType?.();
+        if (t === "image" || t === "media" || t === "font") {
+          return route.abort().catch(() => {});
+        }
+        return route.continue().catch(() => {});
+      });
+    }
+  } catch {
+    /* 拦截失败不影响主流程 */
+  }
+}
+
 /** 万兴科技（Wondershare）旗下品牌关键词 */
 const WONDERSHARE_KEYWORDS = [
   "Wondershare",
@@ -125,9 +166,9 @@ async function collectFor({ platform, page, username }) {
   if (platform === "tiktok") {
     const secUid = await resolveTiktokSecUid(page, username);
     if (!secUid) return { error: "secuid_unresolved" };
-    return collectTikTokSample({ page, username, secUid, maxVideos });
+    return collectTikTokSample({ page, username, secUid, maxVideos, gapMs: TT_GAP_MS });
   }
-  const sample = await collectInstagramSample({ page, username, maxVideos });
+  const sample = await collectInstagramSample({ page, username, maxVideos, gapMs: IG_GAP_MS });
   return sample.error ? { error: sample.error } : sample;
 }
 
@@ -240,6 +281,7 @@ async function main() {
     );
     const { page } = await acquireTiktokCdpPage(TT_ENDPOINT, {});
     await bootstrapTiktokWebSession(page);
+    await installResourceBlocking(page);
     pages.tiktok = page;
   }
   if (byPlatform.instagram.length) {
@@ -247,6 +289,7 @@ async function main() {
       "../lib/tools/influencer-functions/instagram/instagram-direct-fetch.js"
     );
     igSession = await acquireInstagramApiSession(null, { endpointKey: IG_ENDPOINT });
+    await installResourceBlocking(igSession.page);
     pages.instagram = igSession.page;
   }
 
@@ -272,6 +315,10 @@ async function main() {
   };
 
   const inflight = [];
+  /** 平台级冷却截止时间（被限流后暂停该平台） */
+  const cooldownUntil = {};
+  /** 本轮已判定被限流的平台：剩余项直接跳过（不写库，下轮重试） */
+  const blockedForRun = {};
   const drainOldest = async () => {
     const job = inflight.shift();
     const rec = await job;
@@ -282,6 +329,18 @@ async function main() {
   for (const r of queue) {
     const platform = String(r.platform || "").toLowerCase();
     const page = pages[platform];
+
+    // 平台级冷却：被限流后先等一会儿再继续同一平台
+    if (blockedForRun[platform]) {
+      console.log(`  [skip] ${platform} 本轮已被限流，跳过 @${r.username}（下轮重试）`);
+      continue;
+    }
+    const waitMs = (cooldownUntil[platform] || 0) - Date.now();
+    if (waitMs > 0) {
+      console.log(`  [cooldown] ${platform} 冷却中，等待 ${Math.round(waitMs / 1000)}s`);
+      await sleep(waitMs);
+    }
+
     const c0 = Date.now();
     let sample = null;
     let collectError = null;
@@ -289,12 +348,23 @@ async function main() {
       sample = page ? await collectFor({ platform, page, username: r.username }) : null;
       if (!page) collectError = "no_page_for_platform";
       else if (sample?.error) collectError = sample.error;
+      else if (!sample?.comments?.length) collectError = "no_comments_collected";
     } catch (e) {
       collectError = String(e?.message || e).slice(0, 200);
     }
     const collectSec = ((Date.now() - c0) / 1000).toFixed(1);
 
     if (collectError || !sample) {
+      // 命中限流特征 → 给该平台设冷却，避免继续硬打
+      if (isRateLimited(platform, collectError)) {
+        const cd = platform === "tiktok" ? TT_COOLDOWN_MS : IG_COOLDOWN_MS;
+        if (cd > 0) {
+          blockedForRun[platform] = true;
+          console.log(
+            `  [cooldown] ${platform} 命中限流（${String(collectError).slice(0, 40)}），本轮跳过该平台剩余项`
+          );
+        }
+      }
       records.push({
         campaignId: r.campaign_id,
         platform,
