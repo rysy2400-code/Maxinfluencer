@@ -638,8 +638,12 @@ async function handleOutboundEmails(decision, event, executions) {
     });
     const fromAccount = ctx.fromAccount;
 
-    const subject =
-      (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
+    // 续线程时一律使用线程主题（Re: 第一封的实际主题），
+    // 避免 LLM 另起主题导致 Gmail 等客户端把对话拆成两个会话；
+    // 只有在没有可续线程（无 inReplyTo）时才允许 LLM 指定主题。
+    const subject = ctx.inReplyTo
+      ? ctx.subjectForSend
+      : (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
     const body = email.body || email.bodyText || "";
     const inboundMessageId = email.inReplyTo || event.message_id || null;
     const traceId = buildTraceIdFromInboundMessageId(inboundMessageId);
