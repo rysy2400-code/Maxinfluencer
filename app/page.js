@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   TAB_STORAGE_KEYS,
   readTabItem,
@@ -103,6 +110,10 @@ function BinLogo({ size = 24 }) {
 }
 
 // 自适应高度的 textarea Hook：根据内容自动调整高度，最多不超过 maxHeight
+// SSR 安全版 useLayoutEffect：服务端无 layout 概念，退化为 useEffect
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
 function useAutoResizeTextArea(value, maxHeight = 220) {
   const ref = useRef(null);
 
@@ -3592,6 +3603,94 @@ export default function HomePage() {
   const executionInfiniteSentinelRef = useRef(null);
   const analyzedInfiniteSentinelRef = useRef(null);
   const analyzedExcludedInfiniteSentinelRef = useRef(null);
+  // 卡片操作（同意/拒绝/撤销拒绝/通过草稿/反馈/确认寄样）后保持右栏列表滚动位置
+  const executionScrollAnchorRef = useRef(null); // { scrollTop, cardId, cardOffset }
+  const executionScrollAnchorTimerRef = useRef(null);
+
+  /**
+   * 记录右栏卡片列表的滚动锚点。
+   * 规则：以「被操作卡片之后的第一张卡片」为锚（被操作卡片是最后一张时退化为前一张），
+   * 目标屏幕位置＝被操作卡片原来的位置，这样卡片消失后后面的卡片顶上来、视线停在原处。
+   */
+  const rememberExecutionListScroll = useCallback((influencerId) => {
+    if (typeof window === "undefined") return;
+    const container = executionProgressListRef.current;
+    if (!container) return;
+    const anchor = { scrollTop: container.scrollTop, cardId: null, cardOffset: null };
+    const handle = String(influencerId || "").trim();
+    if (handle) {
+      const rowEl = document.getElementById(`execution-row-${handle}`);
+      if (rowEl && container.contains(rowEl)) {
+        const containerTop = container.getBoundingClientRect().top;
+        const rowOffset = rowEl.getBoundingClientRect().top - containerTop;
+        const siblings = Array.from(
+          container.querySelectorAll('[id^="execution-row-"]')
+        );
+        const index = siblings.indexOf(rowEl);
+        const nextEl = index >= 0 ? siblings[index + 1] : null;
+        const prevEl = index > 0 ? siblings[index - 1] : null;
+        const targetEl = nextEl || prevEl;
+        if (targetEl?.id) {
+          anchor.cardId = targetEl.id;
+          // next：它顶到被操作卡片的位置；prev：它自身位置不变
+          anchor.cardOffset =
+            targetEl === nextEl
+              ? rowOffset
+              : targetEl.getBoundingClientRect().top - containerTop;
+        }
+      }
+    }
+    executionScrollAnchorRef.current = anchor;
+    if (executionScrollAnchorTimerRef.current) {
+      window.clearTimeout(executionScrollAnchorTimerRef.current);
+    }
+    // 锚点保留一小段时间，覆盖操作后的几次渲染；结束后清空，
+    // 还原只在 executionStatus 变化的那几次渲染里触发，不会与用户后续手动滚动打架。
+    executionScrollAnchorTimerRef.current = window.setTimeout(() => {
+      executionScrollAnchorRef.current = null;
+      executionScrollAnchorTimerRef.current = null;
+    }, 3000);
+  }, []);
+
+  /** 把右栏卡片列表滚动位置还原到记录的锚点（在 DOM 更新后的布局阶段调用） */
+  const restoreExecutionListScroll = useCallback(() => {
+    const container = executionProgressListRef.current;
+    const anchor = executionScrollAnchorRef.current;
+    if (!container || !anchor) return;
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    let target = anchor.scrollTop;
+    if (anchor.cardId) {
+      const el = document.getElementById(anchor.cardId);
+      if (el && container.contains(el)) {
+        const delta =
+          el.getBoundingClientRect().top -
+          container.getBoundingClientRect().top -
+          anchor.cardOffset;
+        target = container.scrollTop + delta;
+      }
+    }
+    const next = Math.max(0, Math.min(target, maxScrollTop));
+    if (Math.abs(next - container.scrollTop) > 0.5) {
+      container.scrollTop = next;
+    }
+  }, []);
+
+  // 执行进度数据每次更新（卡片操作后的本地就地更新）都在绘制前还原滚动位置，避免看到跳动
+  useIsomorphicLayoutEffect(() => {
+    if (!executionScrollAnchorRef.current) return;
+    restoreExecutionListScroll();
+  }, [executionStatus, restoreExecutionListScroll]);
+
+  // 组件卸载时清掉锚点定时器
+  useEffect(
+    () => () => {
+      if (executionScrollAnchorTimerRef.current) {
+        window.clearTimeout(executionScrollAnchorTimerRef.current);
+        executionScrollAnchorTimerRef.current = null;
+      }
+    },
+    []
+  );
   const [binComputerView, setBinComputerView] = useState("overview"); // 执行阶段：执行总览 / 工作笔记 / 工作实况
   const [workLiveUnreadCount, setWorkLiveUnreadCount] = useState(0); // 工作实况页签未读提醒
   const binComputerViewRef = useRef("overview");
@@ -6013,13 +6112,6 @@ export default function HomePage() {
     };
   }, [resolvedCampaignId, currentSessionId, isExecutionPhaseGlobal]);
 
-  const refreshExecutionStatusQuiet = useCallback(async () => {
-    const cid = resolvedCampaignId;
-    if (!cid) return;
-    const stageKey = activeExecutionStage === "analyzed" ? "contacted" : activeExecutionStage;
-    await loadExecutionStatusPage(stageKey, { campaignId: cid, quiet: true });
-  }, [resolvedCampaignId, activeExecutionStage, loadExecutionStatusPage]);
-
   /** 拉取侧栏未读汇总（每个 session 的聊天未读 + 红人未读红人数） */
   const refreshUnreadSummary = useCallback(async () => {
     if (!authUser) return;
@@ -6233,6 +6325,8 @@ export default function HomePage() {
     async (action, influencerId, payload = {}) => {
       const cid = resolvedCampaignId;
       if (!cid) return;
+      // 操作前先记住右栏列表位置：卡片被移出当前列表后，后面的卡片上移、视线停在原处
+      rememberExecutionListScroll(influencerId);
       setExecPatchingId(influencerId);
       try {
         const res = await fetch(`/api/campaigns/${cid}/execution`, {
@@ -6245,6 +6339,10 @@ export default function HomePage() {
         if (!res.ok || !data.success) throw new Error(data.error || "更新失败");
         setExecutionStatus((prev) => {
           if (!prev?.columns) return prev;
+          // 操作期间用户切了 campaign：丢弃过期结果，避免把这张卡写进另一个 campaign
+          if (prev.campaignId != null && String(prev.campaignId) !== String(cid)) {
+            return prev;
+          }
           const columns = Object.fromEntries(
             Object.entries(prev.columns).map(([key, rows]) => [
               key,
@@ -6350,13 +6448,36 @@ export default function HomePage() {
               0,
               Number(totalByStage.pendingPricePending || 0) - 1
             );
+          } else if (action === "reopenQuote") {
+            // 撤销拒绝：卡片留在「待审核价格」列内，但要从「已拒绝」回到「待审核」
+            totalByStage.pendingPriceRejected = Math.max(
+              0,
+              Number(totalByStage.pendingPriceRejected || 0) - 1
+            );
+            totalByStage.pendingPricePending =
+              Number(totalByStage.pendingPricePending || 0) + 1;
           }
-          return { ...prev, columns, totalByStage };
+          // 卡片操作后不再整列重取：优先用 PATCH 一并返回的权威计数，缺失时退回本地乐观计数
+          const authoritativeTotalByStage =
+            data.totalByStage && typeof data.totalByStage === "object"
+              ? data.totalByStage
+              : null;
+          const nextStatus = {
+            ...prev,
+            columns,
+            totalByStage: authoritativeTotalByStage || totalByStage,
+          };
+          // 本地已就地更新，缓存同步更新，避免切 campaign 再回来时先闪一下旧状态
+          const previousCache = executionCacheRef.current.get(cid);
+          executionCacheRef.current.set(cid, {
+            data: nextStatus,
+            fetchedAtByStage: { ...(previousCache?.fetchedAtByStage || {}) },
+          });
+          return nextStatus;
         });
 
-        // The mutation is complete. Re-fetch only to reconcile with server state;
-        // it must not keep the row controls or confirmation modal busy.
-        void refreshExecutionStatusQuiet();
+        // 不再整列重取：该行由上面的本地更新 + PATCH 返回结果就地更新，列表不动、位置不跳。
+        // 其余汇总信息依赖自然刷新点（切 campaign / 重新进入页面 / 加载更多）。
         if (action === "approveQuote") {
           void refreshAuthUser();
         }
@@ -6369,7 +6490,11 @@ export default function HomePage() {
         setExecPatchingId(null);
       }
     },
-    [resolvedCampaignId, refreshExecutionStatusQuiet, refreshAuthUser]
+    [
+      resolvedCampaignId,
+      refreshAuthUser,
+      rememberExecutionListScroll,
+    ]
   );
 
   const exportExecutionStage = useCallback(
