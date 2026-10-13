@@ -13,6 +13,25 @@ import {
   mergePublishedVideos,
   buildLegacyPublishedFields,
 } from "../../../../../lib/execution/published-videos.js";
+import { loadExecutionStageCounts } from "../../../../../lib/db/execution-counts-cache.js";
+
+/**
+ * 卡片操作成功后不再让前端整列重取，这里把权威的各 Tab 计数一并返回，
+ * 前端据此刷新 Tab 数字（失败不影响主流程，前端有本地乐观计数兜底）。
+ * 只算 stage 计数、不扫候选表 JSON：后者在候选量大时可能要几十秒。
+ */
+async function loadCountsForResponse(campaignId) {
+  try {
+    const counts = await loadExecutionStageCounts(campaignId);
+    return { totalByStage: counts?.totalByStage || null };
+  } catch (error) {
+    console.warn(
+      "[Campaign Execution API] 读取执行计数失败（不影响主流程）:",
+      error?.message || error
+    );
+    return { totalByStage: null };
+  }
+}
 
 /**
  * 归一化广告主 Portal 传入的已发布视频：支持 publishedLinks/videos 数组，
@@ -241,11 +260,13 @@ export async function PATCH(req, { params }) {
             { status: 400 }
           );
         }
+        const approveCounts = await loadCountsForResponse(campaignId);
         return NextResponse.json({
           success: true,
           stage: chargeResult.stage,
           chargedAmount: chargeResult.chargedAmount,
           balanceAfter: chargeResult.balanceAfter,
+          totalByStage: approveCounts.totalByStage,
           message: chargeResult.alreadyProcessed ? "已同意报价" : "更新成功",
         });
       }
@@ -474,6 +495,9 @@ export async function PATCH(req, { params }) {
       quoteAppend,
     });
 
+    // 与跟进队列写入并行取权威计数，避免给卡片操作增加额外等待
+    const countsPromise = loadCountsForResponse(campaignId);
+
     try {
       const executionRow = await getExecutionRow(campaignId, influencerId);
       const silentSystemQuoteRejection =
@@ -497,12 +521,14 @@ export async function PATCH(req, { params }) {
       );
     }
 
+    const counts = await countsPromise;
     return NextResponse.json({
       success: true,
       stage,
       quoteEntry: updateResult?.quoteEntry || null,
       flatFeeUsd: updateResult?.flatFeeUsd ?? null,
       currency: updateResult?.currency || null,
+      totalByStage: counts.totalByStage,
       message: "更新成功",
     });
   } catch (error) {
