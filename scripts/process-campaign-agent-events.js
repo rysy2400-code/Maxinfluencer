@@ -32,6 +32,14 @@ import {
 import { influencerEntryDelta } from "../lib/execution/influencer-entry-seq.js";
 import { normalizeDeliverables } from "../lib/execution/deliverables-resolution.js";
 import {
+  commonOptionAmount,
+  mergeQuoteOptions,
+  normalizeQuoteOptions,
+  quoteOptionSignature,
+  resolveDefaultSelectedQuoteOptionId,
+  resolveQuoteOptionsFromRow,
+} from "../lib/execution/quote-options.js";
+import {
   isCompleteShippingInfo,
   normalizeShippingInfo,
 } from "../lib/execution/shipping-info.js";
@@ -135,25 +143,53 @@ function buildAgreedTermsAfterUpdate({
   currentRow,
   flatFee,
   commissionPercent,
+  quoteOptions = null,
+  selectedQuoteOptionId = null,
 }) {
   const existingNegotiation = parseQuoteNegotiationColumn(currentRow?.quote_negotiation);
+  const optionNegotiation = Array.isArray(quoteOptions)
+    ? quoteOptions.map((option) => ({
+        role: "influencer",
+        type: "option",
+        optionId: option.optionId,
+        quoteRoundId: option.quoteRoundId,
+        optionLabel: option.optionLabel,
+        amount: option.amountUsd,
+        currency: option.currency,
+        ...(option.commissionPercent != null
+          ? { commissionPercent: option.commissionPercent }
+          : {}),
+        ...(option.deliverables ? { deliverables: option.deliverables } : {}),
+        at: option.at,
+      }))
+    : [];
   const nextNegotiation =
     flatFee != null && Number.isFinite(Number(flatFee))
       ? [
           ...existingNegotiation,
+          ...optionNegotiation,
           {
             role: "influencer",
             amount: Number(flatFee),
             currency: normalizeCurrencyCode(currentRow?.currency, "USD"),
           },
         ]
-      : existingNegotiation;
+      : [...existingNegotiation, ...optionNegotiation];
+  const currentLastEvent =
+    parseJsonOrObject(currentRow?.last_event) || currentRow?.lastEvent || {};
   return resolveExecutionAgreedTerms(campaign, {
     ...(currentRow || {}),
     flat_fee: flatFee != null ? flatFee : currentRow?.flat_fee,
     quote_negotiation: nextNegotiation,
     commission_percent:
       commissionPercent != null ? commissionPercent : currentRow?.commission_percent,
+    last_event: {
+      ...currentLastEvent,
+      ...(Array.isArray(quoteOptions) ? { quoteOptions } : {}),
+      ...(selectedQuoteOptionId
+        ? { selectedQuoteOptionId }
+        : {}),
+    },
   });
 }
 
@@ -256,6 +292,51 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
   }
   const cur = execRows[0];
   const currentStage = cur.stage || "pending_quote";
+  const currentLastEvent = parseJsonOrObject(cur.last_event) || {};
+  const incomingQuoteOptions = normalizeQuoteOptions(payload.quoteOptions, {
+    sourceEventId: emailEvent.id || payload.sourceEventId || null,
+    sourceMessageId:
+      emailEvent.messageId || payload.sourceMessageId || null,
+    quoteRoundId:
+      payload.quoteRoundId ||
+      `QR-${emailEvent.id || payload.sourceEventId || eventRow.id}`,
+  });
+  const existingQuoteOptions = resolveQuoteOptionsFromRow(cur);
+  const hasExplicitQuoteOptionsState =
+    Array.isArray(currentLastEvent.quoteOptions) &&
+    currentLastEvent.quoteOptions.length > 0;
+  const mergedQuoteOptions = incomingQuoteOptions.length
+    ? mergeQuoteOptions(existingQuoteOptions, incomingQuoteOptions, {
+        replace:
+          payload.replaceQuoteOptions === true ||
+          !hasExplicitQuoteOptionsState,
+      })
+    : existingQuoteOptions;
+  let selectedQuoteOptionId =
+    currentLastEvent.selectedQuoteOptionId || null;
+  const selectedQuoteOption = mergedQuoteOptions.find(
+    (option) => option.optionId === selectedQuoteOptionId
+  );
+  if (!selectedQuoteOption) selectedQuoteOptionId = null;
+  const defaultSelectedQuoteOptionId =
+    resolveDefaultSelectedQuoteOptionId(mergedQuoteOptions);
+  selectedQuoteOptionId =
+    selectedQuoteOptionId || defaultSelectedQuoteOptionId || null;
+  const commonQuoteOption = commonOptionAmount(mergedQuoteOptions);
+  const selectedForPricing =
+    mergedQuoteOptions.find(
+      (option) => option.optionId === selectedQuoteOptionId
+    ) || null;
+  if (mergedQuoteOptions.length) {
+    flatFee =
+      selectedForPricing?.amountUsd ??
+      commonQuoteOption?.amountUsd ??
+      flatFee;
+    commissionPercent =
+      selectedForPricing?.commissionPercent ??
+      commonQuoteOption?.commissionPercent ??
+      commissionPercent;
+  }
 
   const campaignTermsContext = await fetchCampaignTermsContext(campaignId);
   const agreedTerms = buildAgreedTermsAfterUpdate({
@@ -263,6 +344,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     currentRow: cur,
     flatFee,
     commissionPercent,
+    quoteOptions: mergedQuoteOptions,
+    selectedQuoteOptionId,
   });
 
   const resolved = resolveInfluencerAgentUpdate({
@@ -289,14 +372,64 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
   let nextQuoteOrigin = cur.quote_origin || null;
   let negotiation = parseQuoteNegotiationColumn(cur.quote_negotiation);
   let mergedLastEvent = parseJsonOrObject(cur.last_event) || {};
+  const hasIncomingQuoteOptions = incomingQuoteOptions.length > 0;
+
+  if (hasIncomingQuoteOptions && resolved.allowFlatFeeUpdate) {
+    const existingSignatures = new Set(
+      negotiation.map((entry) => quoteOptionSignature(entry)).filter(Boolean)
+    );
+    for (const option of incomingQuoteOptions) {
+      const signature = quoteOptionSignature(option);
+      if (signature && existingSignatures.has(signature)) continue;
+      if (signature) existingSignatures.add(signature);
+      negotiation = [
+        ...negotiation,
+        {
+          role: "influencer",
+          type: "option",
+          optionId: option.optionId,
+          quoteRoundId: option.quoteRoundId,
+          optionLabel: option.optionLabel,
+          amount: option.amountUsd,
+          currency: option.currency,
+          ...(option.commissionPercent != null
+            ? { commissionPercent: option.commissionPercent }
+            : {}),
+          ...(option.deliverables ? { deliverables: option.deliverables } : {}),
+          reason: option.reason,
+          at: option.at,
+          source: "advertiser_agent_event",
+          sourceEventId: option.sourceEventId || eventRow.id,
+        },
+      ];
+    }
+    mergedLastEvent.quoteOptions = mergedQuoteOptions;
+    mergedLastEvent.selectedQuoteOptionId = selectedQuoteOptionId;
+    mergedLastEvent.quoteOptionsUpdatedAt = new Date().toISOString();
+    nextQuoteOrigin = "creator_quote";
+    const pricingOption = selectedForPricing || commonQuoteOption;
+    nextCurrency = normalizeCurrencyCode(
+      pricingOption?.currency || cur.currency,
+      "USD"
+    );
+  }
 
   // 红人级「最新交付结果」：与最新报价同源，写进 quote_negotiation 同一条记录。
   // 报价阶段之外的 deliverables 变更不写入（与固定费/佣金同规则，后续变更走合同 R2）。
   const nextDeliverables = resolved.allowFlatFeeUpdate
-    ? normalizeDeliverables(payload.deliverables)
+    ? normalizeDeliverables(
+        hasIncomingQuoteOptions
+          ? (selectedForPricing || commonQuoteOption)?.deliverables
+          : payload.deliverables
+      )
     : null;
 
-  if (resolved.allowFlatFeeUpdate && flatFee != null && Number.isFinite(Number(flatFee))) {
+  if (
+    resolved.allowFlatFeeUpdate &&
+    !hasIncomingQuoteOptions &&
+    flatFee != null &&
+    Number.isFinite(Number(flatFee))
+  ) {
     const role =
       payload.quoteRole === "advertiser" || payload.fromAdvertiser === true
         ? "advertiser"
@@ -569,6 +702,8 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
         requestedStage === "quote_submitted" && !agreedTerms.isQuoteReady,
       flatFeeUSD: flatFee,
       commissionPercent: agreedTerms.commissionPercent ?? null,
+      quoteOptions: mergedQuoteOptions.length ? mergedQuoteOptions : null,
+      selectedQuoteOptionId: selectedQuoteOptionId || null,
       videoLink,
       publishedVideos: mergedLastEvent.publishedVideos || null,
       draftLink,

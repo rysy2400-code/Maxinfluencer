@@ -1136,6 +1136,12 @@ async function applyDecision(decision, event, executions) {
         promoCode,
         publishedLinks,
       },
+      quoteOptions: Array.isArray(decision?.quoteOptions)
+        ? decision.quoteOptions.filter(
+            (option) => !option?.campaignId || option.campaignId === campaignId
+          )
+        : [],
+      replaceQuoteOptions: decision?.replaceQuoteOptions === true,
       createdAt: new Date().toISOString(),
     };
 
@@ -1183,6 +1189,80 @@ async function applyDecision(decision, event, executions) {
         err
       );
     }
+  }
+}
+
+/**
+ * 报价方案是独立于 stage 的业务事实。即便本轮选择了 special request，
+ * 也必须把结构化方案写入执行记录，否则红人卡片会继续显示旧报价。
+ */
+async function handleQuoteOptions(decision, event, executions) {
+  const options = Array.isArray(decision?.quoteOptions)
+    ? decision.quoteOptions.filter(
+        (option) => option && typeof option === "object"
+      )
+    : [];
+  if (!options.length) return;
+
+  const updateCampaignIds = new Set(
+    (Array.isArray(decision?.updates) ? decision.updates : [])
+      .map((update) => update?.campaignId)
+      .filter(Boolean)
+  );
+  const byCampaign = new Map();
+  for (const option of options) {
+    const exec =
+      (option.campaignId &&
+        executions.find((row) => row.campaignId === option.campaignId)) ||
+      executions[0] ||
+      null;
+    const campaignId = option.campaignId || exec?.campaignId || null;
+    if (!campaignId || updateCampaignIds.has(campaignId)) continue;
+    if (!byCampaign.has(campaignId)) byCampaign.set(campaignId, []);
+    byCampaign.get(campaignId).push(option);
+  }
+
+  for (const [campaignId, campaignOptions] of byCampaign.entries()) {
+    const exec = executions.find((row) => row.campaignId === campaignId) || null;
+    const influencerId = resolveCanonicalInfluencerId({
+      requestedInfluencerId: campaignOptions[0]?.influencerId,
+      event,
+      exec,
+    });
+    const quoteRoundId = `QR-${event.id}`;
+    await createCampaignAgentEvent({
+      campaignId,
+      influencerId,
+      eventType: "execution_update_suggested",
+      payload: {
+        type: "execution_update_suggested",
+        campaignId,
+        influencerId,
+        newStage:
+          exec?.stage === "pending_quote"
+            ? "quote_submitted"
+            : exec?.stage || "quote_submitted",
+        note: "红人提出或更新报价方案，已同步到红人卡片。",
+        quoteRoundId,
+        replaceQuoteOptions: decision?.replaceQuoteOptions === true,
+        quoteOptions: campaignOptions.map((option) => ({
+          ...option,
+          campaignId,
+          quoteRoundId: option.quoteRoundId || quoteRoundId,
+        })),
+        emailEvent: {
+          id: event.id,
+          messageId: event.message_id,
+          subject: event.subject || "",
+          fromEmail: event.from_email,
+          toEmail: event.to_email,
+          bodyText: event.body_text || "",
+        },
+        sourceEventId: event.id,
+        sourceMessageId: event.message_id,
+        createdAt: new Date().toISOString(),
+      },
+    });
   }
 }
 
@@ -1522,6 +1602,23 @@ ${influencerAgentBasePrompt}
         }
       }
     ],
+    "quoteOptions": [
+      {
+        "campaignId": "CAMP-xxx",
+        "influencerId": "7123...",
+        "optionLabel": "Option 1 / 方案1",
+        "flatFeeUSD": 1003,
+        "commissionPercent": 0,
+        "currency": "USD",
+        "deliverables": {
+          "platforms": ["YouTube"],
+          "videoCount": 1,
+          "note": "2-3 minute original Halloween film"
+        },
+        "reason": "红人本轮明确提出的方案说明"
+      }
+    ],
+    "replaceQuoteOptions": false,
     "outboundEmails": [
       {
         "campaignId": "CAMP-xxx",          // 可选，用于绑定某个执行
@@ -1654,6 +1751,13 @@ ${influencerAgentBasePrompt}
   - flatFeeUSD 只能填写与该交付形式匹配的价格，不能因为它最低或最先出现就默认选择第一档；
   - note 中必须写明选中的档位、价格以及用于匹配的 Campaign 交付要求；
   - 如果上下文仍不足以判断具体交付形式，不得填写 flatFeeUSD，也不得创建报价 update。改为在 agentEvents 中返回 type="creator_replied_special_request"、specialRequestStatus="pending_brand"、clarificationType="delivery_requirement"，用 creatorMessage 完整列出红人的报价选项，并在 note 中明确询问广告主补充具体交付要求。
+- 无论本轮是否同时返回 special request，只要红人提出、新增或修改了明确报价，都必须返回顶层 quoteOptions：
+  - 每个方案包含 campaignId、optionLabel、flatFeeUSD、commissionPercent、currency、deliverables、reason；
+  - 同一封邮件中的多个方案全部返回，不要只返回其中一个；
+  - 不要因为 special request 用于向品牌确认条款，就省略 quoteOptions；
+  - 红人只是确认已有方案且金额、佣金、交付结果没有变化时，不重复返回 quoteOptions；
+  - 红人明确新增一个可选方案时，只返回新增方案，系统会保留已有方案并追加；
+  - 红人明确替换整组方案时，额外返回 replaceQuoteOptions=true。
 - 红人明确接受广告主上一轮还价时，flatFeeUSD 填写红人明确接受的金额、commissionPercent 填写对应的佣金比例；该回复会成为新的红人有效报价。
 - **交付结果（deliverables）· 与最新报价同一更新口径**：只要红人在本轮邮件里提到、确认或变更了交付形式（平台、条数、bio link 天数、ad-code 天数、素材授权天数），就必须在本条 updates 里同时返回 deliverables 对象，系统会把它写进 quote_negotiation 中与本次报价同一条记录。
   - platforms：红人明确确认的发布平台，用规范名（TikTok / Instagram / YouTube / Facebook）；范围可能多于或少于 Campaign 配置，以红人确认的为准。若邮件只涉及条数/时效、平台沿用之前已确认的范围，可以省略 platforms，但不得臆造。
@@ -1794,6 +1898,7 @@ ${CONTENT_BRIEF_PRE_APPROVAL_PROMPT_RULES}
   try {
     await applySystemQuoteResponses(decision, event, executions);
     await applyDecision(decision, event, executions);
+    await handleQuoteOptions(decision, event, executions);
     await handleOutboundEmails(decision, event, executions);
     await handleAgentEvents(decision, event, executions);
     await markEventStatus(event.id, "succeeded", null);

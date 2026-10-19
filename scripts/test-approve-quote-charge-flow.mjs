@@ -116,7 +116,9 @@ function installFixtures({ execution, advertiser }) {
 }
 
 function readApprovedTerms(conn) {
-  const raw = conn.calls.executionUpdate?.params?.[1];
+  const raw = conn.calls.executionUpdate?.params?.find(
+    (value) => typeof value === "string" && value.trim().startsWith("{")
+  );
   assert(typeof raw === "string", "stage 更新应写入 last_event JSON");
   return JSON.parse(raw).approvedTerms;
 }
@@ -189,6 +191,75 @@ const ADVERTISER = { balance_amount: 1000, balance_currency: "USD", credit_limit
   assert(result.balanceAfter === 475, "余额扣减正确");
   assert(conn.calls.advertiserUpdates.length === 1, "有固定费才更新余额");
   assert(readApprovedTerms(conn).currency === "USD", "有固定费条款快照带币种");
+}
+
+// 场景 3：多报价方案必须由品牌选择，审批使用选中方案金额与交付结果
+{
+  const quoteOptions = [
+    {
+      optionId: "opt-a",
+      optionLabel: "Option 1",
+      amountUsd: 500,
+      currency: "USD",
+      commissionPercent: 0,
+      deliverables: { platforms: ["YouTube"], videoCount: 1, note: "2-minute film" },
+    },
+    {
+      optionId: "opt-b",
+      optionLabel: "Option 2",
+      amountUsd: 600,
+      currency: "USD",
+      commissionPercent: 0,
+      deliverables: { platforms: ["YouTube"], videoCount: 1, note: "5-minute film" },
+    },
+  ];
+  const execution = {
+    stage: "quote_submitted",
+    flat_fee: 500,
+    commission_percent: 0,
+    currency: "USD",
+    source: "web_search",
+    quote_origin: "creator_quote",
+    tiktok_username: "multi_option",
+    influencer_id: "2",
+    quote_negotiation: quoteOptions.map((option) => ({
+      role: "influencer",
+      amount: option.amountUsd,
+      currency: option.currency,
+      optionId: option.optionId,
+      deliverables: option.deliverables,
+    })),
+    last_event: { quoteOptions },
+  };
+
+  installFixtures({ execution, advertiser: { ...ADVERTISER, balance_amount: 2000 } });
+  const noSelection = await precheckQuoteApproveCharge({
+    campaignId: CAMPAIGN_ID,
+    influencerId: "multi_option",
+    advertiserId: 1,
+  });
+  assert(!noSelection.success, "多方案未选择时预检必须失败");
+  assert(noSelection.code === "quote_option_required", "未选择方案返回明确错误码");
+
+  const selectedExecution = {
+    ...execution,
+    last_event: { quoteOptions, selectedQuoteOptionId: "opt-b" },
+  };
+  const conn = installFixtures({
+    execution: selectedExecution,
+    advertiser: { ...ADVERTISER, balance_amount: 2000 },
+  });
+  const result = await approveQuoteWithCharge({
+    campaignId: CAMPAIGN_ID,
+    influencerId: "multi_option",
+    advertiserId: 1,
+    quoteOptionId: "opt-b",
+  });
+  assert(result.success, `选中多方案后应可同意：${result.message || ""}`);
+  assert(result.chargedAmount === 630, "选中 600 美元方案，扣款应为 630");
+  const approvedTerms = readApprovedTerms(conn);
+  assert(approvedTerms.quoteOptionId === "opt-b", "条款快照必须带选中方案 ID");
+  assert(approvedTerms.deliverables?.note === "5-minute film", "条款快照使用选中方案交付结果");
 }
 
 console.log("✅ test-approve-quote-charge-flow.mjs passed");

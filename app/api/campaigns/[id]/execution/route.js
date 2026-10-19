@@ -14,6 +14,7 @@ import {
   buildLegacyPublishedFields,
 } from "../../../../../lib/execution/published-videos.js";
 import { loadExecutionStageCounts } from "../../../../../lib/db/execution-counts-cache.js";
+import { resolveQuoteOptionsFromRow } from "../../../../../lib/execution/quote-options.js";
 
 /**
  * 卡片操作成功后不再让前端整列重取，这里把权威的各 Tab 计数一并返回，
@@ -86,7 +87,7 @@ function normalizePortalPublishedLinks(payload = {}, fallback = {}) {
  * PATCH /api/campaigns/[id]/execution
  * 更新红人执行阶段（同意价格、寄样、通过草稿等）
  * Body: { influencerId, action, payload? }
- * action: precheckApproveQuote | submitQuote | reopenQuote | approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo | updatePublished | updateShipping | updateDraft
+ * action: selectQuoteOption | precheckApproveQuote | submitQuote | reopenQuote | approveQuote | rejectQuote | confirmShip | approveDraft | rejectDraft | publishVideo | updatePublished | updateShipping | updateDraft
  */
 export async function PATCH(req, { params }) {
   try {
@@ -141,6 +142,7 @@ export async function PATCH(req, { params }) {
           campaignId,
           influencerId,
           advertiserId: auth.advertiserId,
+          quoteOptionId: payload.quoteOptionId || null,
         });
         if (!precheck.success) {
           return NextResponse.json(
@@ -161,6 +163,46 @@ export async function PATCH(req, { params }) {
           balanceAfter: precheck.balanceAfter,
           influencerAmount: precheck.influencerAmount,
           platformFeeAmount: precheck.platformFeeAmount,
+        });
+      }
+      case "selectQuoteOption": {
+        const existing = await getExecutionRow(campaignId, influencerId);
+        if (!existing) {
+          return NextResponse.json(
+            { success: false, error: "红人执行记录不存在" },
+            { status: 404 }
+          );
+        }
+        if (existing.stage !== "quote_submitted") {
+          return NextResponse.json(
+            { success: false, error: "当前阶段不可选择报价方案" },
+            { status: 409 }
+          );
+        }
+        const optionId = String(payload.quoteOptionId || "").trim();
+        const option = resolveQuoteOptionsFromRow(existing).find(
+          (item) => item.optionId === optionId
+        );
+        if (!option) {
+          return NextResponse.json(
+            { success: false, error: "所选报价方案已失效或不存在，请刷新后重新选择" },
+            { status: 409 }
+          );
+        }
+        const selectedAt = new Date().toISOString();
+        await updateExecutionStage(campaignId, influencerId, {
+          lastEvent: {
+            selectedQuoteOptionId: option.optionId,
+            selectedQuoteOptionAt: selectedAt,
+            selectedQuoteOptionBy: auth.advertiserUserId || null,
+          },
+        });
+        return NextResponse.json({
+          success: true,
+          selectedQuoteOptionId: option.optionId,
+          selectedQuoteOption: option,
+          selectedQuoteOptionAt: selectedAt,
+          message: "报价方案已选择",
         });
       }
       case "submitQuote": {
@@ -256,7 +298,11 @@ export async function PATCH(req, { params }) {
         });
         if (!chargeResult.success) {
           return NextResponse.json(
-            { success: false, error: chargeResult.message },
+            {
+              success: false,
+              error: chargeResult.message,
+              code: chargeResult.code || null,
+            },
             { status: 400 }
           );
         }

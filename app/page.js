@@ -2544,12 +2544,53 @@ function ExecutionProgressRow({
   const platform = resolveInfluencerPlatform(item);
   const profileUrl = buildInfluencerProfileUrl(item);
   const busy = execPatchingId === username;
+  const rawQuoteOptions = Array.isArray(item.quoteOptions)
+    ? item.quoteOptions.filter(
+        (option) =>
+          option &&
+          option.amountUsd != null &&
+          Number.isFinite(Number(option.amountUsd))
+      )
+    : [];
+  const fallbackQuoteAmount =
+    item.flatFeeUsd ?? item.flat_fee ?? item.flatFeeUSD ?? null;
+  const quoteOptions =
+    rawQuoteOptions.length > 0
+      ? rawQuoteOptions
+      : fallbackQuoteAmount != null && Number.isFinite(Number(fallbackQuoteAmount))
+        ? [
+            {
+              optionId:
+                item.selectedQuoteOptionId || "legacy-option-01",
+              optionLabel: "方案1",
+              amountUsd: Number(fallbackQuoteAmount),
+              currency: item.currency || "USD",
+              commissionPercent: item.commissionPercent ?? null,
+              deliverables: item.latestDeliverables || null,
+            },
+          ]
+        : [];
+  const selectedQuoteOptionId =
+    item.selectedQuoteOptionId ||
+    item.selectedQuoteOption?.optionId ||
+    (quoteOptions.length === 1 ? quoteOptions[0].optionId : null);
+  const quoteSelectionRequired =
+    item.stage === "quote_submitted" && quoteOptions.length > 1;
+  const canSubmitApprovedQuote =
+    !quoteSelectionRequired || Boolean(selectedQuoteOptionId);
 
   const handleAgreeClick = React.useCallback(async () => {
     if (typeof precheckApproveQuote !== "function") return;
+    if (!canSubmitApprovedQuote) {
+      window.alert("请先选择一个报价方案");
+      return;
+    }
     setApprovePrechecking(true);
     try {
-      const result = await precheckApproveQuote(username);
+      const result = await precheckApproveQuote(
+        username,
+        selectedQuoteOptionId || null
+      );
       if (!result?.ok) {
         window.alert(result?.error || "无法同意该报价");
         return;
@@ -2562,7 +2603,12 @@ function ExecutionProgressRow({
     } finally {
       setApprovePrechecking(false);
     }
-  }, [precheckApproveQuote, username]);
+  }, [
+    canSubmitApprovedQuote,
+    precheckApproveQuote,
+    selectedQuoteOptionId,
+    username,
+  ]);
 
   const recommendReasonRaw =
     item.analysisSummary ||
@@ -2767,17 +2813,6 @@ function ExecutionProgressRow({
   })?.amount ?? null;
   const viewsNumForEcpm = avgViewsFromSnapshot(item);
   const medianViewsNumForEcpm = medianViewsFromSnapshot(item);
-  const currencyForEcpm = item.currency || "USD";
-  // 两个 eCPM：平均数侧历史字段 item.ecpm 优先（老数据保证口径不变），中位数侧恒按中位播放计算
-  const ecpmAvgDisplay =
-    item.ecpm != null && item.ecpm !== ""
-      ? String(item.ecpm)
-      : formatEcpmFromFlatAndViews(flatUsd, viewsNumForEcpm, currencyForEcpm);
-  const ecpmMedianDisplay = formatEcpmFromFlatAndViews(
-    flatUsd,
-    medianViewsNumForEcpm,
-    currencyForEcpm
-  );
 
   const quoteNegotiation = Array.isArray(item.quoteNegotiation)
     ? item.quoteNegotiation
@@ -2787,6 +2822,163 @@ function ExecutionProgressRow({
     latestQuote?.role === "advertiser" && latestQuote?.type === "counter";
   const canApproveReject = item.stage === "quote_submitted";
   const canReopenRejected = item.stage === "quote_rejected";
+
+  const renderQuoteOptionsTable = () => {
+    if (!quoteOptions.length) return null;
+    return (
+      <div
+        style={{
+          marginTop: 4,
+          overflowX: "auto",
+          border: "1px solid #E5E7EB",
+          borderRadius: 8,
+        }}
+      >
+        <table
+          style={{
+            width: "100%",
+            minWidth: 760,
+            borderCollapse: "collapse",
+            fontSize: 11,
+          }}
+        >
+          <thead>
+            <tr style={{ backgroundColor: "#F9FAFB", color: "#6B7280" }}>
+              {[
+                "选择",
+                "方案",
+                "固定费 (USD)",
+                "佣金",
+                "交付结果",
+                "eCPM(平均数)",
+                "eCPM(中位数)",
+              ].map((label) => (
+                <th
+                  key={label}
+                  style={{
+                    padding: "7px 8px",
+                    borderBottom: "1px solid #E5E7EB",
+                    textAlign: "left",
+                    whiteSpace: "nowrap",
+                    fontWeight: 600,
+                  }}
+                >
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {quoteOptions.map((option, index) => {
+              const selected =
+                selectedQuoteOptionId === option.optionId;
+              const optionCurrency = option.currency || "USD";
+              const optionDeliverables = option.deliverables
+                ? formatDeliverablesSummary(option.deliverables)
+                : "—";
+              return (
+                <tr
+                  key={option.optionId || `${index}`}
+                  style={{
+                    backgroundColor: selected ? "#F5F3FF" : "#FFFFFF",
+                  }}
+                >
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      width: 42,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name={`quote-option-${campaignId}-${username}`}
+                      checked={selected}
+                      disabled={busy || !canApproveReject}
+                      onChange={() => {
+                        if (!canApproveReject || busy || selected) return;
+                        patchExecution("selectQuoteOption", username, {
+                          quoteOptionId: option.optionId,
+                        });
+                      }}
+                      aria-label={`选择${option.optionLabel || `方案${index + 1}`}`}
+                    />
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {option.optionLabel || `方案${index + 1}`}
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {Number(option.amountUsd)} {optionCurrency}
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {option.commissionPercent != null &&
+                    Number.isFinite(Number(option.commissionPercent))
+                      ? `${Number(option.commissionPercent)}%`
+                      : "—"}
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      minWidth: 210,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {optionDeliverables}
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {formatEcpmFromFlatAndViews(
+                      option.amountUsd,
+                      viewsNumForEcpm,
+                      optionCurrency
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      padding: "7px 8px",
+                      borderBottom: "1px solid #F3F4F6",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {formatEcpmFromFlatAndViews(
+                      option.amountUsd,
+                      medianViewsNumForEcpm,
+                      optionCurrency
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   let draftLink = item.draftLink || item.videoDraftLink;
   const vd = item.executionVideoDraft;
@@ -2906,23 +3098,6 @@ function ExecutionProgressRow({
     </div>
   );
 
-  /**
-   * 交付结果（只读）：优先展示红人级「最新交付结果」（与最新报价同源的
-   * quote_negotiation[].deliverables），没有时回退 Campaign 默认交付结果。
-   * 品牌不可在本卡片直接修改。
-   */
-  const deliverablesRow = () => {
-    const latestText = item?.latestDeliverables
-      ? formatDeliverablesSummary(item.latestDeliverables)
-      : "";
-    if (latestText) return labelRow("交付结果（最新）", latestText);
-    const campaignText = item?.campaignDeliverables
-      ? String(item.campaignDeliverables).replace(/\n+/g, "；")
-      : "";
-    if (campaignText) return labelRow("交付结果", `${campaignText}（继承 Campaign 默认）`);
-    return null;
-  };
-
   return (
     <div id={rowDomId} style={cardStyle}>
       <ApproveQuoteContentBriefModal
@@ -2939,6 +3114,7 @@ function ExecutionProgressRow({
           const result = await patchExecution("approveQuote", username, {
             ...briefPayload,
             source: "advertiser_portal",
+            quoteOptionId: selectedQuoteOptionId || null,
           });
           if (result?.ok) {
             setApproveBriefOpen(false);
@@ -3050,18 +3226,7 @@ function ExecutionProgressRow({
               useMarkdown
             />
           ) : null}
-          {labelRow(
-            `${item.quoteOrigin === "commerce_profile_estimate" ? "系统建议价" : "固定费"} (${item.currency || "USD"})`,
-            flatUsd != null && flatUsd !== ""
-              ? `${Number(flatUsd)} ${item.currency || "USD"}`
-              : "—"
-          )}
-          {labelRow(
-            "佣金",
-            item.commissionPercent != null && Number.isFinite(Number(item.commissionPercent))
-              ? `${Number(item.commissionPercent)}%`
-              : "—"
-          )}
+          {renderQuoteOptionsTable()}
           {canApproveReject &&
           (flatUsd == null || flatUsd === "") &&
           item.outreachEmail?.pricingMode !== "commission_only" ? (
@@ -3088,9 +3253,11 @@ function ExecutionProgressRow({
               品牌已同意并扣款，等待红人确认本次合作和价格。
             </div>
           ) : null}
-          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
-          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
-          {deliverablesRow()}
+          {canApproveReject && quoteOptions.length > 1 && !selectedQuoteOptionId ? (
+            <div style={{ fontSize: 11, color: "#B45309" }}>
+              请先选择一个报价方案，再同意合作。
+            </div>
+          ) : null}
 
           {canApproveReject && (
             <div
@@ -3211,7 +3378,7 @@ function ExecutionProgressRow({
               <>
                 <button
                   type="button"
-                  disabled={busy || approvePrechecking}
+                  disabled={busy || approvePrechecking || !canSubmitApprovedQuote}
                   onClick={handleAgreeClick}
                   style={{
                     padding: "4px 12px",
@@ -3219,10 +3386,19 @@ function ExecutionProgressRow({
                     border: "1px solid #10B981",
                     backgroundColor: "#ECFDF5",
                     color: "#047857",
-                    cursor: busy || approvePrechecking ? "not-allowed" : "pointer",
+                    cursor:
+                      busy || approvePrechecking || !canSubmitApprovedQuote
+                        ? "not-allowed"
+                        : "pointer",
                   }}
                 >
-                  {approvePrechecking ? "校验中…" : busy ? "处理中…" : "同意"}
+                  {approvePrechecking
+                    ? "校验中…"
+                    : busy
+                      ? "处理中…"
+                      : !canSubmitApprovedQuote
+                        ? "请先选择方案"
+                        : "同意"}
                 </button>
                 <button
                   type="button"
@@ -3296,22 +3472,8 @@ function ExecutionProgressRow({
       {(stageKey === "pendingShippingAddress" ||
         stageKey === "pendingSample" ||
         stageKey === "pendingDraft") && (
-        <>
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-            <span style={{ color: "#6B7280", minWidth: 86, flexShrink: 0 }}>合作价格</span>
-            <span style={{ flex: 1, wordBreak: "break-word" }}>
-              {flatUsd != null && flatUsd !== ""
-                ? `${Number(flatUsd)} ${item.currency || "USD"}`
-                : "—"}
-            </span>
-          </div>
-          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
-          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
-        </>
+        renderQuoteOptionsTable()
       )}
-      {(stageKey === "pendingShippingAddress" ||
-        stageKey === "pendingSample" ||
-        stageKey === "pendingDraft") && deliverablesRow()}
 
       {stageKey === "pendingSample" && needSample && (
         <>
@@ -3439,15 +3601,7 @@ function ExecutionProgressRow({
 
       {stageKey === "published" && (
         <>
-          {labelRow(
-            "合作价格",
-            flatUsd != null && flatUsd !== ""
-              ? `${Number(flatUsd)} ${item.currency || "USD"}`
-              : "—"
-          )}
-          {labelRow("eCPM(平均数)", ecpmAvgDisplay)}
-          {labelRow("eCPM(中位数)", ecpmMedianDisplay)}
-          {deliverablesRow()}
+          {renderQuoteOptionsTable()}
           <ExecutionProgressPublishedVideos item={item} />
         </>
       )}
@@ -6284,7 +6438,7 @@ export default function HomePage() {
     }
   }, []);
 
-  const precheckApproveQuote = useCallback(async (influencerId) => {
+  const precheckApproveQuote = useCallback(async (influencerId, quoteOptionId = null) => {
     const cid = resolvedCampaignId;
     if (!cid) return { ok: false, error: "缺少 Campaign" };
     const controller = new AbortController();
@@ -6295,7 +6449,11 @@ export default function HomePage() {
         credentials: "include",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ influencerId, action: "precheckApproveQuote" }),
+        body: JSON.stringify({
+          influencerId,
+          action: "precheckApproveQuote",
+          payload: { quoteOptionId },
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
@@ -6357,6 +6515,18 @@ export default function HomePage() {
             if (index < 0) continue;
             currentColumn = key;
             currentRow = rows[index];
+            if (action === "selectQuoteOption") {
+              rows[index] = {
+                ...currentRow,
+                selectedQuoteOptionId:
+                  data.selectedQuoteOptionId || currentRow.selectedQuoteOptionId,
+                selectedQuoteOption:
+                  data.selectedQuoteOption || currentRow.selectedQuoteOption,
+                selectedQuoteOptionAt:
+                  data.selectedQuoteOptionAt || currentRow.selectedQuoteOptionAt,
+              };
+              return { ...prev, columns };
+            }
             rows.splice(index, 1);
             break;
           }
