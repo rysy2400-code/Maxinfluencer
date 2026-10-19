@@ -52,7 +52,7 @@ import AdminAccountPanel from "./components/AdminAccountPanel";
 import { sanitizeAnalysisMarkdownForDisplay } from "../lib/utils/sanitize-analysis-markdown.js";
 import {
   avgViewsFromSnapshot,
-  formatEcpmFromFlatAndViews,
+  formatEcpmValue,
   medianViewsFromSnapshot,
 } from "../lib/influencer/avg-views.js";
 import { workNoteInfluencerLibraryLabel } from "../lib/influencer/resolve-campaign-platforms.js";
@@ -2837,7 +2837,7 @@ function ExecutionProgressRow({
         <table
           style={{
             width: "100%",
-            minWidth: 760,
+            minWidth: 1040,
             borderCollapse: "collapse",
             fontSize: 11,
           }}
@@ -2847,11 +2847,11 @@ function ExecutionProgressRow({
               {[
                 "选择",
                 "方案",
-                "固定费 (USD)",
-                "佣金",
+                "固定费 (美元)",
+                "佣金(%)",
                 "交付结果",
-                "eCPM(平均数)",
-                "eCPM(中位数)",
+                "eCPM: 平均数（美元/千次播放）",
+                "eCPM: 中位数（美元/千次播放）",
               ].map((label) => (
                 <th
                   key={label}
@@ -2872,7 +2872,6 @@ function ExecutionProgressRow({
             {quoteOptions.map((option, index) => {
               const selected =
                 selectedQuoteOptionId === option.optionId;
-              const optionCurrency = option.currency || "USD";
               const optionDeliverables = option.deliverables
                 ? formatDeliverablesSummary(option.deliverables)
                 : "—";
@@ -2901,7 +2900,7 @@ function ExecutionProgressRow({
                           quoteOptionId: option.optionId,
                         });
                       }}
-                      aria-label={`选择${option.optionLabel || `方案${index + 1}`}`}
+                      aria-label={`选择方案 ${index + 1}`}
                     />
                   </td>
                   <td
@@ -2912,7 +2911,7 @@ function ExecutionProgressRow({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {option.optionLabel || `方案${index + 1}`}
+                    {index + 1}
                   </td>
                   <td
                     style={{
@@ -2921,7 +2920,7 @@ function ExecutionProgressRow({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {Number(option.amountUsd)} {optionCurrency}
+                    {Number(option.amountUsd)}
                   </td>
                   <td
                     style={{
@@ -2932,7 +2931,7 @@ function ExecutionProgressRow({
                   >
                     {option.commissionPercent != null &&
                     Number.isFinite(Number(option.commissionPercent))
-                      ? `${Number(option.commissionPercent)}%`
+                      ? String(Number(option.commissionPercent))
                       : "—"}
                   </td>
                   <td
@@ -2952,11 +2951,7 @@ function ExecutionProgressRow({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {formatEcpmFromFlatAndViews(
-                      option.amountUsd,
-                      viewsNumForEcpm,
-                      optionCurrency
-                    )}
+                    {formatEcpmValue(option.amountUsd, viewsNumForEcpm)}
                   </td>
                   <td
                     style={{
@@ -2965,11 +2960,7 @@ function ExecutionProgressRow({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {formatEcpmFromFlatAndViews(
-                      option.amountUsd,
-                      medianViewsNumForEcpm,
-                      optionCurrency
-                    )}
+                    {formatEcpmValue(option.amountUsd, medianViewsNumForEcpm)}
                   </td>
                 </tr>
               );
@@ -6483,8 +6474,17 @@ export default function HomePage() {
     async (action, influencerId, payload = {}) => {
       const cid = resolvedCampaignId;
       if (!cid) return;
-      // 操作前先记住右栏列表位置：卡片被移出当前列表后，后面的卡片上移、视线停在原处
-      rememberExecutionListScroll(influencerId);
+      // 选择报价方案只更新当前卡片，不发生移列；沿用“下一张卡片顶上”的锚点会导致自动跳卡。
+      if (action === "selectQuoteOption") {
+        executionScrollAnchorRef.current = null;
+        if (executionScrollAnchorTimerRef.current) {
+          window.clearTimeout(executionScrollAnchorTimerRef.current);
+          executionScrollAnchorTimerRef.current = null;
+        }
+      } else {
+        // 同意/拒绝等操作会移动或移出卡片，继续用滚动锚点避免列表跳动。
+        rememberExecutionListScroll(influencerId);
+      }
       setExecPatchingId(influencerId);
       try {
         const res = await fetch(`/api/campaigns/${cid}/execution`, {
