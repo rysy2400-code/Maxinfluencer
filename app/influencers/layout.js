@@ -389,9 +389,9 @@ export default function InfluencersLayout({ children }) {
   );
 
   useEffect(() => {
-    if (listView !== "time") return;
+    if (!inboxUser || listView !== "time") return;
     loadConversations({ cursor: null, reset: true });
-  }, [debouncedQ, listView, loadConversations]);
+  }, [inboxUser, debouncedQ, listView, loadConversations]);
 
   useEffect(() => {
     if (!inboxUser || listView !== "time") return;
@@ -399,9 +399,9 @@ export default function InfluencersLayout({ children }) {
   }, [inboxUser, listView, loadAttributionQueue]);
 
   useEffect(() => {
-    if (listView !== "project") return;
+    if (!inboxUser || listView !== "project") return;
     loadProjectTree({ accountCursor: null, reset: true });
-  }, [debouncedQ, listView, loadProjectTree]);
+  }, [inboxUser, debouncedQ, listView, loadProjectTree]);
 
   useLayoutEffect(() => {
     if (listView !== "time") return;
