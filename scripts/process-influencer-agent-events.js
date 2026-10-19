@@ -1132,8 +1132,13 @@ async function handleSendContractEmail(eventRow, payload) {
   const fileName = `${contract.contractNo}.pdf`;
   const revMatch = /-R(\d+)$/.exec(String(contract.contractNo || ""));
   const revision = revMatch ? Number(revMatch[1]) : 1;
+  const contractBaseNo = String(contract.contractNo || "").replace(/-\d{8}-\d{6}$/, "");
   const previousContractNo =
-    revision >= 2 ? String(contract.contractNo).replace(/-R\d+$/, "") : null;
+    revision <= 1
+      ? null
+      : revision === 2
+        ? contractBaseNo.replace(/-R\d+$/, "")
+        : `${contractBaseNo.replace(/-R\d+$/, "")}-R${revision - 1}`;
 
   const campaignRow = await getCampaignById(campaignId).catch(() => null);
   const bodyText = await generateContractEmailBody({
