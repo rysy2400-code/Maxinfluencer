@@ -1,6 +1,6 @@
 /**
  * 批量重试 running campaign 中分析失败的候选红人。
- * 从 TikTok_influencer 加载 profile_data / search_video_data，用当前 analyzeInfluencerMatch 重分析，
+ * 从 tiktok_influencer 加载 profile_data / search_video_data，用当前 analyzeInfluencerMatch 重分析，
  * 更新候选表；推荐且有邮箱的写入执行表。
  *
  * 用法:
@@ -171,7 +171,7 @@ async function loadTikTokInfluencer(username) {
             followers_count, followers_display, avg_views, views_display,
             avg_likes, avg_comments, posts_count, video_publish_country,
             profile_data, search_video_data
-     FROM TikTok_influencer WHERE username = ? LIMIT 1`,
+     FROM tiktok_influencer WHERE username = ? LIMIT 1`,
     [u]
   );
   return rows?.[0] || null;

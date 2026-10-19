@@ -91,7 +91,7 @@ async function main() {
   const influencers = await queryTikTok(
     `SELECT influencer_id, username, video_publish_country, video_publish_country_source,
             profile_data
-     FROM TikTok_influencer WHERE video_publish_country_source = ?`,
+     FROM tiktok_influencer WHERE video_publish_country_source = ?`,
     [RESIDENCE_SOURCE]
   );
 
@@ -199,7 +199,7 @@ async function main() {
       pd?.videoPublishCountry || pd?.userInfo?.country || pd?.accountCountry
     );
     await queryTikTok(
-      `UPDATE TikTok_influencer
+      `UPDATE tiktok_influencer
        SET residence_country = ?,
            residence_country_source = ?,
            residence_country_checked_at = NOW(),

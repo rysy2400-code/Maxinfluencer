@@ -82,6 +82,9 @@ export async function POST(req, { params }) {
     };
     if (ctx.inReplyTo) headers["In-Reply-To"] = ctx.inReplyTo;
     if (ctx.references) headers["References"] = ctx.references;
+    // 冷号发出的邮件（含人工发送的首封）：回信引到品牌信箱并留档
+    if (ctx.replyTo) headers["Reply-To"] = ctx.replyTo;
+    if (ctx.cc) headers["Cc"] = ctx.cc;
 
     const files = form.getAll("attachments") || [];
     const clientMessageId = `human-${Date.now()}-${Math.random()

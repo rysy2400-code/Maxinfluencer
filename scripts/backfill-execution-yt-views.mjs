@@ -119,7 +119,7 @@ async function main() {
     const chunk = ids.slice(i, i + 300);
     const [infRows] = await conn.query(
       `SELECT influencer_id, avg_views, views_display, profile_data
-       FROM TikTok_influencer
+       FROM tiktok_influencer
        WHERE influencer_id IN (${chunk.map(() => "?").join(",")})`,
       chunk
     );
@@ -131,7 +131,7 @@ async function main() {
     const chunk = unames.slice(i, i + 300);
     const [infRows] = await conn.query(
       `SELECT influencer_id, avg_views, views_display, profile_data
-       FROM TikTok_influencer
+       FROM tiktok_influencer
        WHERE username IN (${chunk.map(() => "?").join(",")})`,
       chunk
     );
@@ -229,7 +229,7 @@ async function main() {
     let updatedInf = 0;
     for (const [influencerId, patch] of infUpdates) {
       await conn.query(
-        `UPDATE TikTok_influencer
+        `UPDATE tiktok_influencer
          SET avg_views = ?, views_display = ?, updated_at = CURRENT_TIMESTAMP
          WHERE influencer_id = ?`,
         [patch.avg_views, patch.views_display, influencerId]

@@ -1,5 +1,5 @@
 /**
- * 将 TikTok_influencer.video_publish_country 同步进 execution influencer_snapshot
+ * 将 tiktok_influencer.video_publish_country 同步进 execution influencer_snapshot
  * 用法: node scripts/sync-execution-snapshot-country.mjs --campaign CAMP-xxx
  */
 import dotenv from "dotenv";
@@ -31,7 +31,7 @@ async function main() {
     `
     SELECT e.tiktok_username, e.influencer_snapshot, ti.video_publish_country
     FROM tiktok_campaign_execution e
-    LEFT JOIN TikTok_influencer ti ON ti.username = e.tiktok_username
+    LEFT JOIN tiktok_influencer ti ON ti.username = e.tiktok_username
     WHERE e.campaign_id = ?
       AND e.stage IN ('pending_quote', 'quote_submitted', 'quote_rejected')
       AND ti.video_publish_country IS NOT NULL

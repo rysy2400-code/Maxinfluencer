@@ -284,6 +284,21 @@ async function outlookSignIn(context, page) {
  * 常规密码登录；若实际是恢复邮箱验证页（慢加载），自动切换恢复邮箱流程。
  */
 async function completeMsPasswordOrRecovery(page) {
+  // 新版微软登录页默认只列出「使用人脸/安全密钥」「使用密码」「发验证码到恢复邮箱」，
+  // 不点「使用密码」的话密码框永远不会出现，会一直 waitFor 超时。
+  const usePassword = page
+    .locator(
+      '[role="listitem"]:has-text("使用密码"), span[role="button"]:has-text("使用密码"), ' +
+        '[role="button"]:has-text("使用密码"), a:has-text("使用密码"), button:has-text("使用密码"), ' +
+        '[role="listitem"]:has-text("Use your password"), span[role="button"]:has-text("Use your password"), ' +
+        '[role="button"]:has-text("Use your password"), a:has-text("Use your password"), button:has-text("Use your password")'
+    )
+    .first();
+  if (await usePassword.isVisible({ timeout: 8000 }).catch(() => false)) {
+    await usePassword.click({ timeout: 8000 }).catch(() => {});
+    log("微软登录页：已切换到「使用密码」方式");
+    await page.waitForTimeout(2500);
+  }
   const passInput = page.locator(MS_PASS_SELECTOR).first();
   let passVisible = await passInput
     .waitFor({ state: "visible", timeout: Number(process.env.MS_PASS_WAIT_MS) || 40000 })
@@ -302,10 +317,20 @@ async function completeMsPasswordOrRecovery(page) {
     passVisible = true;
   }
   await passInput.fill(EMAIL_PASS, { timeout: 10000 });
-  await page
-    .locator('input[type="submit"], button:has-text("Sign in"), button:has-text("登录")')
-    .first()
-    .click({ timeout: 10000 });
+  const submitBtn = page
+    .locator(
+      'button[type="submit"], input[type="submit"], #idSIButton9, ' +
+        'button:has-text("Sign in"), button:has-text("登录"), [role="button"]:has-text("登录"), [role="button"]:has-text("Sign in")'
+    )
+    .first();
+  const submitOk = await submitBtn
+    .click({ timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!submitOk) {
+    await submitBtn.click({ timeout: 5000, force: true }).catch(() => {});
+    await page.keyboard.press("Enter").catch(() => {});
+  }
   log("已提交 Outlook 密码，等待登录结果...");
 }
 

@@ -149,6 +149,7 @@ async function buildBasePage(pdf, { withPreviewSample = false } = {}) {
   });
 
   const bankLines = [
+    ["Company Name:", ISSUER.companyName || ISSUER.legalName],
     ["Bank Name:", ISSUER.bankName],
     ["Bank Address:", ISSUER.bankAddress],
     ["Bank Account No.:", ISSUER.accountNo],

@@ -2,7 +2,7 @@
  * 回填「红人主页简介语言」到 tiktok_influencer_language。
  *
  * 范围：只回填进入过 Campaign 执行表的红人（几万量级），避免全表扫 600 万行大表。
- * 语言来源：TikTok_influencer.bio（爬虫已存的简介文本）。
+ * 语言来源：tiktok_influencer.bio（爬虫已存的简介文本）。
  *
  * 用法：
  *   node scripts/backfill-influencer-language.mjs --dry-run

@@ -141,7 +141,7 @@ async function loadInfluencerEvidence(influencerIds) {
     const infls = await queryTikTok(
       `SELECT influencer_id, username, profile_data, video_publish_country,
               video_publish_country_source, video_publish_country_checked_at
-       FROM TikTok_influencer WHERE influencer_id IN (${ph})`,
+       FROM tiktok_influencer WHERE influencer_id IN (${ph})`,
       chunk
     );
     for (const r of infls || []) {
@@ -262,7 +262,7 @@ async function main() {
   // 红人计划独立于「剩余待回滚执行」：连接中断后续跑时，快照可能已清空，
   // 但红人表可能仍是 legacy 来源，这里直接按来源补扫，保证可重入。
   const legacyInfluencers = await queryTikTok(
-    `SELECT influencer_id FROM TikTok_influencer WHERE video_publish_country_source = ?`,
+    `SELECT influencer_id FROM tiktok_influencer WHERE video_publish_country_source = ?`,
     [LEGACY_SOURCE]
   );
   const influencerIds = [
@@ -367,7 +367,7 @@ async function main() {
     if (best?.iso) {
       try {
         await queryTikTok(
-          `UPDATE TikTok_influencer
+          `UPDATE tiktok_influencer
            SET video_publish_country = ?, video_publish_country_source = ?,
                video_publish_country_checked_at = NOW(), updated_at = NOW()
            WHERE influencer_id = ? AND video_publish_country_source = ?`,
@@ -380,7 +380,7 @@ async function main() {
     } else {
       try {
         await queryTikTok(
-          `UPDATE TikTok_influencer
+          `UPDATE tiktok_influencer
            SET video_publish_country = NULL, video_publish_country_source = NULL,
                video_publish_country_checked_at = NULL, updated_at = NOW()
            WHERE influencer_id = ? AND video_publish_country_source = ?`,
@@ -397,12 +397,12 @@ async function main() {
 
   for (const fix of MANUAL_FIXES) {
     const rowsFound = await queryTikTok(
-      `SELECT influencer_id FROM TikTok_influencer WHERE username = ?`,
+      `SELECT influencer_id FROM tiktok_influencer WHERE username = ?`,
       [fix.handle]
     );
     for (const r of rowsFound || []) {
       await queryTikTok(
-        `UPDATE TikTok_influencer
+        `UPDATE tiktok_influencer
          SET video_publish_country = ?, video_publish_country_source = ?,
              video_publish_country_checked_at = NOW(), updated_at = NOW()
          WHERE influencer_id = ?`,

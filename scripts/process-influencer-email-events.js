@@ -253,6 +253,48 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+// 运行看门狗：计划任务 MultipleInstances=IgnoreNew，实例卡死会导致后续触发被忽略。
+const MAX_RUNTIME_MS =
+  Number(process.env.PROCESS_EMAIL_EVENTS_MAX_RUNTIME_MS || 900000) || 900000;
+setTimeout(() => {
+  console.error(
+    `[ProcessInfluencerEmailEvents] 运行超时（${Math.round(
+      MAX_RUNTIME_MS / 1000
+    )}s），强制退出，交由下一轮触发接管。`
+  );
+  process.exit(124);
+}, MAX_RUNTIME_MS);
+
+/**
+ * 回收「卡死」事件：被看门狗/强杀中断的事件会永远停在 processing，
+ * 而事件选择只取 status='pending'，因此永久不再被处理。启动时把长时间
+ * 停留在 processing 的事件放回 pending。
+ */
+async function reclaimStaleProcessingEvents(staleMinutes = 15) {
+  try {
+    const res = await queryTikTok(
+      `UPDATE tiktok_influencer_email_events
+          SET status = 'pending',
+              error_message = CONCAT(
+                COALESCE(error_message, ''),
+                IF(COALESCE(error_message,'') = '', '', ' | '),
+                'reclaimed_from_stuck_processing'
+              )
+        WHERE status = 'processing'
+          AND updated_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)`,
+      [staleMinutes]
+    );
+    const n = res?.affectedRows || 0;
+    if (n > 0) {
+      console.log(
+        `[ProcessInfluencerEmailEvents] 回收卡死事件 ${n} 条（processing > ${staleMinutes} 分钟）→ pending`
+      );
+    }
+  } catch (err) {
+    console.error("[ProcessInfluencerEmailEvents] 回收卡死事件失败：", err?.message || err);
+  }
+}
+
 async function fetchPendingEvents(limit = 10) {
   const n = Math.min(50, Math.max(1, Number(limit) || 10));
   const rows = await queryTikTok(
@@ -638,8 +680,12 @@ async function handleOutboundEmails(decision, event, executions) {
     });
     const fromAccount = ctx.fromAccount;
 
-    const subject =
-      (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
+    // 续线程时一律使用线程主题（Re: 第一封的实际主题），
+    // 避免 LLM 另起主题导致 Gmail 等客户端把对话拆成两个会话；
+    // 只有在没有可续线程（无 inReplyTo）时才允许 LLM 指定主题。
+    const subject = ctx.inReplyTo
+      ? ctx.subjectForSend
+      : (email.subject && String(email.subject).trim()) || ctx.subjectForSend;
     const body = email.body || email.bodyText || "";
     const inboundMessageId = email.inReplyTo || event.message_id || null;
     const traceId = buildTraceIdFromInboundMessageId(inboundMessageId);
@@ -1782,6 +1828,11 @@ async function main() {
     }
     return;
   }
+
+  // 先回收被强杀/看门狗中断而卡在 processing 的事件，再取 pending
+  await reclaimStaleProcessingEvents(
+    Number(process.env.PROCESS_EMAIL_EVENTS_RECLAIM_MINUTES || 15) || 15
+  );
 
   const events = await fetchPendingEvents(10);
   if (!events.length) {

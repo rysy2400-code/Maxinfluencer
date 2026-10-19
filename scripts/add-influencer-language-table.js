@@ -1,8 +1,8 @@
 /**
  * 幂等创建「红人语言」旁路表。
  *
- * 为什么用独立表而不是给 TikTok_influencer 加列：
- * TikTok_influencer 是千万级 / 数十 GB 的大表，且线上存在长事务长期持有元数据锁，
+ * 为什么用独立表而不是给 tiktok_influencer 加列：
+ * tiktok_influencer 是千万级 / 数十 GB 的大表，且线上存在长事务长期持有元数据锁，
  * 在其上加列会让 ALTER 排在 MDL 队列头部、反把爬虫的 INSERT 全部堵住。
  * 语言是「按需读取的派生属性」，放独立小表更安全，也避免 UPDATE 大表行。
  *
@@ -27,7 +27,7 @@ export const INFLUENCER_LANGUAGE_TABLE = "tiktok_influencer_language";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS ${INFLUENCER_LANGUAGE_TABLE} (
-  influencer_id VARCHAR(128) NOT NULL COMMENT '与 TikTok_influencer.influencer_id 对齐',
+  influencer_id VARCHAR(128) NOT NULL COMMENT '与 tiktok_influencer.influencer_id 对齐',
   bio_language VARCHAR(16) NULL COMMENT '主页简介推断语言（BCP-47 简码）',
   bio_language_confidence DECIMAL(4,2) NULL COMMENT 'bio 语言推断置信度 0~1',
   bio_language_source VARCHAR(32) NULL COMMENT 'script / latin_hint / ascii_default',

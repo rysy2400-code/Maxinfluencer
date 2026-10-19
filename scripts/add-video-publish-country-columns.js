@@ -1,6 +1,6 @@
 /**
  * 幂等补齐：
- * - TikTok_influencer.video_publish_country / video_publish_country_source / video_publish_country_checked_at
+ * - tiktok_influencer.video_publish_country / video_publish_country_source / video_publish_country_checked_at
  * - tiktok_influencer_search_task.progress_country_* / progress_enriched_count
  *
  * 用法: node scripts/add-video-publish-country-columns.js
@@ -54,8 +54,8 @@ async function main() {
   ];
 
   for (const [col, ddl] of influencerCols) {
-    if (await ensureColumn("TikTok_influencer", col, ddl)) {
-      changed.push(`TikTok_influencer.${col}`);
+    if (await ensureColumn("tiktok_influencer", col, ddl)) {
+      changed.push(`tiktok_influencer.${col}`);
     }
   }
 

@@ -84,7 +84,7 @@ async function loadTargets(campaignId) {
     SELECT e.id AS exec_id, e.tiktok_username, e.stage, e.influencer_snapshot,
            ti.video_publish_country
     FROM tiktok_campaign_execution e
-    LEFT JOIN TikTok_influencer ti ON ti.username = e.tiktok_username
+    LEFT JOIN tiktok_influencer ti ON ti.username = e.tiktok_username
     WHERE e.campaign_id = ?
       AND e.stage IN (?, ?, ?)
     ORDER BY e.stage, e.tiktok_username

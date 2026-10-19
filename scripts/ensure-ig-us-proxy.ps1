@@ -80,6 +80,8 @@ function Parse-NodeUri {
       sni = $sni; fp = $(if ($params["fp"]) { $params["fp"] } else { "chrome" })
       pbk = $params["pbk"]; sid = $params["sid"]; flow = $params["flow"]
       security = $(if ($params["security"]) { $params["security"] } else { "none" })
+      network = $(if ($params["type"]) { $params["type"] } else { "tcp" })
+      host = $params["host"]; path = $params["path"]; ech = $params["ech"]
     }
   }
   if ($Uri -match '^anytls://([^@]+)@([^:/]+):(\d+)') {
@@ -115,6 +117,19 @@ function Test-UsableNodeServer {
   # RFC 5737 documentation ranges + CGNAT: provider serves these as placeholders
   if ($s -match "^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.)") { return $false }
   return $true
+}
+
+function Test-TcpReachable {
+  param([string]$HostName, [int]$Port, [int]$TimeoutMs = 4000)
+  if (-not $HostName -or $Port -le 0) { return $false }
+  try {
+    $c = New-Object System.Net.Sockets.TcpClient
+    $iar = $c.BeginConnect($HostName, $Port, $null, $null)
+    $ok = $iar.AsyncWaitHandle.WaitOne($TimeoutMs)
+    if ($ok) { $c.EndConnect($iar) }
+    $c.Close()
+    return $ok
+  } catch { return $false }
 }
 
 function Get-UniqueName {
@@ -160,6 +175,13 @@ foreach ($line in ($decoded -split "`r?`n")) {
 if ($nodes.Count -eq 0) { throw "no parseable nodes in subscription" }
 $us = @($nodes | Where-Object { Test-IsUsNode $_ })
 $us = @($us | Where-Object { Test-UsableNodeServer -Srv $_.server })
+$reachable = @($us | Where-Object { Test-TcpReachable -HostName $_.server -Port $_.port })
+if ($reachable.Count -gt 0) {
+  if ($reachable.Count -lt $us.Count) {
+    Write-Host "[ig-proxy] dropped $($us.Count - $reachable.Count) unreachable US node(s)"
+  }
+  $us = $reachable
+}
 if ($us.Count -eq 0) {
   if (Test-Path $configPath) {
     Write-Host "[ig-proxy] no usable US nodes in subscription, keeping existing config"
@@ -192,17 +214,28 @@ foreach ($n in $us) {
     if ($n.security -eq "reality" -and $n.pbk) {
       $reality = "    reality-opts:`n      public-key: `"$($n.pbk)`"`n      short-id: `"$($n.sid)`""
     }
+    $net = if ($n.network) { "$($n.network)" } else { "tcp" }
+    $wsBlock = ""
+    if ($net -eq "ws") {
+      $wsPath = if ($n.path) { "$($n.path)" } else { "/" }
+      $wsHost = if ($n.host) { "$($n.host)" } else { "$($n.sni)" }
+      $wsBlock = "`n    ws-opts:`n      path: $wsPath`n      headers:`n        Host: $wsHost"
+    }
+    $echBlock = ""
+    if ($n.ech) {
+      $echBlock = "`n    ech-opts:`n      enable: true`n      query-server-name: $($n.ech)"
+    }
     $proxyLines.Add(@"
   - name: "$safe"
     type: vless
     server: $($n.server)
     port: $($n.port)
     uuid: "$($n.uuid)"
-    network: tcp
+    network: $net$wsBlock
     udp: true
     servername: "$($n.sni)"
     client-fingerprint: $($n.fp)
-    flow: $($n.flow)
+    flow: $($n.flow)$echBlock
 $tlsLine
 $reality
 "@)
@@ -235,11 +268,9 @@ $($proxyLines -join "`n")
 
 proxy-groups:
   - name: IGProxy
-    type: url-test
-    url: https://www.instagram.com/
-    interval: 300
-    tolerance: 50
+    type: select
     proxies:
+      - "DIRECT"
 $(($groupMembers | ForEach-Object { "      - `"$_`"" }) -join "`n")
 
 rules:

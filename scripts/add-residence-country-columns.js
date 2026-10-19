@@ -16,7 +16,7 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
-const TABLE = "TikTok_influencer";
+const TABLE = "tiktok_influencer";
 
 const COLUMNS = [
   [

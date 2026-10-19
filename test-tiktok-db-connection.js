@@ -35,13 +35,13 @@ async function testConnection() {
 
   // 2. 检查表是否存在
   try {
-    const tables = await queryTikTok('SHOW TABLES LIKE "TikTok_influencer"');
+    const tables = await queryTikTok('SHOW TABLES LIKE "tiktok_influencer"');
     if (tables.length === 0) {
-      console.log('⚠️  表 TikTok_influencer 不存在');
+      console.log('⚠️  表 tiktok_influencer 不存在');
       console.log('请执行以下 SQL 创建表：');
       console.log('mysql -h rm-2ze57d76jg0075zd7qo.mysql.rds.aliyuncs.com -u admin_user -p tiktok < lib/db/tiktok-influencer-schema.sql\n');
     } else {
-      console.log('✅ 表 TikTok_influencer 存在\n');
+      console.log('✅ 表 tiktok_influencer 存在\n');
     }
   } catch (error) {
     console.error('❌ 检查表失败:', error.message);
@@ -49,7 +49,7 @@ async function testConnection() {
 
   // 3. 查询表结构（如果表存在）
   try {
-    const columns = await queryTikTok('DESCRIBE TikTok_influencer');
+    const columns = await queryTikTok('DESCRIBE tiktok_influencer');
     if (columns.length > 0) {
       console.log('📊 表结构：');
       columns.forEach(col => {
@@ -63,7 +63,7 @@ async function testConnection() {
 
   // 4. 查询现有数据数量
   try {
-    const count = await queryTikTok('SELECT COUNT(*) as count FROM TikTok_influencer');
+    const count = await queryTikTok('SELECT COUNT(*) as count FROM tiktok_influencer');
     console.log(`📈 当前数据量: ${count[0]?.count || 0} 条记录\n`);
   } catch (error) {
     // 表不存在，忽略错误
@@ -113,13 +113,13 @@ async function testConnection() {
 
   // 2. 检查表是否存在
   try {
-    const tables = await queryTikTok('SHOW TABLES LIKE "TikTok_influencer"');
+    const tables = await queryTikTok('SHOW TABLES LIKE "tiktok_influencer"');
     if (tables.length === 0) {
-      console.log('⚠️  表 TikTok_influencer 不存在');
+      console.log('⚠️  表 tiktok_influencer 不存在');
       console.log('请执行以下 SQL 创建表：');
       console.log('mysql -h rm-2ze57d76jg0075zd7qo.mysql.rds.aliyuncs.com -u admin_user -p tiktok < lib/db/tiktok-influencer-schema.sql\n');
     } else {
-      console.log('✅ 表 TikTok_influencer 存在\n');
+      console.log('✅ 表 tiktok_influencer 存在\n');
     }
   } catch (error) {
     console.error('❌ 检查表失败:', error.message);
@@ -127,7 +127,7 @@ async function testConnection() {
 
   // 3. 查询表结构（如果表存在）
   try {
-    const columns = await queryTikTok('DESCRIBE TikTok_influencer');
+    const columns = await queryTikTok('DESCRIBE tiktok_influencer');
     if (columns.length > 0) {
       console.log('📊 表结构：');
       columns.forEach(col => {
@@ -141,7 +141,7 @@ async function testConnection() {
 
   // 4. 查询现有数据数量
   try {
-    const count = await queryTikTok('SELECT COUNT(*) as count FROM TikTok_influencer');
+    const count = await queryTikTok('SELECT COUNT(*) as count FROM tiktok_influencer');
     console.log(`📈 当前数据量: ${count[0]?.count || 0} 条记录\n`);
   } catch (error) {
     // 表不存在，忽略错误

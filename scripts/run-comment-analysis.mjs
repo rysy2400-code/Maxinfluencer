@@ -186,6 +186,10 @@ async function finalizeOne({ platform, username, sample }) {
     comments,
     official,
     stats,
+  }, {
+    // 显式指定，避免被机器级 DEEPSEEK_LLM_TIMEOUT_MS 覆盖成过小值
+    timeoutMs: Math.max(60_000, Number(process.env.COMMENT_ANALYSIS_LLM_TIMEOUT_MS || 240_000)),
+    maxTokens: Number(process.env.COMMENT_ANALYSIS_MAX_TOKENS || 8192),
   });
   const llm = normalizeLlmResult(llmRaw);
   if (!llm) return { status: "failed", error: "llm_parse_failed", videos, comments, stats };

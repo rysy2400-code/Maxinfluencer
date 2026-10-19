@@ -86,12 +86,12 @@ async function printDbSnapshot(usernames) {
   const rows = await queryTikTok(
     `
     SELECT username, video_publish_country, video_publish_country_checked_at
-    FROM TikTok_influencer
+    FROM tiktok_influencer
     WHERE username IN (${placeholders})
   `,
     usernames.map((u) => u.replace(/^@/, ""))
   );
-  console.log("\n--- DB TikTok_influencer ---");
+  console.log("\n--- DB tiktok_influencer ---");
   for (const row of rows) {
     console.log(
       `  @${row.username} | video_publish_country=${row.video_publish_country ?? "NULL"} | checked_at=${row.video_publish_country_checked_at ?? "-"}`

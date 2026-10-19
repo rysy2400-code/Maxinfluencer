@@ -37,6 +37,20 @@ const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 
+// 运行看门狗：计划任务用 MultipleInstances=IgnoreNew，一旦某个实例卡死（IMAP 挂起、
+// DB 慢查询等），后续每分钟的触发都会被忽略，整条收信链路静默停摆。这里给单次运行
+// 加墙钟上限，到点强制退出，让下一轮触发接管。
+const MAX_RUNTIME_MS =
+  Number(process.env.POLL_INFLUENCER_REPLIES_MAX_RUNTIME_MS || 600000) || 600000;
+setTimeout(() => {
+  console.error(
+    `[PollInfluencerReplies] 运行超时（${Math.round(
+      MAX_RUNTIME_MS / 1000
+    )}s），强制退出，交由下一轮触发接管。`
+  );
+  process.exit(124);
+}, MAX_RUNTIME_MS);
+
 function extractLatestReply(bodyText) {
   if (!bodyText) return "";
   const s = String(bodyText);
@@ -84,11 +98,14 @@ async function resolveInfluencerIdByEmail(email) {
   const e = (email || "").trim().toLowerCase();
   if (!e || !e.includes("@")) return null;
   try {
+    // influencer_email 全表已规范化为「小写+去空格」（校验：0 行存在大小写/空格差异），
+    // 因此直接用等值匹配走 idx_influencer_email；此前用 LOWER(TRIM(...)) 会全表扫描，
+    // 512 万行下单次 20~145s，是轮询长时间卡死的直接原因。
     const rows = await queryTikTok(
       `
       SELECT influencer_id
       FROM tiktok_influencer
-      WHERE LOWER(TRIM(influencer_email)) = ?
+      WHERE influencer_email = ?
       LIMIT 1
     `,
       [e]
@@ -121,6 +138,18 @@ async function pollOnce() {
     { batchSize: IMAP_POLL_BATCH_SIZE }
   );
   const accounts = batch;
+
+  /**
+   * 我方自有地址集合（op_contacts 全部邮箱）。
+   * 用途：忽略「我们自己发出的邮件」——例如我们把邮件 CC/转发给自己时产生的副本。
+   * 这类副本的 From 是我方地址、但主题符合 “Binfluencer x <名字>” 规范，
+   * 会被主题归属误判成红人回信，进而触发一次不该发出的自动回复。
+   */
+  const ourAddresses = new Set(
+    allAccounts
+      .map((a) => String(getOpContactEmail(a) || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
 
   console.log(
     `[PollInfluencerReplies] 分批轮询：第 ${batchIndex + 1}/${numBatches} 批，` +
@@ -174,6 +203,18 @@ async function pollOnce() {
 
     for (const msg of messages) {
       if (!msg.messageId) {
+        continue;
+      }
+
+      // 跳过我们自己发出的邮件（CC/转发副本），避免被误判为红人回信
+      const fromNormalized = String(msg.from || "").trim().toLowerCase();
+      if (fromNormalized && ourAddresses.has(fromNormalized)) {
+        console.log(
+          "[PollInfluencerReplies] 跳过我方自己发出的邮件：",
+          fromNormalized,
+          "|",
+          msg.subject || ""
+        );
         continue;
       }
 

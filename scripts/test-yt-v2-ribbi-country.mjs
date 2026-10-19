@@ -74,7 +74,7 @@ async function fetchUnknownYoutubeInfluencers(campaignId, max) {
     rows = await queryTikTok(
       `
       SELECT username, tiktok_user_id AS channel_id, video_publish_country, profile_url, last_crawled_at
-      FROM TikTok_influencer
+      FROM tiktok_influencer
       WHERE profile_url LIKE '%youtube.com%'
         AND (video_publish_country IS NULL OR video_publish_country = '')
         AND last_crawled_at >= ?
@@ -89,7 +89,7 @@ async function fetchUnknownYoutubeInfluencers(campaignId, max) {
     const more = await queryTikTok(
       `
       SELECT username, tiktok_user_id AS channel_id, video_publish_country, profile_url, last_crawled_at
-      FROM TikTok_influencer
+      FROM tiktok_influencer
       WHERE profile_url LIKE '%youtube.com%'
         AND (video_publish_country IS NULL OR video_publish_country = '')
       ORDER BY last_crawled_at DESC

@@ -10,7 +10,7 @@
 | 开票模式 | **仅按需申请**，无自动 cron、无充值自动开票 |
 | 发票类型 | ① 充值发票 `recharge` ② 消费发票 `monthly_consumption` |
 | PDF 标题 | **INVOICE**（v1 不做 Tax Invoice） |
-| 发件邮箱 | `maxin@binfluencer.online`（`op_contacts` 固定） |
+| 发件邮箱 | `bin1@binfluencer.xyz`（`op_contacts` 固定；替代已停用的 `maxin@binfluencer.online`） |
 | 收件人 | 「通知设置」中的 `finance_notify_emails` |
 | 邮件 | 英文 Subject + 正文 |
 | PDF 技术 | **PDF 底稿（Source A）+ pdf-lib 动态写入**；我方信息与签名固化在 `invoice-base.pdf` |
@@ -77,7 +77,7 @@ Account Holder: Grace Capital Group Limited
 Bank Name: OCBC Bank Hong Kong
 Bank Address: 161 Queen's Road, Central, Hong Kong
 Bank Account No.: 038524-831
-SWIFT Code: OCBCHKHH
+SWIFT Code: WIHBHKHH
 ```
 
 ## 6. 编号与日期
@@ -87,7 +87,7 @@ SWIFT Code: OCBCHKHH
 
 ## 7. 邮件
 
-- From: `maxin@binfluencer.online`
+- From: `bin1@binfluencer.xyz`
 - Subject: `[Maxin AI] Invoice {invoice_no} – USD {amount} – {company_name}`
 - 正文：英文，附 PDF
 
