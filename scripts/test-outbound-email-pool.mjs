@@ -12,11 +12,13 @@ import { fileURLToPath } from "url";
 import { spawnSync } from "child_process";
 import { queryTikTok } from "../lib/db/mysql-tiktok.js";
 import {
+  EXCLUDED_OUTREACH_DOMAINS,
   EXCLUDED_OUTREACH_EMAILS,
   IMAP_POLL_BATCH_SIZE,
   accountHasImapConfig,
   accountMatchesTemporaryOutboundPool,
   getOpContactEmail,
+  isExcludedFromOutreachPool,
   normalizePoolEmail,
   selectImapPollBatch,
 } from "../lib/email/temporary-outbound-pool.js";
@@ -126,11 +128,15 @@ async function testPoolBasics() {
     ok(`已排除 ${EXCLUDED_OUTREACH_EMAILS.join(", ")}`);
   }
 
-  const expectedMin = allContacts.length - EXCLUDED_OUTREACH_EMAILS.length;
+  const expectedMin = allContacts.filter(
+    (a) => !isExcludedFromOutreachPool(accountEmail(a))
+  ).length;
   if (pool.length !== expectedMin) {
     fail("发信池与 op_contacts 数量不一致", `pool=${pool.length} expected≈${expectedMin}`);
   } else {
-    ok("发信池与 op_contacts（减排除项）一致");
+    ok(
+      `发信池与 op_contacts（减 ${EXCLUDED_OUTREACH_EMAILS.length} 个邮箱、${EXCLUDED_OUTREACH_DOMAINS.length} 个域名）一致`
+    );
   }
 }
 

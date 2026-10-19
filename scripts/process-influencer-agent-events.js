@@ -200,6 +200,9 @@ function eventTypesForMode(mode) {
  */
 async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
   const n = Math.min(50, Math.max(1, Number(limit) || 20));
+  // 多个 worker 并发时都从队列头部开始；读取更大的候选窗口，
+  // 并为本进程抢够 n 条即停止，才能让各 worker 自动分流到不同事件。
+  const candidateLimit = Math.min(500, n * 6);
   const types = eventTypesForMode(mode);
   const typeSql = types?.length
     ? `AND event_type IN (${types.map(() => "?").join(",")})`
@@ -213,7 +216,7 @@ async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
     WHERE status = 'pending'
       ${typeSql}
     ORDER BY created_at ASC
-    LIMIT ${n}
+    LIMIT ${candidateLimit}
   `,
     selectParams
   );
@@ -228,7 +231,10 @@ async function fetchPendingInfluencerAgentEvents(limit = 20, mode = "all") {
     `,
       [row.id]
     );
-    if (Number(upd?.affectedRows || 0) > 0) claimedIds.push(row.id);
+    if (Number(upd?.affectedRows || 0) > 0) {
+      claimedIds.push(row.id);
+      if (claimedIds.length >= n) break;
+    }
   }
 
   if (!claimedIds.length) return [];
