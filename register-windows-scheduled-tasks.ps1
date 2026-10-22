@@ -20,6 +20,13 @@ if (-not (Test-Path $nodeExe)) {
 
 if (-not (Test-Path $Root)) { throw "Root not found: $Root" }
 
+# 服务器通常无人登录桌面。计划任务若绑定交互式 Administrator，
+# 触发器会被调度器跳过；统一用 SYSTEM 服务账号在后台运行。
+$taskPrincipal = New-ScheduledTaskPrincipal `
+  -UserId "SYSTEM" `
+  -LogonType ServiceAccount `
+  -RunLevel Highest
+
 function Register-MaxinNodeRepeatMinutes {
   param(
     [string]$Name,
@@ -55,7 +62,7 @@ function Register-MaxinNodeRepeatMinutes {
   $start = (Get-Date).AddMinutes(1).AddSeconds($OffsetSeconds)
   $trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes $Minutes) -RepetitionDuration ([TimeSpan]::FromDays(3650))
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force | Out-Null
   Write-Host "[register-tasks] Registered: $taskName (every $Minutes min) -> $ScriptRelative"
 }
 
