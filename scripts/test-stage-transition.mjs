@@ -155,6 +155,80 @@ assert(
   "script_review 不可直接 published"
 );
 
+// 阶段变更被拦截时，已确认合作下的脚本/视频草稿仍应允许写交付时间线
+const blockedScriptSubmission = resolveInfluencerAgentUpdate({
+  currentStage: EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+  requestedStage: EXECUTION_STAGES.SCRIPT_REVIEW,
+  lastEventRaw: quoteApproved,
+  payload: {
+    deliverable: {
+      kind: "script",
+      attachmentFilename: "creator-script.pdf",
+    },
+  },
+});
+assert(
+  blockedScriptSubmission.effectiveStage ===
+    EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+  "阶段被拦截时保持 pending_shipping_address"
+);
+assert(
+  blockedScriptSubmission.allowDeliverableTimelineUpdate,
+  "阶段被拦截时仍允许写入脚本交付记录"
+);
+assert(
+  !blockedScriptSubmission.allowDraftLinkUpdate,
+  "阶段被拦截时不放宽 draftLink 写入权限"
+);
+
+const blockedVideoSubmission = resolveInfluencerAgentUpdate({
+  currentStage: EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+  requestedStage: EXECUTION_STAGES.VIDEO_REVIEW,
+  lastEventRaw: quoteApproved,
+  payload: {
+    deliverable: {
+      kind: "video_draft",
+      link: "https://example.com/draft",
+    },
+  },
+});
+assert(
+  blockedVideoSubmission.allowDeliverableTimelineUpdate,
+  "阶段被拦截时仍允许写入视频草稿交付记录"
+);
+
+const unapprovedScriptSubmission = resolveInfluencerAgentUpdate({
+  currentStage: EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+  requestedStage: EXECUTION_STAGES.SCRIPT_REVIEW,
+  lastEventRaw: {},
+  payload: {
+    deliverable: {
+      kind: "script",
+      attachmentFilename: "creator-script.pdf",
+    },
+  },
+});
+assert(
+  !unapprovedScriptSubmission.allowDeliverableTimelineUpdate,
+  "报价未确认时不写交付记录"
+);
+
+const summaryOnlySubmission = resolveInfluencerAgentUpdate({
+  currentStage: EXECUTION_STAGES.PENDING_SHIPPING_ADDRESS,
+  requestedStage: EXECUTION_STAGES.SCRIPT_REVIEW,
+  lastEventRaw: quoteApproved,
+  payload: {
+    deliverable: {
+      kind: "script",
+      emailSummary: { zh: "仅摘要，没有具体交付" },
+    },
+  },
+});
+assert(
+  !summaryOnlySubmission.allowDeliverableTimelineUpdate,
+  "没有正文、链接或附件时不写交付记录"
+);
+
 // needSample 兜底
 assert(resolveNeedSample({ productType: "应用" }) === false, "应用不需寄样");
 assert(resolveNeedSample({ productType: "游戏" }) === false, "游戏不需寄样");

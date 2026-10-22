@@ -362,6 +362,11 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     console.warn(
       `[ProcessCampaignAgentEvents] stage 变更被拦截 (${campaignId}/${influencerId}): ${currentStage} → ${requestedStage}. ${skippedStageReason}`
     );
+    if (resolved.allowDeliverableTimelineUpdate) {
+      console.log(
+        `[ProcessCampaignAgentEvents] 交付记录继续写入 (${campaignId}/${influencerId}): stage 保持 ${effectiveStage}`
+      );
+    }
   } else if (draftLinkOnly) {
     console.log(
       `[ProcessCampaignAgentEvents] pending_sample 提前交稿 (${campaignId}/${influencerId}): 仅保存 draftLink，stage 保持 ${currentStage}`
@@ -561,11 +566,10 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     : [];
   if (!Array.isArray(deliverablesTimeline)) deliverablesTimeline = [];
 
-  const deliverableSubmission =
-    payload.deliverable &&
-    (payload.deliverable.kind === "script" ||
-      payload.deliverable.kind === "video_draft");
-  if (resolved.allowDraftLinkUpdate && (draftLink || deliverableSubmission)) {
+  if (
+    (resolved.allowDraftLinkUpdate && draftLink) ||
+    resolved.allowDeliverableTimelineUpdate
+  ) {
     const hasScriptApproved = Boolean(
       mergedLastEvent.scriptApprovedAt ||
         deliverablesTimeline.some(
@@ -576,39 +580,56 @@ async function applyExecutionUpdateSuggested(eventRow, payload) {
     if (kind !== "script" && kind !== "video_draft") {
       kind = hasScriptApproved ? "video_draft" : "script";
     }
-    const effectiveLink = draftLink || payload.deliverable?.link || null;
-    const eventAttachments = await listInboundAttachmentsByEmailEventId(
-      emailEvent.id
-    ).catch(() => []);
-    const wantedFilename = payload.deliverable?.attachmentFilename;
-    let attachmentMeta = null;
-    if (wantedFilename && eventAttachments.length) {
-      attachmentMeta =
-        eventAttachments.find((a) => a.filename === wantedFilename) || null;
-    } else if (!wantedFilename && eventAttachments.length === 1) {
-      attachmentMeta = eventAttachments[0];
+    const emailEventId = Number(emailEvent?.id) || null;
+    const alreadyRecorded = Boolean(
+      emailEventId &&
+        deliverablesTimeline.some(
+          (entry) =>
+            Number(entry?.emailEventId) === emailEventId &&
+            entry?.role === "influencer" &&
+            entry?.type === "submitted" &&
+            entry?.kind === kind
+        )
+    );
+    if (alreadyRecorded) {
+      console.log(
+        `[ProcessCampaignAgentEvents] 交付记录已存在，跳过重复追加 (${campaignId}/${influencerId}): emailEventId=${emailEventId}, kind=${kind}`
+      );
+    } else {
+      const effectiveLink = draftLink || payload.deliverable?.link || null;
+      const eventAttachments = await listInboundAttachmentsByEmailEventId(
+        emailEvent.id
+      ).catch(() => []);
+      const wantedFilename = payload.deliverable?.attachmentFilename;
+      let attachmentMeta = null;
+      if (wantedFilename && eventAttachments.length) {
+        attachmentMeta =
+          eventAttachments.find((a) => a.filename === wantedFilename) || null;
+      } else if (!wantedFilename && eventAttachments.length === 1) {
+        attachmentMeta = eventAttachments[0];
+      }
+      deliverablesTimeline = [
+        ...deliverablesTimeline,
+        {
+          kind: kind === "published" ? "video_draft" : kind,
+          role: "influencer",
+          type: "submitted",
+          content: payload.deliverable?.content || null,
+          link: effectiveLink,
+          emailSummary: payload.deliverable?.emailSummary || null,
+          attachment: attachmentMeta
+            ? {
+                inboundAttachmentId: attachmentMeta.inboundAttachmentId,
+                filename: attachmentMeta.filename,
+                contentType: attachmentMeta.contentType,
+              }
+            : null,
+          at: savedAtIso,
+          source: "influencer_email",
+          emailEventId: emailEvent.id || null,
+        },
+      ];
     }
-    deliverablesTimeline = [
-      ...deliverablesTimeline,
-      {
-        kind: kind === "published" ? "video_draft" : kind,
-        role: "influencer",
-        type: "submitted",
-        content: payload.deliverable?.content || null,
-        link: effectiveLink,
-        emailSummary: payload.deliverable?.emailSummary || null,
-        attachment: attachmentMeta
-          ? {
-              inboundAttachmentId: attachmentMeta.inboundAttachmentId,
-              filename: attachmentMeta.filename,
-              contentType: attachmentMeta.contentType,
-            }
-          : null,
-        at: savedAtIso,
-        source: "influencer_email",
-        emailEventId: emailEvent.id || null,
-      },
-    ];
   }
 
   // —— 已发布视频（多平台）：合并进 last_event.publishedVideos，并同步旧单值字段 ——
