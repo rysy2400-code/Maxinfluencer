@@ -24,9 +24,20 @@ export async function GET(req, { params }) {
         FROM tiktok_campaign_execution
         WHERE campaign_id = ?
       ),
+      message_keys AS (
+        SELECT tiktok_username, platform_influencer_id AS message_key
+        FROM execs
+        WHERE platform_influencer_id IS NOT NULL
+          AND TRIM(platform_influencer_id) <> ''
+        UNION
+        SELECT tiktok_username, tiktok_username AS message_key
+        FROM execs
+        WHERE tiktok_username IS NOT NULL
+          AND TRIM(tiktok_username) <> ''
+      ),
       ranked AS (
         SELECT
-          e.tiktok_username,
+          k.tiktok_username,
           m.id AS msg_id,
           m.event_time,
           m.sent_at,
@@ -36,15 +47,49 @@ export async function GET(req, { params }) {
           m.subject,
           m.body_text,
           ROW_NUMBER() OVER (
-            PARTITION BY e.tiktok_username
+            PARTITION BY k.tiktok_username
             ORDER BY COALESCE(m.event_time, m.sent_at, m.created_at) DESC, m.id DESC
           ) AS rn
-        FROM execs e
-        LEFT JOIN tiktok_influencer_conversation_messages m
-          ON (
-            (e.platform_influencer_id IS NOT NULL AND m.influencer_id = e.platform_influencer_id)
-            OR m.influencer_id = e.tiktok_username
-          )
+        FROM message_keys k
+        INNER JOIN tiktok_influencer_conversation_messages m
+          ON m.influencer_id = k.message_key
+      ),
+      latest_messages AS (
+        SELECT *
+        FROM ranked
+        WHERE rn = 1
+      ),
+      influencer_keys AS (
+        SELECT tiktok_username, platform_influencer_id AS influencer_key
+        FROM execs
+        WHERE platform_influencer_id IS NOT NULL
+          AND TRIM(platform_influencer_id) <> ''
+        UNION
+        SELECT tiktok_username, tiktok_username AS influencer_key
+        FROM execs
+        WHERE tiktok_username IS NOT NULL
+          AND TRIM(tiktok_username) <> ''
+      ),
+      influencer_matches AS (
+        SELECT
+          k.tiktok_username,
+          i.display_name,
+          i.username,
+          i.avatar_url,
+          i.influencer_email,
+          i.handover_mode,
+          ROW_NUMBER() OVER (
+            PARTITION BY k.tiktok_username
+            ORDER BY i.id DESC
+          ) AS rn
+        FROM influencer_keys k
+        LEFT JOIN tiktok_influencer i
+          ON i.influencer_id = k.influencer_key
+      ),
+      latest_influencers AS (
+        SELECT *
+        FROM influencer_matches
+        WHERE rn = 1
       )
       SELECT
         e.tiktok_username AS influencer_id,
@@ -60,12 +105,10 @@ export async function GET(req, { params }) {
         r.subject AS last_subject,
         r.body_text AS last_body_text
       FROM execs e
-      LEFT JOIN tiktok_influencer i
-        ON (
-          (e.platform_influencer_id IS NOT NULL AND i.influencer_id = e.platform_influencer_id)
-          OR i.username = e.tiktok_username
-        )
-      LEFT JOIN ranked r ON r.tiktok_username = e.tiktok_username AND r.rn = 1
+      LEFT JOIN latest_influencers i
+        ON i.tiktok_username = e.tiktok_username
+      LEFT JOIN latest_messages r
+        ON r.tiktok_username = e.tiktok_username
       ORDER BY last_event_time DESC, e.tiktok_username ASC
     `,
       [campaignId]
