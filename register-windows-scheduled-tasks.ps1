@@ -76,7 +76,7 @@ Unregister-ScheduledTask -TaskName $legacyAgentTask -Confirm:$false -ErrorAction
 Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsUrgent" -ScriptRelative "scripts\process-agent-events-mode.cmd" -Minutes 1 -OffsetSeconds 21 -ExtraArgs "urgent" -DirectScript
 Register-MaxinNodeRepeatMinutes -Name "ProcessInfluencerAgentEventsOutreach" -ScriptRelative "scripts\process-agent-events-mode.cmd" -Minutes 1 -OffsetSeconds 29 -ExtraArgs "outreach" -DirectScript
 Register-MaxinNodeRepeatMinutes -Name "ProcessCampaignAgentEvents" -ScriptRelative "scripts\process-campaign-agent-events.js" -Minutes 1 -OffsetSeconds 35
-Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 30 -OffsetSeconds 45
+Register-MaxinNodeRepeatMinutes -Name "RunExecutionHeartbeat" -ScriptRelative "scripts\run-execution-heartbeat.js" -Minutes 5 -OffsetSeconds 45
 Register-MaxinNodeRepeatMinutes -Name "RunReportHeartbeat" -ScriptRelative "scripts\run-report-heartbeat.js" -Minutes 10 -OffsetSeconds 55
 
 Write-Host "[register-tasks] Done (7 tasks)."

@@ -328,6 +328,24 @@ $searchWorkerPlatforms = if ($isYoutubeDedicatedWorker) {
 Write-Host "[deploy-crawler] SEARCH_WORKER_PLATFORMS=$searchWorkerPlatforms"
 Write-Host "[deploy-crawler] guard env: DEEPSEEK_ANALYSIS_TIMEOUT_MS=$deepseekAnalysisTimeoutMs, SEARCH_TASK_STUCK_RECLAIM_MINUTES=$searchTaskStuckReclaimMinutes"
 
+# YouTube 专属机的并发可由 .env/.env.local 覆盖（默认保持 3 tab / 150 并发，
+# 与旧行为一致；2C2G 机器可写低一些，4C/8G 机器可写更高）。
+$ytTabPoolSize = if ($isYoutubeDedicatedWorker -and $env:YT_LITE_TAB_POOL_SIZE) {
+  "$($env:YT_LITE_TAB_POOL_SIZE)".Trim()
+} else {
+  "3"
+}
+$ytEnrichConcurrency = if ($isYoutubeDedicatedWorker -and $env:LITE_YT_ENRICH_CONCURRENCY) {
+  "$($env:LITE_YT_ENRICH_CONCURRENCY)".Trim()
+} else {
+  "150"
+}
+$ytEnrichConcurrencyMax = if ($isYoutubeDedicatedWorker -and $env:LITE_YT_ENRICH_CONCURRENCY_MAX) {
+  "$($env:LITE_YT_ENRICH_CONCURRENCY_MAX)".Trim()
+} else {
+  "150"
+}
+
 $chromeDir9222 = "C:\maxinfluencer\.chrome-cdp-9222"
 if (-not (Test-Path $chromeDir9222)) { New-Item -ItemType Directory -Path $chromeDir9222 | Out-Null }
 $chromeRestartSignalFile = "C:\maxinfluencer\signals\restart-chrome-9222.flag"
@@ -367,8 +385,10 @@ $guardHealth = Join-Path $scriptsDir "guard-worker-health.ps1"
 
 # X 专属机 9222 代理：优先 .env.local 的 CHROME_9222_PROXY_SERVER（美国节点配置）；
 # 未配置则香港 IP 直连（对齐 x role 默认）。
-$guard9222ProxyEnv = if ($isXDedicatedWorker) {
-  if ($env:CHROME_9222_PROXY_SERVER) {
+$guard9222ProxyEnv = if ($isYoutubeDedicatedWorker -or $isXDedicatedWorker) {
+  if ($isYoutubeDedicatedWorker) {
+    '$env:CHROME_9222_PROXY_MODE = "direct"'
+  } elseif ($env:CHROME_9222_PROXY_SERVER) {
     $escapedProxy = "$($env:CHROME_9222_PROXY_SERVER)".Replace('"', '""')
     "`$env:CHROME_9222_PROXY_SERVER = `"$escapedProxy`""
   } else {
@@ -431,16 +451,18 @@ $guardCrawlerContent = @"
 `$env:SCRAPER_MODE = "$scraperMode"
 `$env:SEARCH_WORKER_PLATFORMS = "$searchWorkerPlatforms"
 $(if ($isYoutubeDedicatedWorker) {
-'$env:SEARCH_WORKER_LOOP = "true"
+@'
+$env:SEARCH_WORKER_LOOP = "true"
 $env:SEARCH_IMPORT_TASK_LOOP = "true"
-$env:YT_LITE_TAB_POOL_SIZE = "3"
-$env:LITE_YT_ENRICH_CONCURRENCY = "150"
-$env:LITE_YT_ENRICH_CONCURRENCY_MAX = "150"
+$env:YT_LITE_TAB_POOL_SIZE = "YT_TAB_POOL_SIZE_PLACEHOLDER"
+$env:LITE_YT_ENRICH_CONCURRENCY = "YT_ENRICH_CONC_PLACEHOLDER"
+$env:LITE_YT_ENRICH_CONCURRENCY_MAX = "YT_ENRICH_MAX_PLACEHOLDER"
 $env:YT_LITE_DISABLE_EVALUATE_LOCK = "1"
 $env:YT_LITE_REQUIRE_EMAIL_FOR_ANALYSIS = "1"
 $env:YT_ALLOW_ABOUT_FALLBACK = "0"
 $env:LITE_ENRICH_SCREENSHOTS = "false"
-$env:ENRICH_BATCH_POLICY = "false"'
+$env:ENRICH_BATCH_POLICY = "false"
+'@.Replace("YT_TAB_POOL_SIZE_PLACEHOLDER", $ytTabPoolSize).Replace("YT_ENRICH_CONC_PLACEHOLDER", $ytEnrichConcurrency).Replace("YT_ENRICH_MAX_PLACEHOLDER", $ytEnrichConcurrencyMax)
 } elseif ($isXDedicatedWorker) {
 '$env:SEARCH_WORKER_LOOP = "true"
 $env:SEARCH_IMPORT_TASK_LOOP = "false"
