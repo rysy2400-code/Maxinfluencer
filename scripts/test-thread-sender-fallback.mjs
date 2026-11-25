@@ -13,6 +13,11 @@ assert.equal(
 );
 assert.equal(
   shouldFallbackThreadSender({ email: "maxin@ainfluencer.site" }),
+  true,
+  "clientHold 的 ainfluencer.* 域名必须触发回退"
+);
+assert.equal(
+  shouldFallbackThreadSender({ email: "maxin@binfluencer.xyz" }),
   false,
   "健康域不应触发回退"
 );

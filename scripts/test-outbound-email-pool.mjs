@@ -113,7 +113,8 @@ async function testPoolBasics() {
   const pool = await getOutreachPoolAccounts();
   const allContacts = await queryTikTok("SELECT * FROM op_contacts");
 
-  if (pool.length < 200) {
+  // 2026-11-26 起排除全部死域后，健康池约 100+（binfluencer.xyz + binfluencerteam.site）
+  if (pool.length < 100) {
     fail("发信池数量偏低", String(pool.length));
   } else {
     ok(`发信池 ${pool.length} 个`);
@@ -154,7 +155,7 @@ async function testImapBatches() {
     ok(`IMAP 池 ${totalAccounts} 个`);
   }
 
-  if (numBatches < 4 || numBatches > 6) {
+  if (numBatches < 2 || numBatches > 6) {
     fail("批次数不在预期范围", String(numBatches));
   } else {
     ok(`约 ${numBatches} 批（每批 ~${IMAP_POLL_BATCH_SIZE}）`);
@@ -180,7 +181,7 @@ async function testImapBatches() {
   }
 
   if (seen.size !== eligible.length) {
-    fail("5 轮未覆盖全部 IMAP 账号", `covered=${seen.size} total=${eligible.length}`);
+    fail("轮询未覆盖全部 IMAP 账号", `covered=${seen.size} total=${eligible.length}`);
   } else {
     ok(`${numBatches} 轮覆盖全部 IMAP 账号`);
   }
